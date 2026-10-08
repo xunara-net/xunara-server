@@ -67,6 +67,13 @@ func (r *Router) mountPlatform(pr chi.Router) {
 	pr.Patch("/v1/organizations/{orgID}", r.handlePlatformUpdateOrganization)
 	pr.Delete("/v1/organizations/{orgID}", r.handlePlatformDeleteOrganization)
 	pr.Get("/v1/audit", r.handlePlatformAudit)
+	pr.Get("/v1/audit/actions", r.handlePlatformAuditActions)
+
+	// Cross-tenant user administration: the operator console and automation
+	// read the same list and apply the same two guards before a deletion.
+	pr.Get("/v1/users", r.handlePlatformUsers)
+	pr.Post("/v1/organizations/{orgID}/users/{userID}/revoke", r.handlePlatformRevokeUserSessions)
+	pr.Delete("/v1/organizations/{orgID}/users/{userID}", r.handlePlatformDeleteUser)
 }
 
 // requirePlatformToken enforces bearer-token auth on the platform API. It is
