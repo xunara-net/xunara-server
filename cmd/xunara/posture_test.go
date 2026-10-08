@@ -8,7 +8,7 @@ import (
 
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // seedPostureStore builds an in-memory store with two machines, one of which

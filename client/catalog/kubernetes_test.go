@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 func k8sService(name string, annotations map[string]string) kubernetesService {

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Security Center console (PROJECT_SPEC section 39.3): the read-only page

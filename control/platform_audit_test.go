@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // platformAuditResponse mirrors the export payload.

@@ -14,8 +14,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file implements /api/agent/v1, the protocol Xunara Agent (the native

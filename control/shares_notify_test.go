@@ -7,7 +7,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // assertWoken fails when no watch notification arrives.

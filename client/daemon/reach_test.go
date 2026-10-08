@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/client/protocol"
-	"github.com/xunara/xunara/control"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/client/protocol"
+	"github.com/xunara-net/xunara-server/control"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // startReachControl brings up a reach-enabled control plane.

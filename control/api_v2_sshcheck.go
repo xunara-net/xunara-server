@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file is the read-only SSH check management surface (PROJECT_SPEC

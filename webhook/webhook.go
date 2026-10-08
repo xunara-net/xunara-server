@@ -28,7 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 const (

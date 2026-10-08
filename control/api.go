@@ -11,7 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // apiPrincipal is the authenticated caller of a platform API request.
@@ -187,7 +187,13 @@ func scopeSet(scopes []string) map[string]bool {
 func (s *Server) apiRouter() http.Handler {
 	r := chi.NewRouter()
 
+	// Authentication is the one surface the console must reach before it has
+	// a session, so it lives here rather than behind requireScope.
+	r.Mount("/auth", s.apiAuthRouter())
+	r.Get("/capabilities", s.handleAPICapabilities)
+
 	r.Get("/overview", s.handleAPIOverview)
+	r.Get("/plan", s.handleAPIPlan)
 
 	r.Get("/machines", s.handleAPIMachines)
 	r.Get("/machines/{ref}", s.handleAPIMachine)

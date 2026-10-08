@@ -11,9 +11,9 @@ import (
 
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/client/protocol"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/client/protocol"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // enrolledServiceAgent is a native client that can publish services.

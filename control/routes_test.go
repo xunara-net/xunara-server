@@ -7,7 +7,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // advertisedHostinfo returns Hostinfo that advertises the given routes.

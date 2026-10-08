@@ -31,7 +31,7 @@ package xunara.v2;
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 
-option go_package = "github.com/xunara/xunara/api/gen/xunara/v2;xunarav2";
+option go_package = "github.com/xunara-net/xunara-server/api/gen/xunara/v2;xunarav2";
 
 // PlatformService is the organization-scoped automation surface.
 service PlatformService {

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // fakeStore is the narrow store the dispatcher consumes.

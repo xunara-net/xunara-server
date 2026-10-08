@@ -17,9 +17,9 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/idtoken"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/idtoken"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // idTokenTestServer builds a server that can issue identity tokens: it needs

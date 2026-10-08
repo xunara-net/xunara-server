@@ -11,8 +11,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/plan"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // planServer builds a server whose tenant is on the given plan, the way a

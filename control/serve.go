@@ -6,7 +6,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // Xunara Serve/Funnel management plane (PROJECT_SPEC section 43): the

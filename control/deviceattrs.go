@@ -12,7 +12,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // This file implements PATCH /machine/set-device-attr, the endpoint a client

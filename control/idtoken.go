@@ -13,9 +13,9 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/idtoken"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/idtoken"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file implements workload identity federation: the inner endpoint nodes

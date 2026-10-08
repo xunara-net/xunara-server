@@ -9,8 +9,8 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // exitFixture seeds one approved exit node plus the three kinds of clients:

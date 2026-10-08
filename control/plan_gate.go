@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/xunara/xunara/plan"
+	"github.com/xunara-net/xunara-server/plan"
 )
 
 // Commercial quotas (PROJECT_SPEC section 54).

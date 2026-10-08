@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // servicesFile is the durable service declaration inside the state directory.

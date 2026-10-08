@@ -12,9 +12,9 @@ import (
 
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/netspace"
-	"github.com/xunara/xunara/plan"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/netspace"
+	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // newAdminTestRouter builds a router with one organization, a plan registry

@@ -17,10 +17,10 @@ import (
 
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/client/daemon"
-	"github.com/xunara/xunara/client/protocol"
-	"github.com/xunara/xunara/control"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/client/daemon"
+	"github.com/xunara-net/xunara-server/client/protocol"
+	"github.com/xunara-net/xunara-server/control"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 func TestRunFluxDispatch(t *testing.T) {

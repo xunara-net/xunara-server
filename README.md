@@ -1,95 +1,79 @@
-# Xunara · 玄序
+# Xunara Server（玄序 · 服务端）
 
-Tailscale 兼容的自托管控制面：**官方 Tailscale 客户端无需改动**，把登录地址指向
-自己的服务器即可接入；身份、策略、网络与 DERP 中继全部自持。
-
-```bash
-tailscale up --login-server=https://control.example.com
-```
-
-## 状态
-
-v1/v2 规格范围（M1–M45）已全部实现：`go test ./...` 与关键包的 `go test -race`
-通过。规格 [PROJECT_SPEC.md](Xunara_AI_Development_Docs_2026-10-05/PROJECT_SPEC.md)、
-进度 [ROADMAP.md](ROADMAP.md)、开发约束 [AGENTS.md](AGENTS.md)。
-
-## 能力概览
-
-- **协议兼容**：TS2021 / Noise、`/machine/*` 内层端点、MapRequest/MapResponse
-  （含流式长轮询与 zstd）、DERP、node key 轮换、Tailnet Lock（TKA）。
-- **身份**：本地账号（首次初始化 + 密码登录 + 邀请注册）/ OIDC / Passkey
-  （WebAuthn）；多租户；人类 / 机器 / 服务身份分离；Session 支持吊销、过期、
-  轮换，可多实例部署。
-- **网络**：MagicDNS、ACL / Grants / nodeAttrs、子网路由与 Exit Node 审批、
-  Tailscale SSH（含 check 审批）、设备授权与预认证密钥。
-- **扩展**：Atlas 服务发现（健康摘除、Consul/K8s 导入并可携带可见性/共享
-  声明、按选择器收敛的
-  MagicDNS 可见范围、按 ACL 自动收敛的可见性、跨组织服务名投影）、Flux
-  端到端加密文件投递、Reach 远程命令（目标显式审批）、Share 跨组织机器共享、
-  Workload Identity。
-- **门面**：`/` 首页 → `/login` / `/signup` / `/setup` → `/console`；未登录访问
-  控制台一律跳登录，首次部署用状态目录里的一次性令牌创建管理员。
-- **运维**：Web Console（22 页，中英双语、蓝/墨绿双配色、本地时区、
-  响应式/暗色模式/可访问性/渐进增强）、
-  HTTP `/api/v2` + gRPC、Webhooks（签名 + 重试）、
-  审计日志、Security Center，以及路由 / DERP / Relay / Serve / Reach / Flux
-  等只读管理面。
-- **自建 DERP（Veil）**：`/derp` upgrade、probe、STUN、mesh、带宽限速、
-  ACME TLS-ALPN-01 自动证书。
-
-## 仓库结构
+Xunara（玄序）是一个 **Tailscale 兼容的多租户网络服务平台**。
+本仓库是它的服务端：控制面 + 产品层 + Xunara Core API。**不含 Web UI。**
 
 ```text
-control/     控制面：Noise/注册/Map、平台 API v1/v2、Console、管理面
-control/mapper/ netmap 构建
-identity/    身份：用户、Session、OIDC、Passkey、设备授权、审计
-policy/      ACL / Grants / SSH / nodeAttrs 编译
-state/       节点与协议状态存储（内存 + SQLite）
-client/      原生客户端协议、agent 库、flux/reach
-cmd/         xunarad（控制面）、xunara（CLI）、xunara-agent（节点）、xunara-veil（DERP）
-veil/        自建 DERP 服务
-dnsprovider/ ACME DNS-01 的 DNS provider 适配
-webhook/     审计事件签名投递
-deploy/      systemd 部署（单元、安装脚本、环境模板、ACL 示例）
+xunara-web（用户控制台）   xunara-admin（平台后台）   CLI / SDK / 未来客户端
+              └──────────────────┬──────────────────────────┘
+                                 ▼
+                    Xunara Core API（/api/v1、/api/v2、/api/platform、gRPC）
+                                 │
+                        xunara-server（本仓库）
+                    控制面 · 用户 · 组织 · 设备 · 网络 · 套餐 · 审计
+                                 │
+                    官方 Tailscale 客户端（Windows/macOS/Linux/Android/iOS）
 ```
 
-## 构建与运行
+## 能力
+
+- **官方客户端兼容**：TS2021 / Noise / Map / DERP 协调，官方客户端可直接接入。
+- **多租户**：组织、成员、角色（owner / admin / member / viewer）、单租户部署兼容。
+- **用户与身份**：本地密码登录、邀请注册、OIDC/OAuth、Passkey、会话管理、
+  API Key、身份令牌。
+- **设备与网络**：设备注册与审批、Tailnet 网段分配、子网路由、Exit Node、
+  MagicDNS、DERP 策略、共享与访问策略。
+- **商业化**：套餐目录（内置 free/pro/business 或 `-plans` 外置）、设备/成员/
+  密钥/路由配额、租户网段自定义与冲突检测、平台运营 API。
+- **可观测与审计**：结构化日志、`/health`、`/version`、审计日志、Webhook、
+  Prometheus 风格指标（部分）、gRPC 平台面。
+- **JSON API**：`/api/v1/auth/*`（登录/注册/会话）、`/api/v1/capabilities`、
+  `/api/v2/*`（设备、DNS、DERP、策略、审计、共享……）。
+
+## 构建
 
 ```bash
-go build ./...
+go build ./cmd/xunarad          # 服务端
+go build ./cmd/xunara           # 管理 CLI
+go build ./cmd/xunara-agent     # 节点 Agent
+```
+
+## 运行（单租户）
+
+```bash
+./xunarad -listen 0.0.0.0:8080 \
+  -server-url https://login.example.com \
+  -state-dir /var/lib/xunara \
+  -plans builtin \
+  -network-pool 100.100.0.0/16
+```
+
+首次启动会写出一次性初始化令牌（`<state-dir>/setup-token`），浏览器打开
+`/setup` 完成管理员初始化。
+
+多租户部署使用 `-org-config <file>` 描述组织与域名。
+
+## 测试
+
+```bash
 go test ./...
-
-# 控制面（示例）
-go run ./cmd/xunarad -listen 0.0.0.0:8080 -server-url https://control.example.com -state-dir ./data
-
-# 管理 CLI / 节点 agent / 自建 DERP
-go run ./cmd/xunara -h
-go run ./cmd/xunara-agent -h
-go run ./cmd/xunara-veil -h
+go vet ./...
 ```
 
-正式部署（systemd、非特权账号、状态目录与备份、HTTPS 与通行密钥的前置条件）见
-[deploy/README.md](deploy/README.md)：
+## 仓库关系
 
-```bash
-CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-s -w -X github.com/xunara/xunara/control.Version=$(git describe --tags --always --dirty)" \
-  -o /tmp/xunarad ./cmd/xunarad
-sudo deploy/install.sh /tmp/xunarad
-```
+| 仓库 | 职责 |
+| --- | --- |
+| `xunara-server` | 控制面 + 产品后端 + Core API（本仓库） |
+| `xunara-web` | 用户控制台（Vue 3） |
+| `xunara-admin` | 平台超级管理员后台（Vue 3） |
+| `xunara-relay` | 中继平台（DERP / STUN / 限速 / 注册） |
+| `xunara-deploy` | systemd / Docker Compose / 安装脚本 |
+| `xunara-docs` | 规范、架构、ADR、运维文档 |
 
-## 文档
+## 文档与规范
 
-- [PROJECT_SPEC.md](Xunara_AI_Development_Docs_2026-10-05/PROJECT_SPEC.md) — 产品与协议规格（§1–§51）
-- [ROADMAP.md](ROADMAP.md) — 里程碑与进度（M1–M44）
-- [IDENTITY_LOGIN.md](Xunara_AI_Development_Docs_2026-10-05/IDENTITY_LOGIN.md) — 身份与登录设计
-- [AGENTS.md](AGENTS.md) — 开发规则与约束
-
-## 明确不做（v1）
-
-公网 Funnel ingress、Flow Logs、官方 Taildrop 互通、ACL `srcPosture` 强制语义、
-交互式终端/PTY、告警与合规扫描。
-
-## 许可
-
-暂未选择开源许可证。
+- 长期规范与架构：[xunara-docs](https://github.com/xunara-net/xunara-docs)
+- 本仓库结构：[ARCHITECTURE.md](ARCHITECTURE.md)
+- AI 开发规则：[AI_DEVELOPMENT.md](AI_DEVELOPMENT.md)
+- 架构决策记录：[docs/adr](docs/adr/)

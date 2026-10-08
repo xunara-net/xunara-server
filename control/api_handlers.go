@@ -12,9 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/policy"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/policy"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // apiMachine is the JSON shape of a node.

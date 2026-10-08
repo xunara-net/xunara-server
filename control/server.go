@@ -21,17 +21,17 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/idtoken"
-	"github.com/xunara/xunara/plan"
-	"github.com/xunara/xunara/policy"
-	"github.com/xunara/xunara/state"
-	"github.com/xunara/xunara/webhook"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/idtoken"
+	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/policy"
+	"github.com/xunara-net/xunara-server/state"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 // Version is the Xunara server version reported by /version and shown in the
 // console footer. A release build overrides it with
-// -ldflags "-X github.com/xunara/xunara/control.Version=<version>"; the
+// -ldflags "-X github.com/xunara-net/xunara-server/control.Version=<version>"; the
 // default keeps a source build honest about being a development snapshot.
 var Version = "0.0.0-dev"
 

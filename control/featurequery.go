@@ -8,7 +8,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file implements POST /machine/feature/query, the endpoint official

@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/xunara/xunara/plan"
+	"github.com/xunara-net/xunara-server/plan"
 )
 
 // Organization CRUD for the platform API (M7d).

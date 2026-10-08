@@ -16,7 +16,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/util/zstdframe"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // TestTS2021HandshakeRegisterAndMap drives the server through a real TS2021

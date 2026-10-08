@@ -19,7 +19,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // Version is the agent's own version, reported to the control plane.

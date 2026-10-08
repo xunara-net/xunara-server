@@ -5,7 +5,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file exposes the document's peer-relay authorizations as a resolved,

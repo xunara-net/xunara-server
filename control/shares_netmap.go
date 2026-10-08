@@ -8,8 +8,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/dnsname"
 
-	"github.com/xunara/xunara/control/mapper"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/control/mapper"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Xunara Share netmap exposure (PROJECT_SPEC section 38.4).

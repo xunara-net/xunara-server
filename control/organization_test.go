@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	xunarav2 "github.com/xunara/xunara/api/gen/xunara/v2"
-	"github.com/xunara/xunara/identity"
+	xunarav2 "github.com/xunara-net/xunara-server/api/gen/xunara/v2"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // organizationAtHost performs an authenticated GET addressed to an explicit

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // writeHealthFile writes the readiness file a service manager would produce.

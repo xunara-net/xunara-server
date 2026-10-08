@@ -21,7 +21,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // TestMain keeps a developer's HTTP proxy out of the way. The router tests

@@ -12,7 +12,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 func testNode(id state.NodeID, hostname string) state.Node {

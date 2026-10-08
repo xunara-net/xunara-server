@@ -7,8 +7,8 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/policy"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/policy"
 )
 
 // policyWatchInterval is how often the server checks the policy file for

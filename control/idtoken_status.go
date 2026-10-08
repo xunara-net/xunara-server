@@ -3,7 +3,7 @@ package control
 import (
 	"time"
 
-	"github.com/xunara/xunara/idtoken"
+	"github.com/xunara-net/xunara-server/idtoken"
 )
 
 // IDTokenStatus is the read-only administrative view of this deployment's

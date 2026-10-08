@@ -8,7 +8,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 func testNode(id state.NodeID, hostname string, addr string) state.Node {

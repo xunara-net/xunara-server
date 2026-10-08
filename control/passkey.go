@@ -23,7 +23,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // passkeyNameLimit bounds a user-chosen passkey label. The label is cosmetic

@@ -8,8 +8,8 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/policy"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/policy"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Xunara Atlas: ACL-derived service visibility (PROJECT_SPEC section 48).

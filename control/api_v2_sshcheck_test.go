@@ -12,9 +12,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	xunarav2 "github.com/xunara/xunara/api/gen/xunara/v2"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	xunarav2 "github.com/xunara-net/xunara-server/api/gen/xunara/v2"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // seedSSHCheck creates one durable SSH check session bound to (src, dst).

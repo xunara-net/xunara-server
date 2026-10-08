@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/state"
-	"github.com/xunara/xunara/webhook"
+	"github.com/xunara-net/xunara-server/state"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 // webhookReceiver records deliveries and signals a channel.

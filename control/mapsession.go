@@ -8,7 +8,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/control/mapper"
+	"github.com/xunara-net/xunara-server/control/mapper"
 )
 
 // mapSession tracks what a streaming client has already been told about the

@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/policy"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/policy"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file implements Xunara Atlas service discovery: the services a node

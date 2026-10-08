@@ -11,7 +11,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // runUser implements "xunara user": inspecting and updating the trust plane's

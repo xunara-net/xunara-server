@@ -6,7 +6,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file adapts tailnet-lock (TKA) state into the netmap: the TKAInfo

@@ -13,7 +13,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Tailnet lock (TKA) control plane (M11).

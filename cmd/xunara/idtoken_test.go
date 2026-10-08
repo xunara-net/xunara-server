@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/idtoken"
+	"github.com/xunara-net/xunara-server/idtoken"
 )
 
 // TestShowIDTokenKeys covers the three states an operator can find a state

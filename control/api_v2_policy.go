@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/policy"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/policy"
 )
 
 // This file is the read-only policy (Xunara Warden) management surface

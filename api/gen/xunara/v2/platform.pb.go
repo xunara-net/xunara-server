@@ -5257,7 +5257,7 @@ const file_xunara_v2_platform_proto_rawDesc = "" +
 	"\x12CreateOrganization\x12$.xunara.v2.CreateOrganizationRequest\x1a\x17.xunara.v2.Organization\x12S\n" +
 	"\x12UpdateOrganization\x12$.xunara.v2.UpdateOrganizationRequest\x1a\x17.xunara.v2.Organization\x12a\n" +
 	"\x12DeleteOrganization\x12$.xunara.v2.DeleteOrganizationRequest\x1a%.xunara.v2.DeleteOrganizationResponse\x12V\n" +
-	"\tListAudit\x12#.xunara.v2.ListPlatformAuditRequest\x1a$.xunara.v2.ListPlatformAuditResponseB5Z3github.com/xunara/xunara/api/gen/xunara/v2;xunarav2b\x06proto3"
+	"\tListAudit\x12#.xunara.v2.ListPlatformAuditRequest\x1a$.xunara.v2.ListPlatformAuditResponseB@Z>github.com/xunara-net/xunara-server/api/gen/xunara/v2;xunarav2b\x06proto3"
 
 var (
 	file_xunara_v2_platform_proto_rawDescOnce sync.Once

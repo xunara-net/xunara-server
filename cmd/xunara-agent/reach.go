@@ -20,8 +20,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/xunara/xunara/client/daemon"
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/daemon"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 const (

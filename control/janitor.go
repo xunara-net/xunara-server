@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // runJanitor periodically reaps ephemeral nodes that have been offline for

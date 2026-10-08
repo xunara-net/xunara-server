@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // aclVisibilityPolicy grants the engineering group the production port, the

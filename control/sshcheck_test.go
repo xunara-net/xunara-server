@@ -13,7 +13,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // sshCheckPolicy holds every SSH connection between a user's own devices until

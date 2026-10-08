@@ -13,9 +13,9 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/zstdframe"
 
-	"github.com/xunara/xunara/control/mapper"
-	"github.com/xunara/xunara/policy"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/control/mapper"
+	"github.com/xunara-net/xunara-server/policy"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // reservedResponseHeaderSize is the 4-byte little-endian length prefix that

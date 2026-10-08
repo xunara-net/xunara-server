@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	xunarav2 "github.com/xunara/xunara/api/gen/xunara/v2"
-	"github.com/xunara/xunara/client/protocol"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	xunarav2 "github.com/xunara-net/xunara-server/api/gen/xunara/v2"
+	"github.com/xunara-net/xunara-server/client/protocol"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // reportServiceHealth posts a readiness report for one agent.

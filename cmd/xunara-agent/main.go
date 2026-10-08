@@ -17,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xunara/xunara/client/daemon"
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/daemon"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // authKeyEnv is where the pre-auth key comes from by default. The key is never

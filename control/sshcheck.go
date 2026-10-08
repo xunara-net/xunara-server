@@ -14,8 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // sshCheckPollInterval is how often a held follow-up re-reads its durable

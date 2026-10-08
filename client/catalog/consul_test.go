@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // consulCatalog is a response with one entry per mapping rule, including

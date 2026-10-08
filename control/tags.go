@@ -3,7 +3,7 @@ package control
 import (
 	"fmt"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // validateKeyTags normalises ACL tags for a pre-auth key and checks them

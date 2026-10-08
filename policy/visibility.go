@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file implements Xunara Atlas service visibility (PROJECT_SPEC section

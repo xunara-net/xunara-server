@@ -23,7 +23,7 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // The control tests speak to the HTTP surface, so the relying party is a

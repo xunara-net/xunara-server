@@ -7,7 +7,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // This file is the read-only DERP management surface (PROJECT_SPEC section 32):

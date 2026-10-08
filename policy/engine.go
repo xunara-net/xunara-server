@@ -10,7 +10,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Options carries the tailnet facts the compiler needs beyond the document.

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/xunara/xunara/control"
+	"github.com/xunara-net/xunara-server/control"
 )
 
 // fluxConfigFor builds the Xunara Flux configuration for one deployment.

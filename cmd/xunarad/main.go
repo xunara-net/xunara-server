@@ -16,13 +16,13 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/control"
-	"github.com/xunara/xunara/dnsprovider"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/netspace"
-	"github.com/xunara/xunara/plan"
-	"github.com/xunara/xunara/state"
-	"github.com/xunara/xunara/webhook"
+	"github.com/xunara-net/xunara-server/control"
+	"github.com/xunara-net/xunara-server/dnsprovider"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/netspace"
+	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/state"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 func main() {

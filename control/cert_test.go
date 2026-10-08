@@ -11,7 +11,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // fakeDNSProvider records the calls the control plane makes to the public

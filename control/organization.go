@@ -3,7 +3,7 @@ package control
 import (
 	"net/http"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // This file implements organization self-introspection (PROJECT_SPEC section

@@ -3,7 +3,7 @@ package control
 import (
 	"strings"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Xunara Share: cross-organization service discovery (PROJECT_SPEC section 47).

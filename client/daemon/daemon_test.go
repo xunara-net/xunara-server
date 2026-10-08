@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // fakeAgentServer implements the three agent endpoints for daemon tests.

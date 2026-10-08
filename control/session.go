@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // Cookie names. The session cookie is the browser's bearer token; the auth

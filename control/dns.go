@@ -13,8 +13,8 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // DNSProvider writes records to the tailnet's public authoritative DNS zone.

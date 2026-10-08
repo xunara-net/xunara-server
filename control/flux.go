@@ -27,8 +27,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Flux defaults. The size ceiling keeps the control plane's SQLite database

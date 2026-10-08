@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // newIdentityStore opens the trust plane on the control plane's database and

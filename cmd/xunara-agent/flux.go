@@ -30,8 +30,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/xunara/xunara/client/flux"
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/flux"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // Flux CLI defaults and bounds.

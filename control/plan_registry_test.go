@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/xunara/xunara/netspace"
-	"github.com/xunara/xunara/plan"
+	"github.com/xunara-net/xunara-server/netspace"
+	"github.com/xunara-net/xunara-server/plan"
 )
 
 // clientError reports whether err is a validation failure the platform API

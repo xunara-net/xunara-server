@@ -10,7 +10,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/plan"
+	"github.com/xunara-net/xunara-server/plan"
 )
 
 // The platform console's pages (PROJECT_SPEC section 54). They share the

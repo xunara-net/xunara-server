@@ -11,8 +11,8 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file implements the tailnet-lock (TKA) inner endpoints official clients

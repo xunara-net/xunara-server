@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // TestConsoleUIShell checks the modernization contract of the console shell

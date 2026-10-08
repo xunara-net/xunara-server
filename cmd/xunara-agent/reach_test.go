@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xunara/xunara/client/daemon"
-	"github.com/xunara/xunara/client/protocol"
-	"github.com/xunara/xunara/control"
+	"github.com/xunara-net/xunara-server/client/daemon"
+	"github.com/xunara-net/xunara-server/client/protocol"
+	"github.com/xunara-net/xunara-server/control"
 )
 
 // newReachControlServer brings up a control plane with Reach enabled.

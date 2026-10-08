@@ -8,7 +8,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // This file implements the remaining inner (Noise) endpoints official clients

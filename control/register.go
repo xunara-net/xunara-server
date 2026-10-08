@@ -21,9 +21,9 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 
-	"github.com/xunara/xunara/control/mapper"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/control/mapper"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // registrationTTL bounds how long an interactive registration may stay pending

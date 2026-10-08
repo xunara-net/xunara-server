@@ -17,10 +17,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"tailscale.com/types/key"
 
-	xunarav2 "github.com/xunara/xunara/api/gen/xunara/v2"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
-	"github.com/xunara/xunara/webhook"
+	xunarav2 "github.com/xunara-net/xunara-server/api/gen/xunara/v2"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 // startGRPCConn serves register on a loopback port and returns a client

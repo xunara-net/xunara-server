@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // consoleAtHost performs a console request addressed to an explicit host, so

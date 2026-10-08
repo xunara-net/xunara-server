@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // DefaultConsulAddress is where the local Consul agent serves its HTTP API.

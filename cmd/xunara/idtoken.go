@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/xunara/xunara/idtoken"
+	"github.com/xunara-net/xunara-server/idtoken"
 )
 
 // runIDToken implements "xunara id-token": administration of the signing keys

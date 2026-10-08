@@ -6,7 +6,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/state"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // AllowsIngress reports whether a node's compiled ingress filter - the

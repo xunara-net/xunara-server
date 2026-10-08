@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	xunarav2 "github.com/xunara/xunara/api/gen/xunara/v2"
+	xunarav2 "github.com/xunara-net/xunara-server/api/gen/xunara/v2"
 )
 
 // Deployment-level platform API over gRPC.

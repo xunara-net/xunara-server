@@ -18,9 +18,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"tailscale.com/tailcfg"
 
-	xunarav2 "github.com/xunara/xunara/api/gen/xunara/v2"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/state"
+	xunarav2 "github.com/xunara-net/xunara-server/api/gen/xunara/v2"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Platform API v2 over gRPC (M8d).

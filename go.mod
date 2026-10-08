@@ -1,4 +1,4 @@
-module github.com/xunara/xunara
+module github.com/xunara-net/xunara-server
 
 go 1.27.1
 

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xunara/xunara/control"
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/webhook"
+	"github.com/xunara-net/xunara-server/control"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 // This file loads the multi-tenant organization table. One xunarad process can

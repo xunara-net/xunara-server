@@ -15,7 +15,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // resolvePeer maps -to onto a node stable ID. A stable ID is passed through

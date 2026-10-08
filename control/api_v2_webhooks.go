@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/webhook"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 // Managed webhook receivers (M8c).

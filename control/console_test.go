@@ -15,10 +15,10 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/identity"
-	"github.com/xunara/xunara/idtoken"
-	"github.com/xunara/xunara/state"
-	"github.com/xunara/xunara/webhook"
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/idtoken"
+	"github.com/xunara-net/xunara-server/state"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 // TestConsoleRequiresSession checks that every console page sends anonymous

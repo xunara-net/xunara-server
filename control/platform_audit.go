@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xunara/xunara/webhook"
+	"github.com/xunara-net/xunara-server/webhook"
 )
 
 // Cross-organization audit export (M7c).

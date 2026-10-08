@@ -15,8 +15,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/xunara/xunara/netspace"
-	"github.com/xunara/xunara/plan"
+	"github.com/xunara-net/xunara-server/netspace"
+	"github.com/xunara-net/xunara-server/plan"
 )
 
 // Tenant plans and tenant network blocks (PROJECT_SPEC section 54).

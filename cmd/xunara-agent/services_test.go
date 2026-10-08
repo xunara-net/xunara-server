@@ -16,8 +16,8 @@ import (
 
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/client/daemon"
-	"github.com/xunara/xunara/client/protocol"
+	"github.com/xunara-net/xunara-server/client/daemon"
+	"github.com/xunara-net/xunara-server/client/protocol"
 )
 
 // TestReadServicesFile covers the file format: canonical declarations are

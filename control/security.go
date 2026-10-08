@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // Xunara Security Center (PROJECT_SPEC section 39): a read-only snapshot of

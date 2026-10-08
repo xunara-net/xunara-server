@@ -11,7 +11,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 
-	"github.com/xunara/xunara/identity"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // getDeviceList reads GET /api/v2/devices and returns the raw body (for leak

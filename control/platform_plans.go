@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/xunara/xunara/plan"
+	"github.com/xunara-net/xunara-server/plan"
 )
 
 // Plans over the platform API (PROJECT_SPEC section 54).
