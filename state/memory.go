@@ -67,6 +67,9 @@ type MemoryStore struct {
 	// share is the synthetic-ID/masquerade namespace for shared-in nodes
 	// (section 38).
 	share *memoryShareStore
+
+	// relay holds enrolled DERP/STUN relays and their enrollment tokens.
+	relay *memoryRelayStore
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -90,6 +93,7 @@ func NewMemoryStore() *MemoryStore {
 		ip4:         newIPAllocator(defaultIPv4Prefix),
 		ip6:         newIPAllocator(defaultIPv6Prefix),
 		share:       newMemoryShareStore(),
+		relay:       newMemoryRelayStore(),
 	}
 
 	// Allocation skips addresses that are already assigned, so a changed
@@ -422,4 +426,77 @@ func (a *ipAllocator) next() (netip.Addr, bool) {
 		}
 		return next, true
 	}
+}
+
+// The relay store is a sub-store: these methods keep [MemoryStore] a complete
+// [RelayStore] without mixing relay maps into the node maps above.
+
+// CreateRelayEnrollmentToken implements [RelayStore].
+func (s *MemoryStore) CreateRelayEnrollmentToken(tok RelayEnrollmentToken, secret string) error {
+	return s.relay.CreateRelayEnrollmentToken(tok, secret)
+}
+
+// RelayEnrollmentTokenBySecret implements [RelayStore].
+func (s *MemoryStore) RelayEnrollmentTokenBySecret(secret string) (RelayEnrollmentToken, bool) {
+	return s.relay.RelayEnrollmentTokenBySecret(secret)
+}
+
+// RelayEnrollmentTokenByID implements [RelayStore].
+func (s *MemoryStore) RelayEnrollmentTokenByID(id string) (RelayEnrollmentToken, bool) {
+	return s.relay.RelayEnrollmentTokenByID(id)
+}
+
+// ListRelayEnrollmentTokens implements [RelayStore].
+func (s *MemoryStore) ListRelayEnrollmentTokens() []RelayEnrollmentToken {
+	return s.relay.ListRelayEnrollmentTokens()
+}
+
+// ConsumeRelayEnrollmentToken implements [RelayStore].
+func (s *MemoryStore) ConsumeRelayEnrollmentToken(id string, at time.Time) (RelayEnrollmentToken, error) {
+	return s.relay.ConsumeRelayEnrollmentToken(id, at)
+}
+
+// DeleteRelayEnrollmentToken implements [RelayStore].
+func (s *MemoryStore) DeleteRelayEnrollmentToken(id string) error {
+	return s.relay.DeleteRelayEnrollmentToken(id)
+}
+
+// CreateRelay implements [RelayStore].
+func (s *MemoryStore) CreateRelay(relay Relay, token string) error {
+	return s.relay.CreateRelay(relay, token)
+}
+
+// RelayByToken implements [RelayStore].
+func (s *MemoryStore) RelayByToken(token string) (Relay, bool) {
+	return s.relay.RelayByToken(token)
+}
+
+// RelayByID implements [RelayStore].
+func (s *MemoryStore) RelayByID(id string) (Relay, bool) {
+	return s.relay.RelayByID(id)
+}
+
+// RelayByNodeKey implements [RelayStore].
+func (s *MemoryStore) RelayByNodeKey(nodeKey string) (Relay, bool) {
+	return s.relay.RelayByNodeKey(nodeKey)
+}
+
+// ListRelays implements [RelayStore].
+func (s *MemoryStore) ListRelays() []Relay {
+	return s.relay.ListRelays()
+}
+
+// UpdateRelayHeartbeat implements [RelayStore].
+func (s *MemoryStore) UpdateRelayHeartbeat(id string, hb RelayHeartbeat) error {
+	return s.relay.UpdateRelayHeartbeat(id, hb)
+}
+
+// UpdateRelayConfig implements [RelayStore].
+func (s *MemoryStore) UpdateRelayConfig(id string, update RelayConfigUpdate) (Relay, error) {
+	return s.relay.UpdateRelayConfig(id, update)
+}
+
+// DeleteRelay implements [RelayStore].
+func (s *MemoryStore) DeleteRelay(id string) error {
+	return s.relay.DeleteRelay(id)
 }

@@ -272,6 +272,54 @@ CREATE TABLE IF NOT EXISTS node_service_acl_visibility (
 	PRIMARY KEY (node_id, name)
 );
 `,
+
+	// v19: the relay platform (Xunara Relay). relays holds one row per enrolled
+	// DERP/STUN relay with its last heartbeat telemetry and the desired
+	// configuration the control plane hands back; relay_enrollment_tokens
+	// holds the one-time credentials operators issue, storing only their
+	// SHA-256 so a database leak cannot be replayed against the control plane.
+	`
+CREATE TABLE IF NOT EXISTS relays (
+	id                TEXT    PRIMARY KEY,
+	name              TEXT    NOT NULL DEFAULT '',
+	hostname          TEXT    NOT NULL DEFAULT '',
+	region_code       TEXT    NOT NULL DEFAULT '',
+	region_name       TEXT    NOT NULL DEFAULT '',
+	node_key          TEXT    NOT NULL DEFAULT '',
+	version           TEXT    NOT NULL DEFAULT '',
+	derp_port         INTEGER NOT NULL DEFAULT 0,
+	stun_port         INTEGER NOT NULL DEFAULT 0,
+	visibility        TEXT    NOT NULL DEFAULT 'private',
+	desired_state     TEXT    NOT NULL DEFAULT 'online',
+	config_version    INTEGER NOT NULL DEFAULT 1,
+	bandwidth_limit   INTEGER NOT NULL DEFAULT 0,
+	token_hash        TEXT    NOT NULL UNIQUE,
+	healthy           INTEGER NOT NULL DEFAULT 0,
+	uptime_seconds    INTEGER NOT NULL DEFAULT 0,
+	connected_clients INTEGER NOT NULL DEFAULT 0,
+	bytes_in          INTEGER NOT NULL DEFAULT 0,
+	bytes_out         INTEGER NOT NULL DEFAULT 0,
+	last_seen         INTEGER,
+	created           INTEGER NOT NULL,
+	created_by        TEXT    NOT NULL DEFAULT ''
+);
+-- A node key identifies a relay's DERP identity, so two relays must not
+-- share one. The index is partial because a relay that has not reported a
+-- key yet stores an empty string, and empty values must not collide.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relays_node_key ON relays(node_key) WHERE node_key <> '';
+
+CREATE TABLE IF NOT EXISTS relay_enrollment_tokens (
+	id          TEXT    PRIMARY KEY,
+	name        TEXT    NOT NULL DEFAULT '',
+	secret_hash TEXT    NOT NULL UNIQUE,
+	visibility  TEXT    NOT NULL DEFAULT 'private',
+	expiry      INTEGER,
+	used_at     INTEGER,
+	created     INTEGER NOT NULL,
+	created_by  TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_relay_enrollment_created ON relay_enrollment_tokens(created);
+`,
 }
 
 // SQLiteStore is a durable [Store] backed by SQLite.

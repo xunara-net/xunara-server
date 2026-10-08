@@ -26,6 +26,7 @@ type Store interface {
 	RateLimitStore
 	ReachStore
 	ShareStore
+	RelayStore
 
 	// GetNodeByID returns the node with the given server-local ID.
 	GetNodeByID(id NodeID) (Node, bool)

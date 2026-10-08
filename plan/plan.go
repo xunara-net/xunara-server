@@ -52,6 +52,9 @@ type Plan struct {
 	MaxUsers    int `json:"max_users"`
 	MaxRoutes   int `json:"max_routes"`
 	MaxAuthKeys int `json:"max_auth_keys"`
+	// MaxRelays caps the DERP/STUN relays the tenant may enroll. Relays are
+	// the tenant's share of the relay platform (supplement section 49).
+	MaxRelays int `json:"max_relays"`
 
 	AllowCustomCIDR   bool `json:"allow_custom_cidr"`
 	AllowExitNode     bool `json:"allow_exit_node"`
@@ -90,6 +93,7 @@ func (p Plan) Validate() error {
 		{"max_users", p.MaxUsers},
 		{"max_routes", p.MaxRoutes},
 		{"max_auth_keys", p.MaxAuthKeys},
+		{"max_relays", p.MaxRelays},
 	} {
 		if quota.value < Unlimited {
 			return fmt.Errorf("plan %s: %s must be %d (unlimited), zero or positive", p.ID, quota.name, Unlimited)
@@ -120,6 +124,29 @@ func (p Plan) DeviceAllowance() string {
 		return "unlimited"
 	}
 	return fmt.Sprintf("%d", p.MaxDevices)
+}
+
+// UnlimitedRelays reports whether the plan does not cap relays.
+func (p Plan) UnlimitedRelays() bool { return p.MaxRelays == Unlimited }
+
+// AllowsRelays reports whether a tenant that already enrolled used relays may
+// enroll one more. current < 0 is treated as zero.
+func (p Plan) AllowsRelays(used int) bool {
+	if p.UnlimitedRelays() {
+		return true
+	}
+	if used < 0 {
+		used = 0
+	}
+	return used < p.MaxRelays
+}
+
+// RelayAllowance renders the plan's relay quota for humans.
+func (p Plan) RelayAllowance() string {
+	if p.UnlimitedRelays() {
+		return "unlimited"
+	}
+	return fmt.Sprintf("%d", p.MaxRelays)
 }
 
 // Catalog is an ordered set of plans. It is immutable once built.
@@ -173,11 +200,13 @@ func DefaultCatalog() *Catalog {
 		Plan{
 			ID: FreeID, Name: "Free", Currency: "CNY",
 			MaxDevices: 10, MaxUsers: 1, MaxRoutes: 4, MaxAuthKeys: 3,
+			MaxRelays:         1,
 			AllowSubnetRouter: true, AllowACL: true, AllowAuditLog: true,
 		},
 		Plan{
 			ID: ProID, Name: "Pro", PriceCents: 1990, Currency: "CNY", BillingCycle: "month",
 			MaxDevices: 50, MaxUsers: 5, MaxRoutes: 32, MaxAuthKeys: 25,
+			MaxRelays:       5,
 			AllowCustomCIDR: true, AllowExitNode: true, AllowSubnetRouter: true,
 			AllowAPI: true, AllowACL: true, AllowGrants: true, AllowCustomDNS: true,
 			AllowAuditLog: true, AllowMultiMember: true,
@@ -185,6 +214,7 @@ func DefaultCatalog() *Catalog {
 		Plan{
 			ID: BusinessID, Name: "Business", PriceCents: 9900, Currency: "CNY", BillingCycle: "month",
 			MaxDevices: 200, MaxUsers: 50, MaxRoutes: 128, MaxAuthKeys: 100,
+			MaxRelays:       20,
 			AllowCustomCIDR: true, AllowExitNode: true, AllowSubnetRouter: true,
 			AllowAPI: true, AllowACL: true, AllowGrants: true, AllowCustomDNS: true,
 			AllowAuditLog: true, AllowMultiMember: true,
@@ -274,7 +304,8 @@ func (c *Catalog) Get(id string) (Plan, bool) {
 func UnlimitedPlan() Plan {
 	return Plan{
 		ID: "unlimited", Name: "Unlimited",
-		MaxDevices: Unlimited, MaxUsers: Unlimited, MaxRoutes: Unlimited, MaxAuthKeys: Unlimited,
+		MaxDevices: Unlimited, MaxUsers: Unlimited, MaxRoutes: Unlimited,
+		MaxAuthKeys: Unlimited, MaxRelays: Unlimited,
 		AllowCustomCIDR: true, AllowExitNode: true, AllowSubnetRouter: true, AllowAPI: true,
 		AllowACL: true, AllowGrants: true, AllowCustomDNS: true, AllowAuditLog: true, AllowMultiMember: true,
 	}

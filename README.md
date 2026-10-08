@@ -28,7 +28,7 @@ xunara-web（用户控制台）   xunara-admin（平台后台）   CLI / SDK / �
 - **可观测与审计**：结构化日志、`/health`、`/version`、审计日志、Webhook、
   Prometheus 风格指标（部分）、gRPC 平台面。
 - **JSON API**：`/api/v1/auth/*`（登录/注册/会话）、`/api/v1/capabilities`、
-  `/api/v2/*`（设备、DNS、DERP、策略、审计、共享……）。
+  `/api/v2/*`（设备、DNS、DERP、策略、审计、共享、中继……）。
 
 ## 构建
 
@@ -59,6 +59,9 @@ go build ./cmd/xunara-agent     # 节点 Agent
 go test ./...
 go vet ./...
 ```
+
+- **中继平台**：`/api/relay/v1/enroll` 与 `/heartbeat`（一次性注册 + 长期身份）、
+  期望状态/限速/区域名下发、按套餐的中继配额、`/api/v2/relays/*` 与平台级中继管理。
 
 ## 仓库关系
 

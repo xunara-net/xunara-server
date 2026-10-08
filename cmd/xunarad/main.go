@@ -276,10 +276,48 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// A single-tenant deployment that configures a platform token also gets
+	// the platform API and the /admin entry point. Without the router those
+	// routes exist only in multi-tenant mode, which would leave a self-hosted
+	// installation unable to use the administrator console at all.
+	if platformToken := os.Getenv(*platformTokenEnv); platformToken != "" {
+		if err := serveSingleTenantPlatform(srv, plans, platformToken, *listen, *grpcListen, *domain, logger, ctx); err != nil {
+			logger.Error("server error", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := srv.Serve(ctx); err != nil {
 		logger.Error("server error", "err", err)
 		os.Exit(1)
 	}
+}
+
+// serveSingleTenantPlatform serves one organization through a [control.Router]
+// so that /api/platform/v1 and /admin exist. The router owns the site from
+// here on: it starts its background workers and closes it when serving stops.
+func serveSingleTenantPlatform(srv *control.Server, plans *control.PlanRegistry, platformToken, listen, grpcListen, domain string, logger *slog.Logger, ctx context.Context) error {
+	name := strings.TrimSpace(domain)
+	if name == "" {
+		name = srv.TenantID()
+	}
+	router, err := control.NewRouter(control.RouterConfig{
+		ListenAddr:     listen,
+		GRPCListenAddr: grpcListen,
+		// A single site without domains becomes the fallback for every host,
+		// which is exactly how a single-tenant deployment is addressed.
+		Orgs:               []control.OrgSite{{ID: srv.TenantID(), Name: name, Server: srv}},
+		PlatformAdminToken: platformToken,
+		Plans:              plans,
+		Logger:             logger,
+	})
+	if err != nil {
+		return err
+	}
+	logger.Info("platform API enabled for the single-tenant deployment",
+		"tenant", srv.TenantID(), "admin", "/admin", "platform_api", "/api/platform/v1")
+	return router.Serve(ctx)
 }
 
 // orgScopedFlags are the flags that describe a single organization. They are

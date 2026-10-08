@@ -193,6 +193,14 @@ const (
 	AuditShareAccepted      = "share.accepted"
 	AuditShareRejected      = "share.rejected"
 	AuditShareRevoked       = "share.revoked"
+	// AuditRelayEnrolled records a relay exchanging its one-time enrollment
+	// token for a long-lived identity. The record names the relay and its
+	// region; neither credential is ever written.
+	AuditRelayEnrolled           = "relay.enrolled"
+	AuditRelayEnrollTokenCreated = "relay.enrollment_token_created"
+	AuditRelayEnrollTokenRevoked = "relay.enrollment_token_revoked"
+	AuditRelayUpdated            = "relay.updated"
+	AuditRelayDeleted            = "relay.deleted"
 	// AuditAdminBootstrap records the first-run setup that gave the built-in
 	// administrator its password. The detail names the login, never the
 	// password or its hash.

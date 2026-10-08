@@ -757,6 +757,12 @@ func (s *Server) Handler() http.Handler {
 	r.Post("/ssh/check/{authID}/approve", s.handleSSHCheckApprove)
 	r.Post("/ssh/check/{authID}/deny", s.handleSSHCheckDeny)
 	r.Post("/derp/admit", s.handleDERPAdmit)
+
+	// The relay control protocol: relays are service identities, so they
+	// authenticate with their own credential instead of a session
+	// (xunara-relay/docs/relay-protocol.md).
+	r.Post(relayEnrollPath, s.handleRelayEnroll)
+	r.Post(relayHeartbeatPath, s.handleRelayHeartbeat)
 	r.Mount("/api/agent/v1", s.agentRouter())
 	r.Mount("/api/v1", s.apiRouter())
 	r.Mount("/api/v2", s.apiV2Router())

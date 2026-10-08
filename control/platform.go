@@ -50,6 +50,10 @@ type PlatformOrgStats struct {
 	// DeviceLimit is how many devices the plan allows (-1 for unlimited, 0
 	// when the deployment does not sell plans).
 	DeviceLimit int `json:"device_limit,omitempty"`
+
+	// Relays and RelaysOnline summarise the organization's enrolled relays.
+	Relays       int `json:"relays"`
+	RelaysOnline int `json:"relays_online"`
 }
 
 // mountPlatform registers the platform API under /api/platform.
@@ -71,6 +75,13 @@ func (r *Router) mountPlatform(pr chi.Router) {
 
 	// Cross-tenant user administration: the operator console and automation
 	// read the same list and apply the same two guards before a deletion.
+	// Relay platform: relays are tenant resources, so the platform surface
+	// resolves the tenant and reuses the tenant-scoped code paths.
+	pr.Get("/v1/relays", r.handlePlatformRelays)
+	pr.Post("/v1/organizations/{orgID}/relays/enroll-tokens", r.handlePlatformCreateRelayEnrollToken)
+	pr.Patch("/v1/organizations/{orgID}/relays/{relayID}", r.handlePlatformUpdateRelay)
+	pr.Delete("/v1/organizations/{orgID}/relays/{relayID}", r.handlePlatformDeleteRelay)
+
 	pr.Get("/v1/users", r.handlePlatformUsers)
 	pr.Post("/v1/organizations/{orgID}/users/{userID}/revoke", r.handlePlatformRevokeUserSessions)
 	pr.Delete("/v1/organizations/{orgID}/users/{userID}", r.handlePlatformDeleteUser)
@@ -136,6 +147,13 @@ func (r *Router) platformOrgView(org *routerOrg) PlatformOrg {
 		}
 	}
 	view.Stats.PendingDevices = len(server.identity.ListPendingDeviceAuthorizations(time.Now().UTC()))
+	now := time.Now().UTC()
+	for _, relay := range server.store.ListRelays() {
+		view.Stats.Relays++
+		if relayViewFor(relay, now).Online {
+			view.Stats.RelaysOnline++
+		}
+	}
 	if registry := r.cfg.Plans; registry != nil {
 		assigned := registry.Plan(context.Background(), org.site.ID)
 		view.Stats.Plan = assigned.ID

@@ -55,6 +55,17 @@ func (s *Server) apiV2Router() http.Handler {
 	r.Get("/security", s.handleAPIV2Security)
 	r.Get("/exit-nodes", s.handleAPIV2ExitNodes)
 	r.Get("/relays", s.handleAPIV2Relays)
+
+	// Enrolled relays and their one-time enrollment tokens. The read-only
+	// /relays view above reports the served DERP map; these manage the relays
+	// this organization enrolled.
+	r.Get("/relays/enrolled", s.handleAPIV2RelaysEnrolled)
+	r.Get("/relays/enroll-tokens", s.handleAPIV2RelayEnrollTokens)
+	r.Post("/relays/enroll-tokens", s.handleAPIV2CreateRelayEnrollToken)
+	r.Delete("/relays/enroll-tokens/{id}", s.handleAPIV2DeleteRelayEnrollToken)
+	r.Get("/relays/{id}", s.handleAPIV2Relay)
+	r.Patch("/relays/{id}", s.handleAPIV2UpdateRelay)
+	r.Delete("/relays/{id}", s.handleAPIV2DeleteRelay)
 	r.Get("/serve", s.handleAPIV2Serve)
 	r.Get("/devices", s.handleAPIV2Devices)
 	r.Post("/devices/{id}/approve", s.handleAPIV2ApproveDevice)
