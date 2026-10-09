@@ -20,3 +20,5 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./... -count=1
+      - name: Race
+        run: go test -race ./... -count=1

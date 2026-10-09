@@ -509,6 +509,11 @@ func TestRetryBackoffIsPersisted(t *testing.T) {
 	if got := receiver.delivered()[0]; got.at.Before(retryAt.Add(-2 * time.Millisecond)) {
 		t.Errorf("delivered at %v, before the persisted retry time %v", got.at, retryAt)
 	}
+	// 接收端收到 HTTP 请求不代表发送端已完成持久确认；等待游标与重试状态都落盘。
+	waitFor(t, func() bool {
+		attempts, _ := store.WebhookRetryState("ops")
+		return attempts == 0 && store.GetWebhookCursor("ops") == 1
+	}, "persisted delivery acknowledgement")
 	if attempts, _ := store.WebhookRetryState("ops"); attempts != 0 {
 		t.Errorf("attempts = %d after a successful delivery, want 0", attempts)
 	}
