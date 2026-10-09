@@ -157,8 +157,7 @@ func (r *Router) enableSelfServiceLocked() error {
 		domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(cfg.CookieDomain), "."))
 		ok := false
 		for _, front := range site.site.Domains {
-			front = normalizeRouterHost(front)
-			if front == domain || strings.HasSuffix(front, "."+domain) {
+			if hostCoveredByDomain(normalizeRouterHost(front), domain) {
 				ok = true
 				break
 			}
@@ -348,7 +347,18 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 	front.audit("system", identity.AuditUserRegistered, "org:"+orgID,
 		"self-service organization created for "+login)
 
-	srv.setSessionCookieFor(w, token, session.ExpiresAt, cfg.cfg.CookieDomain)
+	// The shared cookie only helps when the request arrived on a host the
+	// cookie domain covers: a browser silently drops a cookie whose Domain
+	// does not suffix-match the response host. Claiming a hand-off that did
+	// not happen would strand the new owner on a skeleton console, so the
+	// cookie stays host-only and the console asks for one sign-in instead.
+	handoff := false
+	serveDomain := ""
+	if cfg.cfg.CookieDomain != "" && hostCoveredByDomain(normalizeRouterHost(req.Host), cfg.cfg.CookieDomain) {
+		handoff = true
+		serveDomain = cfg.cfg.CookieDomain
+	}
+	srv.setSessionCookieFor(w, token, session.ExpiresAt, serveDomain)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"authenticated": true,
@@ -358,7 +368,7 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 			"domain": domain,
 			"url":    serverURL,
 		},
-		"handoff": cfg.cfg.CookieDomain != "",
+		"handoff": handoff,
 		"user": map[string]any{
 			"id":           int(user.ID),
 			"login_name":   user.LoginName,
@@ -367,6 +377,12 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 			"role":         string(user.Role),
 		},
 	})
+}
+
+// hostCoveredByDomain reports whether domain may scope a cookie served to
+// host: an exact match, or a subdomain of it (RFC 6265 domain matching).
+func hostCoveredByDomain(host, domain string) bool {
+	return host == domain || strings.HasSuffix(host, "."+domain)
 }
 
 // selfServiceOrgID derives the organization ID of a new tenant from the login

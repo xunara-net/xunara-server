@@ -20,6 +20,24 @@ import (
 // plan catalog with a network pool behind them.
 func selfServiceRouter(t *testing.T, cfg *SelfServiceConfig, prepare ...func(*PlanRegistry)) (*Router, *PlanRegistry) {
 	t.Helper()
+	return selfServiceRouterWith(t, selfServiceTestOptions{cfg: cfg}, prepare...)
+}
+
+// selfServiceTestOptions lets one test widen the front door (several domains)
+// without complicating every other caller.
+type selfServiceTestOptions struct {
+	cfg          *SelfServiceConfig
+	frontDomains []string
+}
+
+func selfServiceRouterWith(t *testing.T, options selfServiceTestOptions, prepare ...func(*PlanRegistry)) (*Router, *PlanRegistry) {
+	t.Helper()
+
+	cfg := options.cfg
+	frontDomains := options.frontDomains
+	if len(frontDomains) == 0 {
+		frontDomains = []string{"app.xunara.test"}
+	}
 
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -63,7 +81,7 @@ func selfServiceRouter(t *testing.T, cfg *SelfServiceConfig, prepare ...func(*Pl
 	router, err := NewRouter(RouterConfig{
 		ListenAddr: "127.0.0.1:0",
 		Orgs: []OrgSite{
-			{ID: "portal", Name: "Xunara Cloud", Domains: []string{"app.xunara.test"}, Server: front},
+			{ID: "portal", Name: "Xunara Cloud", Domains: frontDomains, Server: front},
 			{ID: "acme", Name: "Acme", Domains: []string{"acme.xunara.test"}, Server: newTestServer(t)},
 		},
 		PlatformAdminToken: "self-service-platform-token",
@@ -242,6 +260,42 @@ func TestSelfServiceSignupCarriesThePublicPort(t *testing.T) {
 	}
 	if payload.Organization.Domain != "carol.115.192.161.121.nip.io" {
 		t.Fatalf("tenant domain = %q, want the bare host without a port", payload.Organization.Domain)
+	}
+}
+
+// A front door with several names cannot share a cookie with every one of
+// them: when the request arrives on a host outside the cookie domain the
+// session stays host-only and the answer must not claim a hand-off.
+func TestSelfServiceSignupOutsideCookieCoverageSkipsHandoff(t *testing.T) {
+	router, _ := selfServiceRouterWith(t, selfServiceTestOptions{
+		cfg: &SelfServiceConfig{
+			DomainSuffix: "tailnet.xunara.test",
+			CookieDomain: "xunara.test",
+		},
+		frontDomains: []string{"app.xunara.test", "portal.other.test"},
+	})
+
+	recorder := postJSONAtHost(t, router.Handler(), "portal.other.test", selfServiceSignupPath, map[string]string{
+		"login":    "dana",
+		"password": "correct horse battery staple",
+	})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("self-service signup = %d (%s), want 201", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Handoff bool `json:"handoff"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decoding the response: %v", err)
+	}
+	if payload.Handoff {
+		t.Fatal("hand-off was claimed for a host the cookie domain does not cover")
+	}
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == sessionCookieName && cookie.Domain != "" {
+			t.Fatalf("session cookie domain = %q, want a host-only cookie", cookie.Domain)
+		}
 	}
 }
 
