@@ -2,6 +2,8 @@ package identity
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -40,7 +42,12 @@ func (s *SQLiteStore) SetLocalCredential(c *LocalCredential) error {
 
 // GetLocalCredential implements [LocalCredentialStore].
 func (s *SQLiteStore) GetLocalCredential(userID tailcfg.UserID) (LocalCredential, bool) {
-	row := s.db.QueryRowContext(context.Background(),
+	credential, err := s.LookupLocalCredential(context.Background(), userID)
+	return credential, err == nil
+}
+
+func (store *SQLiteStore) LookupLocalCredential(ctx context.Context, userID tailcfg.UserID) (LocalCredential, error) {
+	row := store.db.QueryRowContext(ctx,
 		"SELECT user_id, password_hash, created_at, updated_at FROM local_credentials WHERE user_id = ?",
 		int64(userID))
 
@@ -51,14 +58,17 @@ func (s *SQLiteStore) GetLocalCredential(userID tailcfg.UserID) (LocalCredential
 		updatedAt int64
 	)
 	if err := row.Scan(&id, &hash, &createdAt, &updatedAt); err != nil {
-		return LocalCredential{}, false
+		if errors.Is(err, sql.ErrNoRows) {
+			return LocalCredential{}, ErrCredentialNotFound
+		}
+		return LocalCredential{}, fmt.Errorf("identity: looking up local credential: %w", err)
 	}
 	return LocalCredential{
 		UserID:       tailcfg.UserID(id),
 		PasswordHash: hash,
 		CreatedAt:    time.Unix(0, createdAt).UTC(),
 		UpdatedAt:    time.Unix(0, updatedAt).UTC(),
-	}, true
+	}, nil
 }
 
 // DeleteLocalCredential implements [LocalCredentialStore].
@@ -72,10 +82,15 @@ func (s *SQLiteStore) DeleteLocalCredential(userID tailcfg.UserID) error {
 
 // CountLocalCredentials implements [LocalCredentialStore].
 func (s *SQLiteStore) CountLocalCredentials() int {
-	var count int
-	if err := s.db.QueryRowContext(context.Background(),
-		"SELECT COUNT(*) FROM local_credentials").Scan(&count); err != nil {
-		return 0
-	}
+	count, _ := s.LocalCredentialCount(context.Background())
 	return count
+}
+
+func (store *SQLiteStore) LocalCredentialCount(ctx context.Context) (int, error) {
+	var count int
+	if err := store.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM local_credentials").Scan(&count); err != nil {
+		return 0, fmt.Errorf("identity: counting local credentials: %w", err)
+	}
+	return count, nil
 }

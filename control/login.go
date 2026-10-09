@@ -131,12 +131,19 @@ const (
 // or the password is wrong: the endpoint must not confirm which accounts
 // exist. The work done is the same too (see [identity.VerifyPasswordMissing]).
 func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !s.localLogin {
 		s.renderError(w, r, http.StatusNotFound, "Sign-in unavailable",
 			"This server signs users in through an identity provider.")
 		return
 	}
-	if s.setupRequired() {
+	requiresSetup, err := s.localSetupRequired(r.Context())
+	if err != nil {
+		w.Header().Set("Retry-After", "5")
+		s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+		return
+	}
+	if requiresSetup {
 		http.Redirect(w, r, "/setup", http.StatusFound)
 		return
 	}
@@ -157,65 +164,22 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Two buckets: one lets a shared address through for a while, the other
-	// stops a single account from being hammered from many addresses.
-	for _, limit := range []struct {
-		scope  string
-		limit  int
-		window time.Duration
-	}{
-		{"login-ip:" + s.clientIP(r), loginAddressLimit, loginAddressWindow},
-		{"login-name:" + strings.ToLower(login), loginNameLimit, loginNameWindow},
-	} {
-		allowed, retryAfter, err := s.store.AllowRate(limit.scope, limit.limit, limit.window, now)
-		if err != nil {
-			s.log.Error("rate limiting sign-in", "err", err)
-			break
-		}
-		if !allowed {
-			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
-			reject(http.StatusTooManyRequests, "Too many attempts",
-				"Too many sign-in attempts. Wait a few minutes and try again.", "rate limited")
-			return
-		}
-	}
-
-	user, ok := s.identity.GetUserByLoginName(login)
-	if !ok || login == "" {
-		identity.VerifyPasswordMissing(password)
-		reject(http.StatusUnauthorized, "Sign-in failed", "Wrong login name or password.", "unknown login name")
-		return
-	}
-	credential, hasCredential := s.identity.GetLocalCredential(user.ID)
-	if !hasCredential {
-		// Same answer as an unknown login name: whether an account exists
-		// and whether it has a password are not facts this endpoint hands
-		// to an anonymous caller. The audit log records the real reason.
-		identity.VerifyPasswordMissing(password)
-		reject(http.StatusUnauthorized, "Sign-in failed", "Wrong login name or password.", "account has no password")
-		return
-	}
-	if !identity.VerifyPassword(credential.PasswordHash, password) {
-		reject(http.StatusUnauthorized, "Sign-in failed", "Wrong login name or password.",
-			"wrong password for "+user.LoginName)
-		return
-	}
-
-	session, token, err := s.identity.CreateLocalSession(r.Context(), user.ID, credential.PasswordHash, s.sessionTTL)
-	if errors.Is(err, identity.ErrCredentialChanged) {
-		reject(http.StatusUnauthorized, "Sign-in failed", "Wrong login name or password.", "credential changed during sign-in")
-		return
-	}
+	result, err := s.signInWithPassword(r.Context(), s.clientIP(r), login, password)
 	if err != nil {
-		s.log.Error("creating session", "user", int(user.ID), "err", err)
-		s.renderError(w, r, http.StatusInternalServerError, "Sign-in failed", "Please try again.")
+		switch {
+		case errors.Is(err, errPasswordRejected):
+			s.renderError(w, r, http.StatusUnauthorized, "Sign-in failed", "Wrong login name or password.")
+		case errors.Is(err, errPasswordRateLimited):
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", result.retryAfter))
+			s.renderError(w, r, http.StatusTooManyRequests, "Too many attempts", "Too many sign-in attempts. Wait a few minutes and try again.")
+		default:
+			w.Header().Set("Retry-After", "5")
+			s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+		}
 		return
 	}
 
-	actor := fmt.Sprintf("user:%d", user.ID)
-	s.audit(actor, identity.AuditLoginSucceeded, "provider:"+identity.LocalProviderID, "authenticated "+user.LoginName)
-	s.audit(actor, identity.AuditSessionCreated, "session:"+session.ID, "auth method "+identity.LocalProviderID)
-	s.setSessionCookie(w, token, session.ExpiresAt)
+	s.setSessionCookie(w, result.token, result.session.ExpiresAt)
 	http.Redirect(w, r, returnTo, http.StatusFound)
 }
 

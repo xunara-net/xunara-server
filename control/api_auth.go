@@ -287,11 +287,17 @@ type apiLoginRequest struct {
 // answer for every failure (whether the login name exists is not something an
 // anonymous caller learns) and the same session cookie.
 func (s *Server) handleAPIAuthLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !s.localLogin {
 		writeAPIError(w, http.StatusForbidden, "password sign-in is disabled on this server")
 		return
 	}
-	if s.setupRequired() {
+	requiresSetup, err := s.localSetupRequired(r.Context())
+	if err != nil {
+		writeAuthenticationError(w, err)
+		return
+	}
+	if requiresSetup {
 		writeAPIError(w, http.StatusConflict, "SETUP_REQUIRED: the deployment has not been initialized")
 		return
 	}
@@ -302,67 +308,22 @@ func (s *Server) handleAPIAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	login := strings.TrimSpace(req.Login)
 	password := req.Password
-	now := time.Now()
-
-	reject := func(status int, detail string) {
-		s.audit("system", identity.AuditLoginFailed, "provider:"+identity.LocalProviderID, detail)
-		writeAPIError(w, status, "wrong login name or password")
-	}
-
-	for _, limit := range []struct {
-		scope  string
-		limit  int
-		window time.Duration
-	}{
-		{"login-ip:" + s.clientIP(r), loginAddressLimit, loginAddressWindow},
-		{"login-name:" + strings.ToLower(login), loginNameLimit, loginNameWindow},
-	} {
-		allowed, retryAfter, err := s.store.AllowRate(limit.scope, limit.limit, limit.window, now)
-		if err != nil {
-			s.log.Error("rate limiting sign-in", "err", err)
-			break
-		}
-		if !allowed {
-			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
-			s.audit("system", identity.AuditLoginFailed, "provider:"+identity.LocalProviderID, "rate limited")
-			writeAPIError(w, http.StatusTooManyRequests, "too many sign-in attempts; wait a few minutes and try again")
-			return
-		}
-	}
-
-	user, ok := s.identity.GetUserByLoginName(login)
-	if !ok || login == "" {
-		identity.VerifyPasswordMissing(password)
-		reject(http.StatusUnauthorized, "unknown login name")
-		return
-	}
-	credential, hasCredential := s.identity.GetLocalCredential(user.ID)
-	if !hasCredential {
-		identity.VerifyPasswordMissing(password)
-		reject(http.StatusUnauthorized, "account has no password")
-		return
-	}
-	if !identity.VerifyPassword(credential.PasswordHash, password) {
-		reject(http.StatusUnauthorized, "wrong password for "+user.LoginName)
-		return
-	}
-
-	session, token, err := s.identity.CreateLocalSession(r.Context(), user.ID, credential.PasswordHash, s.sessionTTL)
-	if errors.Is(err, identity.ErrCredentialChanged) {
-		reject(http.StatusUnauthorized, "credential changed during sign-in")
-		return
-	}
+	result, err := s.signInWithPassword(r.Context(), s.clientIP(r), login, password)
 	if err != nil {
-		s.log.Error("creating session", "user", int(user.ID), "err", err)
-		writeAPIError(w, http.StatusInternalServerError, "sign-in failed; try again")
+		switch {
+		case errors.Is(err, errPasswordRejected):
+			writeAPIError(w, http.StatusUnauthorized, "wrong login name or password")
+		case errors.Is(err, errPasswordRateLimited):
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", result.retryAfter))
+			writeAPIError(w, http.StatusTooManyRequests, "too many sign-in attempts; wait a few minutes and try again")
+		default:
+			writeAuthenticationError(w, err)
+		}
 		return
 	}
 
-	actor := fmt.Sprintf("user:%d", user.ID)
-	s.audit(actor, identity.AuditLoginSucceeded, "provider:"+identity.LocalProviderID, "authenticated "+user.LoginName)
-	s.audit(actor, identity.AuditSessionCreated, "session:"+session.ID, "auth method "+identity.LocalProviderID)
-	s.setSessionCookie(w, token, session.ExpiresAt)
-	writeJSON(w, http.StatusOK, s.apiSessionPayload(user, session))
+	s.setSessionCookie(w, result.token, result.session.ExpiresAt)
+	writeJSON(w, http.StatusOK, s.apiSessionPayload(result.user, result.session))
 }
 
 // apiSignupRequest is the JSON body of POST /api/v1/auth/signup.

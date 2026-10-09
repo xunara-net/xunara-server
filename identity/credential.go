@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -29,10 +30,14 @@ type LocalCredentialStore interface {
 	SetLocalCredential(c *LocalCredential) error
 	// GetLocalCredential returns the credential of a user.
 	GetLocalCredential(userID tailcfg.UserID) (LocalCredential, bool)
+	// LookupLocalCredential 区分无本地密码与存储故障，认证路径不得使用布尔适配。
+	LookupLocalCredential(ctx context.Context, userID tailcfg.UserID) (LocalCredential, error)
 	// DeleteLocalCredential removes it; a missing credential is not an error.
 	DeleteLocalCredential(userID tailcfg.UserID) error
 	// CountLocalCredentials reports how many users can sign in with a
 	// password, which is how first-run setup decides whether an
 	// administrator already exists.
 	CountLocalCredentials() int
+	// LocalCredentialCount 保留错误，避免数据库不可读被解释为部署尚未初始化。
+	LocalCredentialCount(ctx context.Context) (int, error)
 }

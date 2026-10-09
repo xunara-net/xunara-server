@@ -411,13 +411,21 @@ func (store *SQLiteStore) LookupUser(ctx context.Context, id tailcfg.UserID) (Us
 
 // GetUserByLoginName implements [UserStore].
 func (s *SQLiteStore) GetUserByLoginName(login string) (User, bool) {
-	row := s.db.QueryRowContext(context.Background(),
+	user, err := s.LookupUserByLoginName(context.Background(), login)
+	return user, err == nil
+}
+
+func (store *SQLiteStore) LookupUserByLoginName(ctx context.Context, login string) (User, error) {
+	row := store.db.QueryRowContext(ctx,
 		"SELECT "+userColumns+" FROM users WHERE login_name = ? COLLATE NOCASE", login)
-	u, err := scanUser(row)
-	if err != nil {
-		return User{}, false
+	user, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrUserNotFound
 	}
-	return u, true
+	if err != nil {
+		return User{}, fmt.Errorf("identity: looking up login name: %w", err)
+	}
+	return user, nil
 }
 
 // ListUsers implements [UserStore].

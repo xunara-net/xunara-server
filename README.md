@@ -179,6 +179,13 @@ go run ./cmd/xunarad \
 保留原访问地址。数据库结构与官方客户端协议不变，见
 [ADR-0012](docs/adr/ADR-0012-authentication-storage-failures.md)。
 
+JSON 与兼容 HTML 密码登录共用同一限流、身份查询、密码验证和会话签发路径。
+限流、密码登录的初始化计数、账户/凭据读取或会话存储故障均中止认证，返回脱敏
+503 与重试提示，不改变 Cookie 或引导重新初始化；未知账户、无本地密码和错误
+密码仍统一 401。数据库结构、预算与 bcrypt 成本不变，见
+[ADR-0016](docs/adr/ADR-0016-password-login-consolidation.md)。成功登录审计的原子性
+和其他历史调用仍需继续复核，不把本切片写成全部认证流程已完成。
+
 ### 通行密钥
 
 登录页与安全中心通过统一账户接口使用 WebAuthn（[ADR-0011](docs/adr/ADR-0011-passkey-web-and-auth-consolidation.md)）：

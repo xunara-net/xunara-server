@@ -28,6 +28,8 @@ type UserStore interface {
 	LookupUser(ctx context.Context, id tailcfg.UserID) (User, error)
 	// GetUserByLoginName returns a user by login name, case-insensitively.
 	GetUserByLoginName(login string) (User, bool)
+	// LookupUserByLoginName 保留查询错误和取消信号；仅无记录表示未知登录名。
+	LookupUserByLoginName(ctx context.Context, login string) (User, error)
 	// ListUsers returns every user, oldest first.
 	ListUsers() []User
 	// UpdateUser replaces a stored user. It fails if the user is unknown.
