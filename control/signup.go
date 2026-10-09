@@ -25,6 +25,10 @@ const (
 
 // handleSignupPage implements GET /signup.
 func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
+	if s.selfServiceInfo() != nil {
+		http.Redirect(w, r, "/register", http.StatusSeeOther)
+		return
+	}
 	if !s.localLogin {
 		s.renderError(w, r, http.StatusNotFound, "Registration unavailable",
 			"This server creates accounts through an identity provider.")
@@ -99,6 +103,11 @@ type signupAdmission struct {
 func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 	reject := func(code int, message string) error {
 		return signupRejection{Code: code, Title: "Registration rejected", Message: message}
+	}
+
+	if s.selfServiceInfo() != nil {
+		return signupAdmission{}, reject(http.StatusForbidden,
+			"TENANT_SIGNUP_REQUIRED: create an independent network through the self-service registration page")
 	}
 
 	token := strings.TrimSpace(req.Invite)

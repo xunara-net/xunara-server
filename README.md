@@ -84,11 +84,32 @@ go build ./cmd/xunara-agent     # 节点 Agent
 与地址池记录）与 `-plans`（每个新租户都要落在某个套餐上）。`domain_suffix`
 下需要 `*.tailnet.example.com` 泛解析。
 
+入口站的旧本地注册端点不会再给访客创建公共网络成员；旧 `/signup` 跳转到
+控制台 `/register`，API 返回 `TENANT_SIGNUP_REQUIRED`。目标租户自己的邀请注册不变。
+
+托管租户使用部署显式指定的公共中继池（[ADR-0008](docs/adr/ADR-0008-managed-relay-admission.md)）：
+
+```sh
+go run ./cmd/xunarad \
+  -listen 127.0.0.1:9190 \
+  -org-config /etc/xunara/orgs.json \
+  -platform-state-dir /var/lib/xunara \
+  -plans builtin -network-pool 100.100.0.0/16 \
+  -managed-derp-map /var/lib/xunara-relay/derp.json
+```
+
+在本仓库执行，先准备组织配置和公共中继 map。中继的 `-verify-url` 指向本机
+`http://127.0.0.1:9190/api/relay/v1/admit`，不依赖租户 Host；只有有效 map 包含该
+中继、节点已注册且未过期、租户策略允许时才放行。静态组织仍使用各自配置中的
+`derp_map`，不会把某个租户的私有中继、身份或密钥复制给其他租户。
+
 ## 测试
 
 ```bash
+go build ./...
 go test ./...
 go vet ./...
+go test -race ./...
 ```
 
 - **中继平台**：`/api/relay/v1/enroll` 与 `/heartbeat`（一次性注册 + 长期身份）、

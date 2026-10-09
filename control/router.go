@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"google.golang.org/grpc"
+	"tailscale.com/tailcfg"
 )
 
 // This file hosts several organizations on one listener. Each organization is
@@ -73,7 +74,8 @@ type RouterConfig struct {
 	// every organization is on a plan from the registry's catalog, quotas are
 	// enforced by its control plane, and each tenant's devices are allocated
 	// from the network block the registry holds for it.
-	Plans *PlanRegistry
+	Plans         *PlanRegistry
+	SharedDERPMap *tailcfg.DERPMap
 	// Logger receives router logs. Defaults to slog.Default.
 	Logger *slog.Logger
 }
@@ -134,6 +136,7 @@ var (
 // NewRouter validates the organization table and prepares the per-site
 // handlers.
 func NewRouter(cfg RouterConfig) (*Router, error) {
+	cfg.SharedDERPMap = cfg.SharedDERPMap.Clone()
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -594,6 +597,9 @@ func (r *Router) Handler() http.Handler {
 	// process-level endpoints: it is not a tenant surface, so no host's
 	// routing decides whether it exists (spec section 54).
 	r.mountAdmin(mux)
+	if r.cfg.SharedDERPMap != nil {
+		mux.Post(relayAdmissionPath, r.handleSharedDERPAdmit)
+	}
 
 	// The sign-up desk is platform-level like the console, but it answers
 	// only on its own site's hosts: everywhere else the request belongs to

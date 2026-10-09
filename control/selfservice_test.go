@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/xunara-net/xunara-server/identity"
 	"github.com/xunara-net/xunara-server/netspace"
 	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/state"
+	"tailscale.com/tailcfg"
 )
 
 // selfServiceRouter builds the hosted shape: a front door at app.xunara.test,
@@ -26,8 +30,9 @@ func selfServiceRouter(t *testing.T, cfg *SelfServiceConfig, prepare ...func(*Pl
 // selfServiceTestOptions lets one test widen the front door (several domains)
 // without complicating every other caller.
 type selfServiceTestOptions struct {
-	cfg          *SelfServiceConfig
-	frontDomains []string
+	cfg           *SelfServiceConfig
+	frontDomains  []string
+	sharedDERPMap *tailcfg.DERPMap
 }
 
 func selfServiceRouterWith(t *testing.T, options selfServiceTestOptions, prepare ...func(*PlanRegistry)) (*Router, *PlanRegistry) {
@@ -46,7 +51,7 @@ func selfServiceRouterWith(t *testing.T, options selfServiceTestOptions, prepare
 		Path:      dir + "/platform.db",
 		StateRoot: dir + "/orgs",
 		NewServer: func(org ManagedOrg, stateDir string) (*Server, error) {
-			return New(Config{ServerURL: org.ServerURL, StateDir: stateDir})
+			return New(Config{ServerURL: org.ServerURL, StateDir: stateDir, DERPMap: options.sharedDERPMap.Clone()})
 		},
 	})
 	if err != nil {
@@ -88,6 +93,7 @@ func selfServiceRouterWith(t *testing.T, options selfServiceTestOptions, prepare
 		Registry:           registry,
 		Plans:              plans,
 		SelfService:        cfg,
+		SharedDERPMap:      options.sharedDERPMap,
 	})
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
@@ -225,6 +231,123 @@ func TestSelfServiceSignupCreatesTenant(t *testing.T) {
 	}
 	if providers.SelfService == nil || providers.SelfService.Endpoint != selfServiceSignupPath {
 		t.Fatalf("providers = %+v, want the self-service endpoint", providers.SelfService)
+	}
+}
+
+func TestSelfServiceFrontDoorCannotCreateLocalMembers(t *testing.T) {
+	router, _ := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "xunara.test"})
+	front := router.orgByID("portal").site.Server
+	usersBefore := len(front.identity.ListUsers())
+
+	recorder := postJSONAtHost(t, router.Handler(), "app.xunara.test", "/api/v1/auth/signup", map[string]string{
+		"login": "outsider", "password": "correct horse battery staple",
+	})
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "TENANT_SIGNUP_REQUIRED") {
+		t.Fatalf("local API signup = %d (%s), want tenant registration required", recorder.Code, recorder.Body.String())
+	}
+
+	form := url.Values{
+		"login": {"outsider"}, "password": {"correct horse battery staple"}, "confirm": {"correct horse battery staple"},
+		"_csrf": {front.newFormToken(formPurposeSignup)},
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://app.xunara.test/signup", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder = httptest.NewRecorder()
+	router.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("local HTML signup = %d, want 403", recorder.Code)
+	}
+	if len(front.identity.ListUsers()) != usersBefore {
+		t.Fatal("signup added a member to the public front door")
+	}
+	if _, exists := front.identity.GetUserByLoginName("outsider"); exists {
+		t.Fatal("the rejected signup created an account")
+	}
+	if len(recorder.Result().Cookies()) != 0 {
+		t.Fatal("the rejected signup established a session")
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "https://app.xunara.test/signup", nil)
+	recorder = httptest.NewRecorder()
+	router.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/register" {
+		t.Fatalf("signup page = %d (%s), want the registration console", recorder.Code, recorder.Header().Get("Location"))
+	}
+}
+
+func TestSelfServiceClientsReceiveSharedDERPAndStayIsolated(t *testing.T) {
+	sharedMap := &tailcfg.DERPMap{
+		OmitDefaultRegions: true,
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
+			900: {
+				RegionID: 900, RegionCode: "public", RegionName: "Public relay",
+				Nodes: []*tailcfg.DERPNode{{
+					Name: "900a", RegionID: 900, HostName: "relay.example.com", DERPPort: 9091, STUNPort: -1,
+					CertName: "sha256-raw:" + strings.Repeat("a", 64),
+				}},
+			},
+		},
+	}
+	router, plans := selfServiceRouterWith(t, selfServiceTestOptions{
+		cfg: &SelfServiceConfig{DomainSuffix: "example.com"}, sharedDERPMap: sharedMap,
+	})
+	for _, login := range []string{"alice", "bob"} {
+		recorder := postJSONAtHost(t, router.Handler(), "app.xunara.test", selfServiceSignupPath, map[string]string{
+			"login": login, "password": "correct horse battery staple",
+		})
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("signup %s = %d, want 201", login, recorder.Code)
+		}
+	}
+	hs := httptest.NewServer(router.Handler())
+	t.Cleanup(hs.Close)
+	alice := router.orgByID("alice").site.Server
+	bob := router.orgByID("bob").site.Server
+	aliceKey := seedPreAuthKey(t, alice, state.PreAuthKey{Reusable: true})
+	bobKey := seedPreAuthKey(t, bob, state.PreAuthKey{Reusable: true})
+	_, aliceClient, aliceNode := registerPreAuthedNodeAtHost(t, hs, "alice.example.com", "alice-laptop", aliceKey)
+	registerPreAuthedNodeAtHost(t, hs, "alice.example.com", "alice-phone", aliceKey)
+	_, bobClient, bobNode := registerPreAuthedNodeAtHost(t, hs, "bob.example.com", "bob-laptop", bobKey)
+
+	aliceMap := decodeMapResponse(t, postRaw(t, aliceClient, "/machine/map", tailcfg.MapRequest{
+		Version: tailcfg.CurrentCapabilityVersion, NodeKey: aliceNode.Public(),
+	}), "")
+	bobMap := decodeMapResponse(t, postRaw(t, bobClient, "/machine/map", tailcfg.MapRequest{
+		Version: tailcfg.CurrentCapabilityVersion, NodeKey: bobNode.Public(),
+	}), "")
+	if !reflect.DeepEqual(aliceMap.DERPMap, sharedMap) || !reflect.DeepEqual(bobMap.DERPMap, sharedMap) {
+		t.Fatal("the upstream Noise client did not receive the shared map with its port and certificate pin")
+	}
+	if len(aliceMap.Peers) != 1 || len(bobMap.Peers) != 0 {
+		t.Fatalf("peer counts alice=%d bob=%d, want 1 and 0", len(aliceMap.Peers), len(bobMap.Peers))
+	}
+	for login, networkMap := range map[string]*tailcfg.MapResponse{"alice": aliceMap, "bob": bobMap} {
+		prefix, ok := plans.NetworkPrefix(context.Background(), login)
+		if !ok || networkMap.Node == nil || !networkMap.Node.MachineAuthorized || len(networkMap.Node.Addresses) == 0 {
+			t.Fatalf("%s has no authorized node or assigned network", login)
+		}
+		if !prefix.Contains(networkMap.Node.Addresses[0].Addr()) {
+			t.Fatalf("%s node address is outside its allocated network", login)
+		}
+		if len(networkMap.UserProfiles) == 0 || networkMap.UserProfiles[0].LoginName != login {
+			t.Fatalf("%s received another tenant's user profile", login)
+		}
+	}
+	if _, exists := bob.store.GetNodeByNodeKey(aliceNode.Public()); exists {
+		t.Fatal("alice's machine resolved in bob's state store")
+	}
+	if alice.NoisePublicKey() == bob.NoisePublicKey() {
+		t.Fatal("new tenants share the control-plane key")
+	}
+	for _, nodeKey := range []tailcfg.DERPAdmitClientRequest{{NodePublic: aliceNode.Public()}, {NodePublic: bobNode.Public()}} {
+		recorder := postJSONAtHost(t, router.Handler(), "127.0.0.1", relayAdmissionPath, nodeKey)
+		var admission tailcfg.DERPAdmitClientResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &admission); err != nil {
+			t.Fatal(err)
+		}
+		if recorder.Code != http.StatusOK || !admission.Allow {
+			t.Fatal("a managed tenant's authorized node was refused by the shared relay")
+		}
 	}
 }
 

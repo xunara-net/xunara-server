@@ -27,19 +27,20 @@ import (
 
 func main() {
 	var (
-		showVersion     = flag.Bool("version", false, "print the build version and exit")
-		listen          = flag.String("listen", "0.0.0.0:8080", "address to listen on")
-		stateDir        = flag.String("state-dir", "data", "directory for persistent state")
-		serverURL       = flag.String("server-url", "", "externally reachable base URL (defaults to http://<listen>)")
-		domain          = flag.String("domain", "", "tailnet MagicDNS domain (empty disables MagicDNS)")
-		derpMapPath     = flag.String("derp-map", "", "path to a tailcfg.DERPMap JSON file to advertise to clients")
-		derpPolicy      = flag.String("derp-policy", "", "DERP policy: empty serves -derp-map, none disables DERP, regions serves only -derp-regions")
-		derpRegions     = flag.String("derp-regions", "", "comma-separated DERP region IDs served when -derp-policy=regions")
-		clientVer       = flag.String("client-version", "", "latest client version to advertise to clients (e.g. 1.88.3); empty disables the advisory")
-		clientVerURL    = flag.String("client-version-url", "", "URL opened by the client's update notification (optional)")
-		policyPath      = flag.String("policy", "", "path to an ACL policy document (HuJSON); empty allows everything")
-		logLevel        = flag.String("log-level", "info", "log level: debug|info|warn|error")
-		consoleTimezone = flag.String("console-timezone", "Asia/Shanghai",
+		showVersion        = flag.Bool("version", false, "print the build version and exit")
+		listen             = flag.String("listen", "0.0.0.0:8080", "address to listen on")
+		stateDir           = flag.String("state-dir", "data", "directory for persistent state")
+		serverURL          = flag.String("server-url", "", "externally reachable base URL (defaults to http://<listen>)")
+		domain             = flag.String("domain", "", "tailnet MagicDNS domain (empty disables MagicDNS)")
+		derpMapPath        = flag.String("derp-map", "", "path to a tailcfg.DERPMap JSON file to advertise to clients")
+		managedDERPMapPath = flag.String("managed-derp-map", "", "public DERP map for platform-managed organizations; requires -org-config and -platform-state-dir and enables /api/relay/v1/admit")
+		derpPolicy         = flag.String("derp-policy", "", "DERP policy: empty serves -derp-map, none disables DERP, regions serves only -derp-regions")
+		derpRegions        = flag.String("derp-regions", "", "comma-separated DERP region IDs served when -derp-policy=regions")
+		clientVer          = flag.String("client-version", "", "latest client version to advertise to clients (e.g. 1.88.3); empty disables the advisory")
+		clientVerURL       = flag.String("client-version-url", "", "URL opened by the client's update notification (optional)")
+		policyPath         = flag.String("policy", "", "path to an ACL policy document (HuJSON); empty allows everything")
+		logLevel           = flag.String("log-level", "info", "log level: debug|info|warn|error")
+		consoleTimezone    = flag.String("console-timezone", "Asia/Shanghai",
 			"IANA timezone the web console prints timestamps in; empty or unknown falls back to UTC")
 		oidcIssuer   = flag.String("oidc-issuer", "", "OIDC issuer URL; enables OIDC login when set")
 		oidcID       = flag.String("oidc-id", "oidc", "provider ID for the OIDC issuer")
@@ -130,20 +131,25 @@ func main() {
 			os.Exit(1)
 		}
 		runRouter(routerOptions{
-			path:             *orgConfigPath,
-			listen:           *listen,
-			grpcListen:       *grpcListen,
-			platformTokenEnv: *platformTokenEnv,
-			platformStateDir: *platformStateDir,
-			trustedProxy:     *trustedProxy,
-			consoleTimezone:  *consoleTimezone,
-			plansFile:        *plansFile,
-			networkPool:      *networkPool,
+			path:               *orgConfigPath,
+			listen:             *listen,
+			grpcListen:         *grpcListen,
+			platformTokenEnv:   *platformTokenEnv,
+			platformStateDir:   *platformStateDir,
+			trustedProxy:       *trustedProxy,
+			consoleTimezone:    *consoleTimezone,
+			plansFile:          *plansFile,
+			networkPool:        *networkPool,
+			managedDERPMapPath: *managedDERPMapPath,
 		}, logger)
 		return
 	}
 	if *platformStateDir != "" {
 		logger.Error("-platform-state-dir requires -org-config (platform-managed organizations are a multi-tenant feature)")
+		os.Exit(1)
+	}
+	if *managedDERPMapPath != "" {
+		logger.Error("-managed-derp-map requires -org-config and -platform-state-dir")
 		os.Exit(1)
 	}
 
@@ -378,15 +384,16 @@ func checkOrgScopedFlags(visited []string) error {
 // organizations at runtime; their control planes live under that directory.
 // routerOptions are the multi-tenant deployment's process-level settings.
 type routerOptions struct {
-	path             string
-	listen           string
-	grpcListen       string
-	platformTokenEnv string
-	platformStateDir string
-	trustedProxy     bool
-	consoleTimezone  string
-	plansFile        string
-	networkPool      string
+	path               string
+	listen             string
+	grpcListen         string
+	platformTokenEnv   string
+	platformStateDir   string
+	trustedProxy       bool
+	consoleTimezone    string
+	plansFile          string
+	networkPool        string
+	managedDERPMapPath string
 }
 
 // planSourceFor turns a plan registry into the control plane's plan source.
@@ -437,8 +444,17 @@ func loadPlanRegistry(ctx context.Context, dbPath, plansFile, networkPool string
 }
 
 func runRouter(opts routerOptions, logger *slog.Logger) {
-	path, listen, grpcListen, platformTokenEnv, platformStateDir, consoleTimezone, plansFile, networkPool :=
-		opts.path, opts.listen, opts.grpcListen, opts.platformTokenEnv, opts.platformStateDir, opts.consoleTimezone, opts.plansFile, opts.networkPool
+	if opts.managedDERPMapPath != "" && opts.platformStateDir == "" {
+		logger.Error("-managed-derp-map requires -platform-state-dir")
+		os.Exit(1)
+	}
+	sharedDERPMap, err := loadDERPMap(opts.managedDERPMapPath)
+	if err != nil {
+		logger.Error("loading the managed organization DERP map", "err", err)
+		os.Exit(1)
+	}
+	path, listen, grpcListen, platformTokenEnv, platformStateDir, plansFile, networkPool :=
+		opts.path, opts.listen, opts.grpcListen, opts.platformTokenEnv, opts.platformStateDir, opts.plansFile, opts.networkPool
 	sites, selfService, err := loadOrgConfig(path, logger, opts.trustedProxy)
 	if err != nil {
 		logger.Error("loading the organization table", "err", err)
@@ -475,17 +491,8 @@ func runRouter(opts routerOptions, logger *slog.Logger) {
 		registry, err = control.OpenOrgRegistry(context.Background(), control.OrgRegistryConfig{
 			Path:      filepath.Join(platformStateDir, "platform.db"),
 			StateRoot: filepath.Join(platformStateDir, "orgs"),
-			// Managed organizations inherit the deployment's process-level
-			// settings (the logger and nothing that carries a secret).
 			NewServer: func(org control.ManagedOrg, stateDir string) (*control.Server, error) {
-				return control.New(control.Config{
-					ServerURL:       org.ServerURL,
-					Domain:          org.Domain,
-					StateDir:        stateDir,
-					ConsoleTimezone: consoleTimezone,
-					TrustedProxy:    opts.trustedProxy,
-					Logger:          logger,
-				})
+				return control.New(managedServerConfig(org, stateDir, opts, sharedDERPMap, logger))
 			},
 		})
 		if err != nil {
@@ -514,6 +521,7 @@ func runRouter(opts routerOptions, logger *slog.Logger) {
 		Shares:             shares,
 		Plans:              plans,
 		SelfService:        selfService,
+		SharedDERPMap:      sharedDERPMap,
 		Logger:             logger,
 	})
 	if err != nil {
