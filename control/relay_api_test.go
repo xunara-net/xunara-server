@@ -320,6 +320,19 @@ func TestRelayPlanLimit(t *testing.T) {
 	if apiErr.Code != "RELAY_LIMIT_REACHED" {
 		t.Fatalf("quota error code = %q, want RELAY_LIMIT_REACHED", apiErr.Code)
 	}
+	// 配额拒绝不消耗凭据，释放资源后仍能使用同一令牌完成注册。
+	if record, exists := s.store.RelayEnrollmentTokenByID("renr-direct"); !exists || record.Used() {
+		t.Fatal("quota rejection consumed the enrollment token")
+	}
+	if err := s.store.DeleteRelay(s.store.ListRelays()[0].ID); err != nil {
+		t.Fatalf("DeleteRelay: %v", err)
+	}
+	resp = enrollRelay(t, hs, direct, map[string]any{
+		"hostname": "hk2.example.com", "node_key": "nodekey:second",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("retry after releasing quota = %d, want 200", resp.StatusCode)
+	}
 }
 
 func TestRelayPlatformAPI(t *testing.T) {

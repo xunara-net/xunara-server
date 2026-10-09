@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -120,24 +121,52 @@ func (m *memoryRelayStore) ListRelayEnrollmentTokens() []RelayEnrollmentToken {
 	return out
 }
 
-// ConsumeRelayEnrollmentToken implements [RelayStore].
-func (m *memoryRelayStore) ConsumeRelayEnrollmentToken(id string, at time.Time) (RelayEnrollmentToken, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	tok, ok := m.tokens[id]
-	if !ok {
+func (store *memoryRelayStore) LookupRelayEnrollmentToken(ctx context.Context, secret string) (RelayEnrollmentToken, error) {
+	if err := ctx.Err(); err != nil {
+		return RelayEnrollmentToken{}, err
+	}
+	record, exists := store.RelayEnrollmentTokenBySecret(secret)
+	if !exists {
 		return RelayEnrollmentToken{}, ErrRelayNotFound
 	}
-	if tok.Used() {
-		return RelayEnrollmentToken{}, ErrRelayEnrollmentConsumed
+	return record, nil
+}
+
+func (store *memoryRelayStore) EnrollRelay(ctx context.Context, enrollmentSecret string, relay Relay, token string, maxRelays int) (Relay, error) {
+	prepared, err := prepareRelayForCreation(relay, token)
+	if err != nil {
+		return Relay{}, err
 	}
-	if tok.Expired(at) {
-		return RelayEnrollmentToken{}, ErrRelayEnrollmentExpired
+	if maxRelays < -1 {
+		return Relay{}, fmt.Errorf("state: invalid relay quota")
 	}
-	tok.UsedAt = at.UTC()
-	m.tokens[id] = tok
-	return tok, nil
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Relay{}, err
+	}
+	tokenID, exists := store.secrets[RelaySecretHash(enrollmentSecret)]
+	if !exists || !ValidRelayEnrollmentSecret(enrollmentSecret) {
+		return Relay{}, ErrRelayNotFound
+	}
+	record := store.tokens[tokenID]
+	if record.Used() {
+		return Relay{}, ErrRelayEnrollmentConsumed
+	}
+	now := time.Now().UTC()
+	if record.Expired(now) {
+		return Relay{}, ErrRelayEnrollmentExpired
+	}
+	if maxRelays != -1 && len(store.relays) >= maxRelays {
+		return Relay{}, ErrRelayLimitReached
+	}
+	// 所有可失败的校验先完成，之后在同一锁内提交身份和令牌，绝不先烧掉令牌。
+	if err := store.createRelayLocked(prepared, token); err != nil {
+		return Relay{}, err
+	}
+	record.UsedAt = now
+	store.tokens[tokenID] = record
+	return prepared, nil
 }
 
 // DeleteRelayEnrollmentToken implements [RelayStore].
@@ -156,41 +185,33 @@ func (m *memoryRelayStore) DeleteRelayEnrollmentToken(id string) error {
 
 // CreateRelay implements [RelayStore].
 func (m *memoryRelayStore) CreateRelay(relay Relay, token string) error {
-	if relay.ID == "" {
-		return fmt.Errorf("state: relay id is required")
-	}
-	if !ValidRelayToken(token) {
-		return fmt.Errorf("state: refusing to store a malformed relay token")
+	prepared, err := prepareRelayForCreation(relay, token)
+	if err != nil {
+		return err
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.createRelayLocked(prepared, token)
+}
 
+func (store *memoryRelayStore) createRelayLocked(relay Relay, token string) error {
 	hash := RelaySecretHash(token)
-	if _, dup := m.relayToken[hash]; dup {
+	if _, dup := store.relayToken[hash]; dup {
 		return ErrRelayTokenExists
 	}
-	if _, dup := m.relays[relay.ID]; dup {
-		return fmt.Errorf("state: duplicate relay id %q", relay.ID)
+	if _, dup := store.relays[relay.ID]; dup {
+		return ErrRelayAlreadyEnrolled
 	}
 	if relay.NodeKey != "" {
-		if _, dup := m.relayNode[relay.NodeKey]; dup {
-			return fmt.Errorf("state: duplicate relay node key")
+		if _, dup := store.relayNode[relay.NodeKey]; dup {
+			return ErrRelayAlreadyEnrolled
 		}
 	}
-	if relay.Created.IsZero() {
-		relay.Created = time.Now().UTC()
-	}
-	if relay.DesiredState == "" {
-		relay.DesiredState = RelayStateOnline
-	}
-	if relay.ConfigVersion == 0 {
-		relay.ConfigVersion = 1
-	}
-	m.relays[relay.ID] = relay
-	m.relayToken[hash] = relay.ID
+	store.relays[relay.ID] = relay
+	store.relayToken[hash] = relay.ID
 	if relay.NodeKey != "" {
-		m.relayNode[relay.NodeKey] = relay.ID
+		store.relayNode[relay.NodeKey] = relay.ID
 	}
 	return nil
 }

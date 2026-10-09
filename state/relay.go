@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
@@ -53,6 +54,8 @@ var (
 	ErrRelayEnrollmentConsumed = errors.New("relay: enrollment token already used")
 	ErrRelayEnrollmentExpired  = errors.New("relay: enrollment token expired")
 	ErrRelayTokenExists        = errors.New("relay: relay token already exists")
+	ErrRelayAlreadyEnrolled    = errors.New("relay: relay identity already enrolled")
+	ErrRelayLimitReached       = errors.New("relay: enrollment quota reached")
 )
 
 // RelayEnrollmentToken is a one-time credential an operator hands to a relay.
@@ -151,15 +154,15 @@ type RelayStore interface {
 	CreateRelayEnrollmentToken(tok RelayEnrollmentToken, secret string) error
 	// RelayEnrollmentTokenBySecret resolves a token by its plaintext secret.
 	RelayEnrollmentTokenBySecret(secret string) (RelayEnrollmentToken, bool)
+	// LookupRelayEnrollmentToken 区分未知凭据与存储故障，支持请求取消。
+	LookupRelayEnrollmentToken(ctx context.Context, secret string) (RelayEnrollmentToken, error)
 	// RelayEnrollmentTokenByID resolves a token by its identifier.
 	RelayEnrollmentTokenByID(id string) (RelayEnrollmentToken, bool)
 	// ListRelayEnrollmentTokens returns every token, newest first.
 	ListRelayEnrollmentTokens() []RelayEnrollmentToken
-	// ConsumeRelayEnrollmentToken marks a token used atomically and returns
-	// its record. It reports [ErrRelayNotFound] for an unknown token,
-	// [ErrRelayEnrollmentConsumed] when it was already used and
-	// [ErrRelayEnrollmentExpired] when it is past its expiry.
-	ConsumeRelayEnrollmentToken(id string, at time.Time) (RelayEnrollmentToken, error)
+	// EnrollRelay 在同一事务内验证凭据、检查数量、创建身份和消费令牌；失败不产生变更。
+	// maxRelays 由 Entitlement 提供，-1 表示无限，其余值是资源上限。
+	EnrollRelay(ctx context.Context, enrollmentSecret string, relay Relay, token string, maxRelays int) (Relay, error)
 	// DeleteRelayEnrollmentToken removes a token. It is a no-op when unknown.
 	DeleteRelayEnrollmentToken(id string) error
 
@@ -180,6 +183,27 @@ type RelayStore interface {
 	UpdateRelayConfig(id string, update RelayConfigUpdate) (Relay, error)
 	// DeleteRelay removes a relay. It is a no-op when unknown.
 	DeleteRelay(id string) error
+}
+
+// prepareRelayForCreation 共享两种存储实现的创建校验，避免事务与底层写入产生两套默认值。
+func prepareRelayForCreation(relay Relay, token string) (Relay, error) {
+	if relay.ID == "" {
+		return Relay{}, errors.New("state: relay id is required")
+	}
+	if !ValidRelayToken(token) {
+		return Relay{}, errors.New("state: refusing to store a malformed relay token")
+	}
+	if relay.Created.IsZero() {
+		relay.Created = time.Now().UTC()
+	}
+	if relay.DesiredState == "" {
+		relay.DesiredState = RelayStateOnline
+	}
+	relay.Visibility = relayVisibilityOrPrivate(relay.Visibility)
+	if relay.ConfigVersion == 0 {
+		relay.ConfigVersion = 1
+	}
+	return relay, nil
 }
 
 // RelaySecretHash is the storage form of every relay credential. Tokens are

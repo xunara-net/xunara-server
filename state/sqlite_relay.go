@@ -44,17 +44,25 @@ func (s *SQLiteStore) CreateRelayEnrollmentToken(tok RelayEnrollmentToken, secre
 
 // RelayEnrollmentTokenBySecret implements [RelayStore].
 func (s *SQLiteStore) RelayEnrollmentTokenBySecret(secret string) (RelayEnrollmentToken, bool) {
+	record, err := s.LookupRelayEnrollmentToken(context.Background(), secret)
+	return record, err == nil
+}
+
+func (store *SQLiteStore) LookupRelayEnrollmentToken(ctx context.Context, secret string) (RelayEnrollmentToken, error) {
 	if !ValidRelayEnrollmentSecret(secret) {
-		return RelayEnrollmentToken{}, false
+		return RelayEnrollmentToken{}, ErrRelayNotFound
 	}
-	row := s.db.QueryRowContext(context.Background(),
+	row := store.db.QueryRowContext(ctx,
 		`SELECT `+relayEnrollmentColumns+` FROM relay_enrollment_tokens WHERE secret_hash = ?`,
 		RelaySecretHash(secret))
-	tok, err := scanRelayEnrollmentToken(row)
-	if err != nil {
-		return RelayEnrollmentToken{}, false
+	record, err := scanRelayEnrollmentToken(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RelayEnrollmentToken{}, ErrRelayNotFound
 	}
-	return tok, true
+	if err != nil {
+		return RelayEnrollmentToken{}, fmt.Errorf("state: reading relay enrollment credential: %w", err)
+	}
+	return record, nil
 }
 
 // RelayEnrollmentTokenByID implements [RelayStore].
@@ -88,53 +96,78 @@ func (s *SQLiteStore) ListRelayEnrollmentTokens() []RelayEnrollmentToken {
 	return out
 }
 
-// ConsumeRelayEnrollmentToken implements [RelayStore].
-//
-// The read and the write happen in one transaction with an UPDATE that only
-// matches an unused row, so two relays enrolling with the same token at the
-// same time cannot both succeed.
-func (s *SQLiteStore) ConsumeRelayEnrollmentToken(id string, at time.Time) (RelayEnrollmentToken, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	ctx := context.Background()
-	tx, err := s.db.BeginTx(ctx, nil)
+// EnrollRelay 把令牌、配额和身份绑定在一个写事务内；跨连接竞争由 BEGIN IMMEDIATE 串行化。
+func (store *SQLiteStore) EnrollRelay(ctx context.Context, enrollmentSecret string, relay Relay, token string, maxRelays int) (Relay, error) {
+	prepared, err := prepareRelayForCreation(relay, token)
 	if err != nil {
-		return RelayEnrollmentToken{}, fmt.Errorf("state: beginning relay enrollment: %w", err)
+		return Relay{}, err
 	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	if maxRelays < -1 {
+		return Relay{}, fmt.Errorf("state: invalid relay quota")
+	}
+	if !ValidRelayEnrollmentSecret(enrollmentSecret) {
+		return Relay{}, ErrRelayNotFound
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Relay{}, fmt.Errorf("state: beginning relay enrollment: %w", err)
+	}
+	defer transaction.Rollback()
 
-	tok, err := scanRelayEnrollmentToken(tx.QueryRowContext(ctx,
-		`SELECT `+relayEnrollmentColumns+` FROM relay_enrollment_tokens WHERE id = ?`, id))
+	record, err := scanRelayEnrollmentToken(transaction.QueryRowContext(ctx,
+		`SELECT `+relayEnrollmentColumns+` FROM relay_enrollment_tokens WHERE secret_hash = ?`, RelaySecretHash(enrollmentSecret)))
 	if errors.Is(err, sql.ErrNoRows) {
-		return RelayEnrollmentToken{}, ErrRelayNotFound
+		return Relay{}, ErrRelayNotFound
 	}
 	if err != nil {
-		return RelayEnrollmentToken{}, fmt.Errorf("state: reading relay enrollment token %s: %w", id, err)
+		return Relay{}, fmt.Errorf("state: reading relay enrollment credential: %w", err)
 	}
-	if tok.Used() {
-		return RelayEnrollmentToken{}, ErrRelayEnrollmentConsumed
+	if record.Used() {
+		return Relay{}, ErrRelayEnrollmentConsumed
 	}
-	if tok.Expired(at) {
-		return RelayEnrollmentToken{}, ErrRelayEnrollmentExpired
+	now := time.Now().UTC()
+	if record.Expired(now) {
+		return Relay{}, ErrRelayEnrollmentExpired
 	}
-
-	res, err := tx.ExecContext(ctx,
+	var used int
+	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM relays`).Scan(&used); err != nil {
+		return Relay{}, fmt.Errorf("state: reading relay quota usage: %w", err)
+	}
+	if maxRelays != -1 && used >= maxRelays {
+		return Relay{}, ErrRelayLimitReached
+	}
+	var duplicate bool
+	if err := transaction.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM relays WHERE id = ? OR (node_key <> '' AND node_key = ?))`,
+		prepared.ID, prepared.NodeKey).Scan(&duplicate); err != nil {
+		return Relay{}, fmt.Errorf("state: checking relay identity: %w", err)
+	}
+	if duplicate {
+		return Relay{}, ErrRelayAlreadyEnrolled
+	}
+	if err := insertRelay(ctx, transaction, prepared, token); err != nil {
+		return Relay{}, err
+	}
+	// 更新失败、取消请求或提交失败均回滚刚创建的身份，令牌不会成为半完成状态。
+	result, err := transaction.ExecContext(ctx,
 		`UPDATE relay_enrollment_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL`,
-		at.UTC().UnixNano(), id)
+		now.UnixNano(), record.ID)
 	if err != nil {
-		return RelayEnrollmentToken{}, fmt.Errorf("state: consuming relay enrollment token %s: %w", id, err)
+		return Relay{}, fmt.Errorf("state: consuming relay enrollment token: %w", err)
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		// Another transaction consumed it between the read and the update.
-		return RelayEnrollmentToken{}, ErrRelayEnrollmentConsumed
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return Relay{}, fmt.Errorf("state: checking enrollment token consumption: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return RelayEnrollmentToken{}, fmt.Errorf("state: consuming relay enrollment token %s: %w", id, err)
+	if affected != 1 {
+		return Relay{}, ErrRelayEnrollmentConsumed
 	}
-
-	tok.UsedAt = at.UTC()
-	return tok, nil
+	if err := transaction.Commit(); err != nil {
+		return Relay{}, fmt.Errorf("state: committing relay enrollment: %w", err)
+	}
+	return prepared, nil
 }
 
 // DeleteRelayEnrollmentToken implements [RelayStore].
@@ -148,32 +181,28 @@ func (s *SQLiteStore) DeleteRelayEnrollmentToken(id string) error {
 
 // CreateRelay implements [RelayStore].
 func (s *SQLiteStore) CreateRelay(relay Relay, token string) error {
-	if relay.ID == "" {
-		return fmt.Errorf("state: relay id is required")
-	}
-	if !ValidRelayToken(token) {
-		return fmt.Errorf("state: refusing to store a malformed relay token")
-	}
-	if relay.Created.IsZero() {
-		relay.Created = time.Now().UTC()
-	}
-	if relay.DesiredState == "" {
-		relay.DesiredState = RelayStateOnline
-	}
-	if relay.ConfigVersion == 0 {
-		relay.ConfigVersion = 1
+	prepared, err := prepareRelayForCreation(relay, token)
+	if err != nil {
+		return err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if relay.NodeKey != "" {
-		if _, dup := s.relayByNodeKeyLocked(context.Background(), relay.NodeKey); dup {
-			return fmt.Errorf("state: relay node key is already enrolled")
+	if prepared.NodeKey != "" {
+		if _, dup := s.relayByNodeKeyLocked(context.Background(), prepared.NodeKey); dup {
+			return ErrRelayAlreadyEnrolled
 		}
 	}
+	return insertRelay(context.Background(), s.db, prepared, token)
+}
 
-	_, err := s.db.ExecContext(context.Background(), `
+type relaySQLExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func insertRelay(ctx context.Context, executor relaySQLExecutor, relay Relay, token string) error {
+	_, err := executor.ExecContext(ctx, `
 		INSERT INTO relays (`+relayColumns+`, token_hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		relay.ID, relay.Name, relay.HostName, relay.RegionCode, relay.RegionName,

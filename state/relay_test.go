@@ -72,18 +72,18 @@ func TestRelayEnrollmentTokenLifecycle(t *testing.T) {
 			t.Fatalf("%s resolved an unknown secret", name)
 		}
 
-		now := time.Now().UTC()
-		consumed, err := s.ConsumeRelayEnrollmentToken(id, now)
+		_, err = s.EnrollRelay(context.Background(), secret, Relay{ID: "relay-" + id}, mustNewRelayToken(t), -1)
 		if err != nil {
-			t.Fatalf("%s ConsumeRelayEnrollmentToken: %v", name, err)
+			t.Fatalf("%s EnrollRelay: %v", name, err)
 		}
-		if consumed.UsedAt.IsZero() {
+		consumed, exists := s.RelayEnrollmentTokenByID(id)
+		if !exists || consumed.UsedAt.IsZero() {
 			t.Fatalf("%s consumed token has no UsedAt", name)
 		}
-		if _, err := s.ConsumeRelayEnrollmentToken(id, now); !errors.Is(err, ErrRelayEnrollmentConsumed) {
+		if _, err := s.EnrollRelay(context.Background(), secret, Relay{ID: "relay-replay"}, mustNewRelayToken(t), -1); !errors.Is(err, ErrRelayEnrollmentConsumed) {
 			t.Fatalf("%s second consume = %v, want ErrRelayEnrollmentConsumed", name, err)
 		}
-		if _, err := s.ConsumeRelayEnrollmentToken("renr-missing", now); !errors.Is(err, ErrRelayNotFound) {
+		if _, err := s.EnrollRelay(context.Background(), elsewhere, Relay{ID: "relay-missing"}, mustNewRelayToken(t), -1); !errors.Is(err, ErrRelayNotFound) {
 			t.Fatalf("%s unknown consume = %v, want ErrRelayNotFound", name, err)
 		}
 
@@ -109,11 +109,11 @@ func TestRelayEnrollmentTokenExpiry(t *testing.T) {
 		if err := s.CreateRelayEnrollmentToken(tok, secret); err != nil {
 			t.Fatalf("%s CreateRelayEnrollmentToken: %v", name, err)
 		}
-		if _, err := s.ConsumeRelayEnrollmentToken(id, now); !errors.Is(err, ErrRelayEnrollmentExpired) {
+		if _, err := s.EnrollRelay(context.Background(), secret, Relay{ID: "relay-expired"}, mustNewRelayToken(t), -1); !errors.Is(err, ErrRelayEnrollmentExpired) {
 			t.Fatalf("%s consume of an expired token = %v, want ErrRelayEnrollmentExpired", name, err)
 		}
 		// An expired token stays expired: the failure must not consume it.
-		if _, err := s.ConsumeRelayEnrollmentToken(id, now); !errors.Is(err, ErrRelayEnrollmentExpired) {
+		if _, err := s.EnrollRelay(context.Background(), secret, Relay{ID: "relay-expired"}, mustNewRelayToken(t), -1); !errors.Is(err, ErrRelayEnrollmentExpired) {
 			t.Fatalf("%s second consume of an expired token = %v", name, err)
 		}
 	}

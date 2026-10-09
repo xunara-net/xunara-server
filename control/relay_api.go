@@ -114,9 +114,14 @@ func (s *Server) handleRelayEnroll(w http.ResponseWriter, r *http.Request) {
 		writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "enrollment token is missing or malformed")
 		return
 	}
-	record, ok := s.store.RelayEnrollmentTokenBySecret(token)
-	if !ok {
-		writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "enrollment token is unknown")
+	record, err := s.store.LookupRelayEnrollmentToken(r.Context(), token)
+	if err != nil {
+		if errors.Is(err, state.ErrRelayNotFound) {
+			writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "enrollment token is unknown")
+		} else {
+			s.log.Error("reading a relay enrollment credential", "err", err)
+			writeRelayError(w, http.StatusServiceUnavailable, "RELAY_INTERNAL", "the control plane could not complete enrollment")
+		}
 		return
 	}
 
@@ -126,31 +131,6 @@ func (s *Server) handleRelayEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	relay, ok := s.validatedRelayFromRequest(w, req, record)
 	if !ok {
-		return
-	}
-
-	// The token is consumed only after the request validated: a malformed
-	// enrollment must not burn an operator's token.
-	if _, err := s.store.ConsumeRelayEnrollmentToken(record.ID, time.Now().UTC()); err != nil {
-		switch {
-		case errors.Is(err, state.ErrRelayEnrollmentConsumed):
-			writeRelayError(w, http.StatusConflict, "RELAY_ALREADY_ENROLLED", "enrollment token has already been used")
-		case errors.Is(err, state.ErrRelayEnrollmentExpired):
-			writeRelayError(w, http.StatusGone, "RELAY_ENROLLMENT_EXPIRED", "enrollment token has expired")
-		case errors.Is(err, state.ErrRelayNotFound):
-			writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "enrollment token is unknown")
-		default:
-			s.log.Error("consuming a relay enrollment token", "err", err)
-			writeRelayError(w, http.StatusInternalServerError, "RELAY_INTERNAL", "the control plane could not complete enrollment")
-		}
-		return
-	}
-
-	// Relay quota: a commercial rule, enforced here and not by the relay
-	// (spec section 40, 49).
-	if p := s.Plan(); !p.AllowsRelays(len(s.store.ListRelays())) {
-		writeRelayError(w, http.StatusForbidden, "RELAY_LIMIT_REACHED",
-			fmt.Sprintf("the current plan allows %s relays", p.RelayAllowance()))
 		return
 	}
 
@@ -168,9 +148,23 @@ func (s *Server) handleRelayEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	relay.ID = id
 	relay.CreatedBy = "enrollment-token:" + record.ID
-	if err := s.store.CreateRelay(relay, secret); err != nil {
-		s.log.Error("storing an enrolled relay", "err", err)
-		writeRelayError(w, http.StatusInternalServerError, "RELAY_INTERNAL", "the control plane could not complete enrollment")
+	// 套餐给出额度，存储在事务内读取实际用量，拒绝或故障时不消费操作员的令牌。
+	entitlement := s.Plan()
+	if _, err := s.store.EnrollRelay(r.Context(), token, relay, secret, entitlement.MaxRelays); err != nil {
+		switch {
+		case errors.Is(err, state.ErrRelayEnrollmentConsumed), errors.Is(err, state.ErrRelayAlreadyEnrolled):
+			writeRelayError(w, http.StatusConflict, "RELAY_ALREADY_ENROLLED", "enrollment token or relay identity has already been used")
+		case errors.Is(err, state.ErrRelayEnrollmentExpired):
+			writeRelayError(w, http.StatusGone, "RELAY_ENROLLMENT_EXPIRED", "enrollment token has expired")
+		case errors.Is(err, state.ErrRelayNotFound):
+			writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "enrollment token is unknown")
+		case errors.Is(err, state.ErrRelayLimitReached):
+			writeRelayError(w, http.StatusForbidden, "RELAY_LIMIT_REACHED",
+				fmt.Sprintf("the current plan allows %s relays", entitlement.RelayAllowance()))
+		default:
+			s.log.Error("committing relay enrollment", "err", err)
+			writeRelayError(w, http.StatusServiceUnavailable, "RELAY_INTERNAL", "the control plane could not complete enrollment")
+		}
 		return
 	}
 

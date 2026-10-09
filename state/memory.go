@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -451,9 +452,12 @@ func (s *MemoryStore) ListRelayEnrollmentTokens() []RelayEnrollmentToken {
 	return s.relay.ListRelayEnrollmentTokens()
 }
 
-// ConsumeRelayEnrollmentToken implements [RelayStore].
-func (s *MemoryStore) ConsumeRelayEnrollmentToken(id string, at time.Time) (RelayEnrollmentToken, error) {
-	return s.relay.ConsumeRelayEnrollmentToken(id, at)
+func (store *MemoryStore) LookupRelayEnrollmentToken(ctx context.Context, secret string) (RelayEnrollmentToken, error) {
+	return store.relay.LookupRelayEnrollmentToken(ctx, secret)
+}
+
+func (store *MemoryStore) EnrollRelay(ctx context.Context, enrollmentSecret string, relay Relay, token string, maxRelays int) (Relay, error) {
+	return store.relay.EnrollRelay(ctx, enrollmentSecret, relay, token, maxRelays)
 }
 
 // DeleteRelayEnrollmentToken implements [RelayStore].
