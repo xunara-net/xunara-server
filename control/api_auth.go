@@ -286,7 +286,7 @@ func (s *Server) handleAPIAuthLogin(w http.ResponseWriter, r *http.Request) {
 		limit  int
 		window time.Duration
 	}{
-		{"login-ip:" + clientIP(r), loginAddressLimit, loginAddressWindow},
+		{"login-ip:" + s.clientIP(r), loginAddressLimit, loginAddressWindow},
 		{"login-name:" + strings.ToLower(login), loginNameLimit, loginNameWindow},
 	} {
 		allowed, retryAfter, err := s.store.AllowRate(limit.scope, limit.limit, limit.window, now)
@@ -364,7 +364,7 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	allowed, retryAfter, err := s.store.AllowRate("signup:"+clientIP(r), signupRateLimit, signupRateWindow, now)
+	allowed, retryAfter, err := s.store.AllowRate("signup:"+s.clientIP(r), signupRateLimit, signupRateWindow, now)
 	if err != nil {
 		s.log.Error("rate limiting registration", "err", err)
 	}

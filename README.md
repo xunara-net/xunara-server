@@ -51,6 +51,11 @@ go build ./cmd/xunara-agent     # 节点 Agent
 首次启动会写出一次性初始化令牌（`<state-dir>/setup-token`），浏览器打开
 `/setup` 完成管理员初始化。
 
+控制面经反向代理（nginx）暴露时加 `-trusted-proxy`：限流改为按
+`X-Forwarded-For` 的最后一跳（代理追加的真实客户端地址）计数。不加时所有请求
+都记在代理地址上，一个客户端的失败尝试会拖住所有人；直接对公网暴露控制面时
+必须保持默认关闭。
+
 注册策略由 `-registration` 决定：`closed`（只允许管理员建号）、`invite`（邀请码，
 默认）或 `open`（任何人可注册；单租户部署注册为该租户成员，受套餐成员配额约束）。
 

@@ -305,7 +305,7 @@ func TestLoadOrgConfigReadsSelfService(t *testing.T) {
 		}
 	}`)
 
-	sites, selfService, err := loadOrgConfig(path, slog.Default())
+	sites, selfService, err := loadOrgConfig(path, slog.Default(), false)
 	if err != nil {
 		t.Fatalf("loadOrgConfig: %v", err)
 	}

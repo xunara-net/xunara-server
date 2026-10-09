@@ -154,7 +154,7 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		limit  int
 		window time.Duration
 	}{
-		{"login-ip:" + clientIP(r), loginAddressLimit, loginAddressWindow},
+		{"login-ip:" + s.clientIP(r), loginAddressLimit, loginAddressWindow},
 		{"login-name:" + strings.ToLower(login), loginNameLimit, loginNameWindow},
 	} {
 		allowed, retryAfter, err := s.store.AllowRate(limit.scope, limit.limit, limit.window, now)

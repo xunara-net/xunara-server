@@ -50,6 +50,8 @@ func main() {
 			"comma-separated OIDC scopes (default openid,profile,email)")
 		allowLocalLogin = flag.Bool("allow-local-login", false,
 			"offer the built-in local login even when OIDC is configured")
+		trustedProxy = flag.Bool("trusted-proxy", false,
+			"trust the reverse proxy in front of this service (nginx in the shipped units) and take the client address from the last X-Forwarded-For hop for rate limiting; keep it off when the control plane is reachable directly")
 		registration = flag.String("registration", string(control.DefaultRegistrationMode),
 			"self-service sign-up policy: closed (administrators only), invite (single-use invitation, default) or open (anyone, subject to the plan's member quota)")
 		passkey = flag.Bool("passkey", true,
@@ -133,6 +135,7 @@ func main() {
 			grpcListen:       *grpcListen,
 			platformTokenEnv: *platformTokenEnv,
 			platformStateDir: *platformStateDir,
+			trustedProxy:     *trustedProxy,
 			consoleTimezone:  *consoleTimezone,
 			plansFile:        *plansFile,
 			networkPool:      *networkPool,
@@ -254,6 +257,7 @@ func main() {
 		OIDCProviders:       oidcProviders,
 		AllowLocalLogin:     *allowLocalLogin,
 		Registration:        registrationMode,
+		TrustedProxy:        *trustedProxy,
 		Passkeys:            passkeyCfg,
 		CertDomains:         certDomains,
 		DNSProvider:         dnsProvider,
@@ -379,6 +383,7 @@ type routerOptions struct {
 	grpcListen       string
 	platformTokenEnv string
 	platformStateDir string
+	trustedProxy     bool
 	consoleTimezone  string
 	plansFile        string
 	networkPool      string
@@ -434,7 +439,7 @@ func loadPlanRegistry(ctx context.Context, dbPath, plansFile, networkPool string
 func runRouter(opts routerOptions, logger *slog.Logger) {
 	path, listen, grpcListen, platformTokenEnv, platformStateDir, consoleTimezone, plansFile, networkPool :=
 		opts.path, opts.listen, opts.grpcListen, opts.platformTokenEnv, opts.platformStateDir, opts.consoleTimezone, opts.plansFile, opts.networkPool
-	sites, selfService, err := loadOrgConfig(path, logger)
+	sites, selfService, err := loadOrgConfig(path, logger, opts.trustedProxy)
 	if err != nil {
 		logger.Error("loading the organization table", "err", err)
 		os.Exit(1)
@@ -478,6 +483,7 @@ func runRouter(opts routerOptions, logger *slog.Logger) {
 					Domain:          org.Domain,
 					StateDir:        stateDir,
 					ConsoleTimezone: consoleTimezone,
+					TrustedProxy:    opts.trustedProxy,
 					Logger:          logger,
 				})
 			},

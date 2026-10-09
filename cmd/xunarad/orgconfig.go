@@ -114,13 +114,15 @@ type orgOIDCConfig struct {
 // server per organization. Any partly built server is closed when a later one
 // fails, so a broken row cannot leak resources.
 func loadOrgSites(path string, logger *slog.Logger) ([]control.OrgSite, error) {
-	sites, _, err := loadOrgConfig(path, logger)
+	sites, _, err := loadOrgConfig(path, logger, false)
 	return sites, err
 }
 
 // loadOrgConfig parses the organization table and returns the deployment-wide
-// settings that sit next to it.
-func loadOrgConfig(path string, logger *slog.Logger) ([]control.OrgSite, *control.SelfServiceConfig, error) {
+// settings that sit next to it. trustedProxy is a process-level decision
+// (-trusted-proxy): every organization in this deployment sits behind the
+// same reverse proxy, so it is passed in rather than repeated per row.
+func loadOrgConfig(path string, logger *slog.Logger, trustedProxy bool) ([]control.OrgSite, *control.SelfServiceConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
@@ -172,6 +174,7 @@ func loadOrgConfig(path string, logger *slog.Logger) ([]control.OrgSite, *contro
 			closeAll()
 			return nil, nil, fmt.Errorf("%s: organizations[%d] (%s): %w", path, i, org.ID, err)
 		}
+		cfg.TrustedProxy = trustedProxy
 		server, err := control.New(cfg)
 		if err != nil {
 			closeAll()

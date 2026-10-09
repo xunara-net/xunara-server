@@ -116,7 +116,7 @@ func (r *Router) handleAdminLoginSubmit(w http.ResponseWriter, req *http.Request
 	}
 	token := strings.TrimSpace(req.PostFormValue("token"))
 	if !r.checkPlatformToken(token) {
-		r.log.Warn("platform console sign-in rejected", "remote", clientIP(req))
+		r.log.Warn("platform console sign-in rejected", "remote", remoteIP(req))
 		r.renderAdmin(w, req, adminLoginTemplate, adminPageData{
 			Title: "Platform sign-in",
 			Lede:  "This console belongs to the deployment operator. Tenant accounts cannot sign in here.",

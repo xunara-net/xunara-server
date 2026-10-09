@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,11 +90,32 @@ func (s *Server) checkFormToken(purpose, token string, now time.Time) bool {
 	return hmac.Equal(mac.Sum(nil)[:16], sum)
 }
 
-// clientIP is the address a request came from. It deliberately ignores
-// X-Forwarded-For: rate limits must key on something an anonymous caller
-// cannot choose, and a deployment behind a proxy would otherwise let anyone
-// rotate the header to bypass the limit.
-func clientIP(r *http.Request) string {
+// clientIP is the address a request came from. X-Forwarded-For is ignored
+// unless the deployment declares itself behind a trusted reverse proxy
+// (Config.TrustedProxy): rate limits must key on something an anonymous
+// caller cannot choose, and honoring the header by default would let anyone
+// rotate it to bypass the limit.
+//
+// With TrustedProxy set the rightmost hop is used — the one the deployment's
+// own proxy appended. The caller's leftmost entries are attacker-supplied and
+// are deliberately not consulted: nginx's $proxy_add_x_forwarded_for appends
+// the real peer, so the last value is the one this deployment can vouch for.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.trustedProxy {
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			parts := strings.Split(forwarded, ",")
+			if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+				if _, err := netip.ParseAddr(last); err == nil {
+					return last
+				}
+			}
+		}
+	}
+	return remoteIP(r)
+}
+
+// remoteIP is the peer address of the connection itself, headers ignored.
+func remoteIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

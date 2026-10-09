@@ -215,7 +215,7 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 	now := time.Now()
 	front := org.site.Server
 	if allowed, retryAfter, err := front.store.AllowRate(
-		"self-signup:"+clientIP(req), selfServiceRateLimit, selfServiceRateWindow, now); err != nil {
+		"self-signup:"+front.clientIP(req), selfServiceRateLimit, selfServiceRateWindow, now); err != nil {
 		front.log.Error("rate limiting self-service sign-up", "err", err)
 	} else if !allowed {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))

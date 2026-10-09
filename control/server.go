@@ -137,6 +137,13 @@ type Config struct {
 	// Empty means [DefaultRegistrationMode]: self-service sign-up needs an
 	// invitation from an administrator.
 	Registration RegistrationMode
+	// TrustedProxy declares that every request arrives through a reverse
+	// proxy this deployment controls (nginx in the shipped units). Rate
+	// limits then key on the rightmost X-Forwarded-For hop instead of the
+	// proxy's own address, which would otherwise put every caller in one
+	// bucket (forms.go). Keep it off when the control plane is reachable
+	// directly: an anonymous caller can choose the header.
+	TrustedProxy bool
 	// PlanSource reports the commercial plan of a tenant, by tenant ID, when
 	// the deployment sells plans (spec section 54). Nil means "no plans":
 	// the server runs on plan.UnlimitedPlan and every quota gate is a no-op.
@@ -243,6 +250,8 @@ type Server struct {
 	// sign-up entry point reads it so the HTML page and the JSON API cannot
 	// disagree.
 	registration RegistrationMode
+	// trustedProxy reads the client address from X-Forwarded-For (Config).
+	trustedProxy bool
 
 	// approveMu serialises device approvals so an approval is applied exactly
 	// once even under concurrent requests.
@@ -497,6 +506,7 @@ func New(cfg Config) (*Server, error) {
 		authTTL:           identity.DefaultAuthTransactionTTL,
 		localLogin:        localLogin,
 		registration:      registration,
+		trustedProxy:      cfg.TrustedProxy,
 		formKey:           formKey,
 		resolvers:         resolvers,
 		dnsRoutes:         dnsRoutes,

@@ -293,7 +293,7 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, status, title, message)
 	}
 
-	allowed, retryAfter, err := s.store.AllowRate("signup:"+clientIP(r), signupRateLimit, signupRateWindow, now)
+	allowed, retryAfter, err := s.store.AllowRate("signup:"+s.clientIP(r), signupRateLimit, signupRateWindow, now)
 	if err != nil {
 		s.log.Error("rate limiting registration", "err", err)
 	}

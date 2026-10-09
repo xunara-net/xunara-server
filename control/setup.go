@@ -136,7 +136,7 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, status, title, message)
 	}
 
-	allowed, retryAfter, err := s.store.AllowRate("setup:"+clientIP(r), setupRateLimit, setupRateWindow, time.Now())
+	allowed, retryAfter, err := s.store.AllowRate("setup:"+s.clientIP(r), setupRateLimit, setupRateWindow, time.Now())
 	if err != nil {
 		s.log.Error("rate limiting setup", "err", err)
 	}
