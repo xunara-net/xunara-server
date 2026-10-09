@@ -197,6 +197,9 @@ func (s *Server) apiRouter() http.Handler {
 	r.Get("/account", s.handleAPIAccount)
 	r.Patch("/account", s.handleAPIUpdateAccount)
 	r.Post("/account/password", s.handleAPIChangePassword)
+	r.Get("/account/sessions", s.handleAPIAccountSessions)
+	r.Post("/account/sessions/revoke", s.handleAPIRevokeAccountSessions)
+	r.Delete("/account/sessions/{id}", s.handleAPIRevokeAccountSession)
 
 	r.Get("/machines", s.handleAPIMachines)
 	r.Get("/machines/{ref}", s.handleAPIMachine)

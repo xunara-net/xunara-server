@@ -125,6 +125,29 @@ go run ./cmd/xunarad \
 普通成员与 admin 使用自助账户接口管理自己的资料。邮箱验证、密码找回与
 2FA 不包含在本次实现内；正式使用必须部署 HTTPS。
 
+### 控制台登录管理
+
+安全中心使用独立人类账户接口（[ADR-0010](docs/adr/ADR-0010-account-session-revocation.md)），
+普通成员也可管理自己的登录，不受套餐 API 权限限制：
+
+- `GET /api/v1/account/sessions` 返回 `sessions`、`current_session_id`、
+  `generated_at` 和 `csrf_token`。会话包含 `id`、`auth_method`、`created_at`、
+  `expires_at`、`status`（`active` / `expired` / `revoked`），已撤销记录另含
+  `revoked_at`、`revoked_reason`；不返回令牌、哈希或未采集的来源信息。
+- `DELETE /api/v1/account/sessions/{id}` 撤销自己的单个登录；未知或其他
+  用户的目标统一返回 404。已失效的本用户目标返回零次变更，不改写历史。
+- `POST /api/v1/account/sessions/revoke` 仅接受 `{"mode":"others"}` 或
+  `{"mode":"all"}`，JSON 上限 8 KiB；“其他”保留发起会话。
+- 写接口要求 `X-CSRF-Token`，所有接口仅接受本租户人类 Session，拒绝 API Key。
+  写入前事务内重新验证发起会话；撤销与 `session.revoked` 审计原子提交。
+  成功返回 `revoked_sessions` 与 `current_revoked`；当前登录被撤销时清除 Cookie。
+- 只撤销操作时仍活动的登录，不修改密码，不阻止之后重新登录。
+  机器连接、API Key、身份提供方登录、其他用户与租户均不受影响。
+  历史列表只含仍保留的会话记录，过期清理后不再展示，不是完整登录历史。
+
+旧 `/api/v1/sessions` 与平台管理员强制下线接口保留兼容。读写存储故障返回
+明确错误，不把失败显示为零活动登录或退出成功。
+
 ## 测试
 
 ```bash
