@@ -33,6 +33,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.startExternalLogin(w, r, providerID, returnTo)
 		return
 	}
+	requiresSetup, ok := s.setupStateForPage(w, r)
+	if !ok {
+		return
+	}
 	// Someone who is already signed in does not need the form again.
 	if _, ok := s.currentSession(r); ok {
 		http.Redirect(w, r, returnTo, http.StatusFound)
@@ -56,7 +60,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"Providers":  views,
 		"Passkey":    s.passkeys != nil,
 		"LocalLogin": s.localLogin,
-		"Setup":      s.setupRequired(),
+		"Setup":      requiresSetup,
 		"FormToken":  s.newFormToken(formPurposeLogin),
 		"ReturnTo":   returnTo,
 	}
@@ -139,8 +143,7 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	requiresSetup, err := s.localSetupRequired(r.Context())
 	if err != nil {
-		w.Header().Set("Retry-After", "5")
-		s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+		s.renderAuthenticationUnavailable(w, r)
 		return
 	}
 	if requiresSetup {

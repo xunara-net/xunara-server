@@ -285,6 +285,23 @@ CREATE TABLE IF NOT EXISTS registration_invites (
 );
 CREATE INDEX IF NOT EXISTS idx_registration_invites_created ON registration_invites(created_at);
 `,
+	// v13：完成事实独立于可删除的密码，升级只回填明确的凭据或完成审计。
+	`
+CREATE TABLE IF NOT EXISTS local_bootstrap_state (
+	id           INTEGER PRIMARY KEY CHECK (id = 1),
+	completed_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO local_bootstrap_state (id, completed_at)
+SELECT 1, COALESCE(
+	(SELECT MIN(created_at) FROM local_credentials),
+	(SELECT MIN(ts) FROM audit_events WHERE action = 'admin.bootstrap'
+		OR (action = 'user.registered' AND target = 'user:1')),
+	0
+)
+WHERE EXISTS (SELECT 1 FROM local_credentials)
+	OR EXISTS (SELECT 1 FROM audit_events WHERE action = 'admin.bootstrap'
+		OR (action = 'user.registered' AND target = 'user:1'));
+`,
 }
 
 // SQLiteStore is a durable [Store] sharing the control plane's database.

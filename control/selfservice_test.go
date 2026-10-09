@@ -33,6 +33,7 @@ type selfServiceTestOptions struct {
 	cfg           *SelfServiceConfig
 	frontDomains  []string
 	sharedDERPMap *tailcfg.DERPMap
+	prepareTenant func(*Server) error
 }
 
 func selfServiceRouterWith(t *testing.T, options selfServiceTestOptions, prepare ...func(*PlanRegistry)) (*Router, *PlanRegistry) {
@@ -51,7 +52,17 @@ func selfServiceRouterWith(t *testing.T, options selfServiceTestOptions, prepare
 		Path:      dir + "/platform.db",
 		StateRoot: dir + "/orgs",
 		NewServer: func(org ManagedOrg, stateDir string) (*Server, error) {
-			return New(Config{ServerURL: org.ServerURL, StateDir: stateDir, DERPMap: options.sharedDERPMap.Clone()})
+			server, err := New(Config{ServerURL: org.ServerURL, StateDir: stateDir, DERPMap: options.sharedDERPMap.Clone()})
+			if err != nil {
+				return nil, err
+			}
+			if options.prepareTenant != nil {
+				if err := options.prepareTenant(server); err != nil {
+					server.Close()
+					return nil, err
+				}
+			}
+			return server, nil
 		},
 	})
 	if err != nil {

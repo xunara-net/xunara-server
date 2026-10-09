@@ -34,9 +34,8 @@ type LocalCredentialStore interface {
 	LookupLocalCredential(ctx context.Context, userID tailcfg.UserID) (LocalCredential, error)
 	// DeleteLocalCredential removes it; a missing credential is not an error.
 	DeleteLocalCredential(userID tailcfg.UserID) error
-	// CountLocalCredentials reports how many users can sign in with a
-	// password, which is how first-run setup decides whether an
-	// administrator already exists.
+	// CountLocalCredentials 保留旧数量读取适配，认证及初始化不得使用其丢弃错误的结果。
+	// 初始化状态由 BootstrapStore 的持久完成事实和类型化查询决定。
 	CountLocalCredentials() int
 	// LocalCredentialCount 保留错误，避免数据库不可读被解释为部署尚未初始化。
 	LocalCredentialCount(ctx context.Context) (int, error)

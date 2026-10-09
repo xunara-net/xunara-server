@@ -26,8 +26,7 @@ func (server *Server) localSetupRequired(ctx context.Context) (bool, error) {
 	if !server.localLogin {
 		return false, nil
 	}
-	count, err := server.identity.LocalCredentialCount(ctx)
-	return count == 0, err
+	return server.identity.LocalAccountSetupRequired(ctx)
 }
 
 // signInWithPassword 是 JSON 与旧 HTML 共用的业务路径，适配层只处理载荷、CSRF 与响应。

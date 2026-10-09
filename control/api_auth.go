@@ -192,10 +192,19 @@ func (s *Server) apiSessionPayload(user identity.User, session identity.Session)
 // 200 with authenticated=false on purpose: the console uses it to decide
 // between the sign-in page and the dashboard, and a 401 in the devtools
 // console on every anonymous boot is noise, not security.
-func (s *Server) writeAPIAnonymousSession(w http.ResponseWriter) {
+func (s *Server) writeAPIAnonymousSession(w http.ResponseWriter, r *http.Request, clearCookie bool) {
+	required, err := s.localSetupRequired(r.Context())
+	if err != nil {
+		writeAuthenticationError(w, err)
+		return
+	}
+	// 先确认完整快照可读取，再处理已删除用户的 Cookie，故障时保留原登录凭据。
+	if clearCookie {
+		s.clearSessionCookie(w)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated":  false,
-		"setup_required": s.setupRequired(),
+		"setup_required": required,
 		"local_login":    s.localLogin,
 		"registration":   s.registration.String(),
 		"capabilities":   s.apiCapabilities(),
@@ -207,7 +216,7 @@ func (s *Server) handleAPIAuthSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	session, _, err := s.resolveCookieSession(r)
 	if errors.Is(err, identity.ErrSessionNotFound) {
-		s.writeAPIAnonymousSession(w)
+		s.writeAPIAnonymousSession(w, r, false)
 		return
 	}
 	if err != nil {
@@ -217,8 +226,7 @@ func (s *Server) handleAPIAuthSession(w http.ResponseWriter, r *http.Request) {
 	user, err := s.identity.LookupUser(r.Context(), session.UserID)
 	if errors.Is(err, identity.ErrUserNotFound) {
 		// A session whose user is gone is not a session.
-		s.clearSessionCookie(w)
-		s.writeAPIAnonymousSession(w)
+		s.writeAPIAnonymousSession(w, r, true)
 		return
 	}
 	if err != nil {
@@ -232,6 +240,12 @@ func (s *Server) handleAPIAuthSession(w http.ResponseWriter, r *http.Request) {
 // methods this deployment offers, so the console renders the right buttons
 // without hardcoding the deployment's identity configuration.
 func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	required, err := s.localSetupRequired(r.Context())
+	if err != nil {
+		writeAuthenticationError(w, err)
+		return
+	}
 	views := make([]map[string]any, 0, len(s.providers.IDs()))
 	for _, id := range s.providers.IDs() {
 		if id == identity.LocalProviderID {
@@ -246,7 +260,7 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 	payload := map[string]any{
 		"providers":      views,
 		"local_login":    s.localLogin,
-		"setup_required": s.setupRequired(),
+		"setup_required": required,
 		"passkeys":       s.passkeys != nil,
 		"registration":   s.registration.String(),
 	}
@@ -343,7 +357,12 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusForbidden, "registration is disabled on this server")
 		return
 	}
-	if s.setupRequired() {
+	required, err := s.localSetupRequired(r.Context())
+	if err != nil {
+		writeAuthenticationError(w, err)
+		return
+	}
+	if required {
 		writeAPIError(w, http.StatusConflict, "SETUP_REQUIRED: the deployment has not been initialized")
 		return
 	}
@@ -431,12 +450,18 @@ func (s *Server) handleAPIPlan(w http.ResponseWriter, r *http.Request) {
 // a client asks what the server supports before it has credentials, exactly
 // like it fetches /key.
 func (s *Server) handleAPICapabilities(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	required, err := s.localSetupRequired(r.Context())
+	if err != nil {
+		writeAuthenticationError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":                       Version,
 		"protocol":                      "ts2021",
 		"capabilities":                  s.apiCapabilities(),
 		"local_login":                   s.localLogin,
-		"setup_required":                s.setupRequired(),
+		"setup_required":                required,
 		"registration":                  s.registration.String(),
 		"min_client_capability_version": uint64(MinSupportedCapabilityVersion),
 		"server_capability_version":     uint64(tailcfg.CurrentCapabilityVersion),

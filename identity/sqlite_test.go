@@ -330,15 +330,7 @@ func TestMigrationPromotesExistingUsersToOwner(t *testing.T) {
 	db.SetMaxOpenConns(1)
 
 	// A v1 database: the users table without a role column.
-	if _, err := db.ExecContext(ctx, `
-CREATE TABLE users (
-	id           INTEGER PRIMARY KEY AUTOINCREMENT,
-	login_name   TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-	display_name TEXT    NOT NULL DEFAULT '',
-	email        TEXT    NOT NULL DEFAULT '',
-	created_at   INTEGER NOT NULL,
-	updated_at   INTEGER NOT NULL
-);
+	if _, err := db.ExecContext(ctx, identityMigrations[0]+`
 CREATE TABLE schema_migrations (module TEXT NOT NULL, version INTEGER NOT NULL, PRIMARY KEY (module));
 INSERT INTO schema_migrations (module, version) VALUES ('identity', 1);
 INSERT INTO users (login_name, display_name, email, created_at, updated_at)

@@ -199,6 +199,7 @@ type selfServiceRequest struct {
 // handleSelfServiceSignup implements POST /api/self-service/v1/signup: one
 // account, one new organization, one owner.
 func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	cfg := r.selfService.Load()
 	org := r.orgForHost(req.Host)
 	if org == nil {
@@ -213,12 +214,20 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		org.handler.ServeHTTP(w, req)
 		return
 	}
+	if err := req.Context().Err(); err != nil {
+		w.Header().Set("Retry-After", "5")
+		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: try again later")
+		return
+	}
 
 	now := time.Now()
 	front := org.site.Server
 	if allowed, retryAfter, err := front.store.AllowRate(
 		"self-signup:"+front.clientIP(req), selfServiceRateLimit, selfServiceRateWindow, now); err != nil {
 		front.log.Error("rate limiting self-service sign-up", "err", err)
+		w.Header().Set("Retry-After", "5")
+		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: try again later")
+		return
 	} else if !allowed {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
 		writeAPIError(w, http.StatusTooManyRequests,
@@ -278,8 +287,15 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		// The request context is already gone on the failure paths that
 		// matter (timeouts, client disconnects), so the cleanup must not
 		// depend on it.
-		if _, err := r.DeleteManagedOrg(context.WithoutCancel(ctx), orgID); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if _, err := r.DeleteManagedOrg(cleanupCtx, orgID); err != nil {
 			r.log.Error("rolling back a self-service organization failed", "organization", orgID, "err", err)
+			return
+		}
+		// 只有组织成功退出后才能释放分配，不能给仍存活的租户回收网段。
+		if err := r.cfg.Plans.Delete(cleanupCtx, orgID); err != nil {
+			r.log.Error("releasing a self-service allocation failed", "organization", orgID, "err", err)
 		}
 	}
 
@@ -323,29 +339,18 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	user, err := srv.claimLocalAccount(login, display, email, identity.RoleOwner, body.Password)
+	user, session, token, err := srv.claimLocalAccount(ctx, identity.ClaimTenantOwner, login, display, email, body.Password)
 	if err != nil {
 		rollback(err)
-		writeAPIError(w, http.StatusInternalServerError, "the tenant's owner account could not be created")
+		w.Header().Set("Retry-After", "5")
+		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: the tenant's owner could not be initialized; try again later")
 		return
 	}
-
-	session, token, err := srv.identity.CreateSession(identity.NewSessionOptions{
-		UserID:     user.ID,
-		AuthMethod: identity.LocalProviderID,
-		TTL:        srv.sessionTTL,
-	})
-	if err != nil {
-		rollback(err)
-		writeAPIError(w, http.StatusInternalServerError, "the tenant was created but could not be signed in")
-		return
+	if err := srv.clearSetupToken(); err != nil {
+		srv.log.Warn("clearing initialized tenant setup token", "err", err)
 	}
 
-	actor := fmt.Sprintf("user:%d", user.ID)
-	srv.audit("system", identity.AuditUserRegistered, fmt.Sprintf("user:%d", user.ID),
-		"tenant owner created by self-service sign-up")
-	srv.audit(actor, identity.AuditLoginSucceeded, "provider:"+identity.LocalProviderID, "authenticated "+user.LoginName)
-	srv.audit(actor, identity.AuditSessionCreated, "session:"+session.ID, "auth method "+identity.LocalProviderID)
+	// 租户内 owner、会话及成功审计已经一起提交；入口站事件仍是跨库记录。
 	front.audit("system", identity.AuditUserRegistered, "org:"+orgID,
 		"self-service organization created for "+login)
 

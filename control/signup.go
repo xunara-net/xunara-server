@@ -35,7 +35,11 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 			"This deployment creates accounts through an administrator.")
 		return
 	}
-	if s.setupRequired() {
+	required, ok := s.setupStateForPage(w, r)
+	if !ok {
+		return
+	}
+	if required {
 		http.Redirect(w, r, "/setup", http.StatusFound)
 		return
 	}
@@ -44,6 +48,7 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 		"Invite":         strings.TrimSpace(r.URL.Query().Get("invite")),
 		"InviteRequired": s.registration.RequiresInvite(),
 		"FormToken":      s.newFormToken(formPurposeSignup),
+		"Setup":          false,
 	})
 }
 
@@ -178,7 +183,11 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 			"This server creates accounts through an identity provider.")
 		return
 	}
-	if s.setupRequired() {
+	required, ok := s.setupStateForPage(w, r)
+	if !ok {
+		return
+	}
+	if required {
 		http.Redirect(w, r, "/setup", http.StatusFound)
 		return
 	}

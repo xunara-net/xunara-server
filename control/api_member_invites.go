@@ -19,8 +19,12 @@ type memberInviteRequest struct {
 	TTLHours int    `json:"ttl_hours"`
 }
 
-func (server *Server) memberInvitationsEnabled() bool {
-	return server.localLogin && server.registration == RegistrationInvite && server.selfServiceInfo() == nil && !server.setupRequired()
+func (server *Server) memberInvitationsEnabled(ctx context.Context) (bool, error) {
+	if !server.localLogin || server.registration != RegistrationInvite || server.selfServiceInfo() != nil {
+		return false, nil
+	}
+	required, err := server.localSetupRequired(ctx)
+	return !required, err
 }
 
 func (server *Server) requireInviteOwner(writer http.ResponseWriter, request *http.Request, write bool) (apiPrincipal, bool) {
@@ -53,6 +57,11 @@ func (server *Server) handleAPIMemberInvites(writer http.ResponseWriter, request
 	if _, ok := server.requireInviteOwner(writer, request, false); !ok {
 		return
 	}
+	enabled, err := server.memberInvitationsEnabled(request.Context())
+	if err != nil {
+		writeAuthenticationError(writer, err)
+		return
+	}
 	invites, err := server.identity.ListRegistrationInvitesContext(request.Context())
 	if err != nil {
 		server.log.Error("listing member invitations", "err", err)
@@ -65,14 +74,18 @@ func (server *Server) handleAPIMemberInvites(writer http.ResponseWriter, request
 		items = append(items, inviteView(invite, now))
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"items": items, "enabled": server.memberInvitationsEnabled(),
+		"items": items, "enabled": enabled,
 		"registration_url": "/register", "csrf_token": csrfTokenFor(server.accountSessionToken(request)),
 	})
 }
 
 // createMemberInvitation 同时供正式 JSON 与旧表单使用，不能保留两套准入和角色规则。
 func (server *Server) createMemberInvitation(ctx context.Context, session identity.Session, body memberInviteRequest) (identity.RegistrationInvite, string, error) {
-	if !server.memberInvitationsEnabled() {
+	enabled, err := server.memberInvitationsEnabled(ctx)
+	if err != nil {
+		return identity.RegistrationInvite{}, "", memberInvitationError(err)
+	}
+	if !enabled {
 		return identity.RegistrationInvite{}, "", NewHTTPError(http.StatusForbidden,
 			"INVITATIONS_DISABLED: member invitations require invitation registration on this tenant", nil)
 	}
@@ -130,6 +143,7 @@ func (server *Server) writeMemberInvitationError(writer http.ResponseWriter, err
 	if errors.As(err, &response) {
 		if response.Code >= 500 {
 			server.log.Error("member invitation failed", "err", err)
+			writer.Header().Set("Retry-After", "5")
 		}
 		writeAPIError(writer, response.Code, response.Msg)
 		return

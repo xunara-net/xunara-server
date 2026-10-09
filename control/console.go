@@ -454,7 +454,9 @@ func (s *Server) handleConsoleUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.consoleUsersPageData(data)
+	if !s.consoleUsersPageData(w, r, data) {
+		return
+	}
 	s.renderConsole(w, consoleUsersTemplate, data)
 }
 
@@ -530,7 +532,7 @@ func (s *Server) handleConsoleUpdateUser(w http.ResponseWriter, r *http.Request)
 		data["Notice"] = "User updated."
 	}
 
-	s.handleConsoleUsersNotice(w, data)
+	s.handleConsoleUsersNotice(w, r, data)
 }
 
 // consoleInvite is a registration invitation as shown on the console. The
@@ -575,7 +577,12 @@ func (s *Server) consoleInviteViews() []consoleInvite {
 
 // consoleUsersPageData fills the user list page: the accounts and the
 // invitations that can still create one.
-func (s *Server) consoleUsersPageData(data map[string]any) {
+func (s *Server) consoleUsersPageData(w http.ResponseWriter, r *http.Request, data map[string]any) bool {
+	enabled, err := s.memberInvitationsEnabled(r.Context())
+	if err != nil {
+		s.renderAuthenticationUnavailable(w, r)
+		return false
+	}
 	users := s.identity.ListUsers()
 	views := make([]apiUser, 0, len(users))
 	for _, u := range users {
@@ -585,7 +592,8 @@ func (s *Server) consoleUsersPageData(data map[string]any) {
 	if owner, _ := data["IsOwner"].(bool); owner {
 		data["Invites"] = s.consoleInviteViews()
 	}
-	data["InvitationsEnabled"] = s.memberInvitationsEnabled()
+	data["InvitationsEnabled"] = enabled
+	return true
 }
 
 // 旧表单保留书签兼容，但邀请规则、owner 复核和事务审计复用正式 API 的实现。
@@ -611,7 +619,9 @@ func (s *Server) handleConsoleCreateInvite(w http.ResponseWriter, r *http.Reques
 	}
 	data["Notice"] = "Invitation created."
 	data["NewInviteCode"] = token
-	s.consoleUsersPageData(data)
+	if !s.consoleUsersPageData(w, r, data) {
+		return
+	}
 	s.renderConsole(w, consoleUsersTemplate, data)
 }
 
@@ -631,13 +641,17 @@ func (s *Server) handleConsoleRevokeInvite(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	data["Notice"] = "Invitation revoked."
-	s.consoleUsersPageData(data)
+	if !s.consoleUsersPageData(w, r, data) {
+		return
+	}
 	s.renderConsole(w, consoleUsersTemplate, data)
 }
 
 // handleConsoleUsersNotice re-renders the user list after an update.
-func (s *Server) handleConsoleUsersNotice(w http.ResponseWriter, data map[string]any) {
-	s.consoleUsersPageData(data)
+func (s *Server) handleConsoleUsersNotice(w http.ResponseWriter, r *http.Request, data map[string]any) {
+	if !s.consoleUsersPageData(w, r, data) {
+		return
+	}
 	s.renderConsole(w, consoleUsersTemplate, data)
 }
 

@@ -153,7 +153,11 @@ func (s *Server) renderPublicPage(w http.ResponseWriter, r *http.Request, tmpl *
 		}
 	}
 	if _, ok := data["Setup"]; !ok {
-		data["Setup"] = s.setupRequired()
+		required, ok := s.setupStateForPage(w, r)
+		if !ok {
+			return
+		}
+		data["Setup"] = required
 	}
 	s.renderPage(w, r, tmpl, data)
 }

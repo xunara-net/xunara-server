@@ -28,6 +28,11 @@ func newUnconfiguredServer(t *testing.T) *Server {
 	return s
 }
 
+func (server *Server) readSetupToken() string {
+	token, _ := server.loadSetupToken()
+	return token
+}
+
 // getHTML performs a GET that asks for HTML, the way a browser does.
 func getHTML(t *testing.T, client *http.Client, rawURL string, cookies ...*http.Cookie) *http.Response {
 	t.Helper()
@@ -178,7 +183,7 @@ func TestSetupCreatesTheAdministrator(t *testing.T) {
 	if resp := postForm(t, client, hs.URL+"/setup", wrong, nil); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("wrong setup token status = %d, want 403", resp.StatusCode)
 	}
-	if !s.setupRequired() {
+	if required, err := s.localSetupRequired(t.Context()); err != nil || !required {
 		t.Fatal("a rejected setup finished the deployment")
 	}
 
@@ -217,7 +222,7 @@ func TestSetupCreatesTheAdministrator(t *testing.T) {
 	if _, ok := s.Identity().GetLocalCredential(user.ID); !ok {
 		t.Error("setup did not store the password")
 	}
-	if s.setupRequired() {
+	if required, err := s.localSetupRequired(t.Context()); err != nil || required {
 		t.Error("setup is still required after setup")
 	}
 	if token := s.readSetupToken(); token != "" {

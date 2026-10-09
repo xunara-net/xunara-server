@@ -1,11 +1,10 @@
 package control
 
 import (
-	"errors"
+	"context"
 	"fmt"
 
 	"github.com/xunara-net/xunara-server/identity"
-	"github.com/xunara-net/xunara-server/state"
 )
 
 // The built-in local account.
@@ -23,53 +22,19 @@ import (
 // would either burn that allowance on an account nobody can sign in as, or
 // fail the sign-up outright on the customer's first day.
 
-// Errors [Server.claimLocalAccount] returns. They are deliberately coarse:
-// callers render their own copy, and an account that does not exist is an
-// internal failure, not something the person in front of the form can fix.
-var (
-	errLocalAccountMissing = errors.New("control: the built-in local account is missing")
-	errLoginNameTaken      = errors.New("control: that login name is already taken")
-)
-
-// claimLocalAccount binds the built-in user to a real account: the login name,
-// display name, email and role given, plus the password. It is idempotent in
-// the sense that matters — claiming an already claimed account replaces its
-// password and names, which is what a password reset is.
-func (s *Server) claimLocalAccount(login, display, email string, role identity.Role, password string) (identity.User, error) {
-	user, ok := s.identity.GetUser(state.DefaultUserID)
-	if !ok {
-		return identity.User{}, errLocalAccountMissing
-	}
-	if other, taken := s.identity.GetUserByLoginName(login); taken && other.ID != user.ID {
-		return identity.User{}, errLoginNameTaken
+// claimLocalAccount 供初始化和自助开租户共用；认领只能成功一次，不能充当改密入口。
+// 慢哈希不占数据库写锁，资料、密码、会话和必需审计由 Store 原子提交。
+func (s *Server) claimLocalAccount(ctx context.Context, kind identity.LocalAccountClaimKind, login, display, email, password string) (identity.User, identity.Session, string, error) {
+	if err := ctx.Err(); err != nil {
+		return identity.User{}, identity.Session{}, "", err
 	}
 
 	hash, err := identity.HashPassword(password)
 	if err != nil {
-		return identity.User{}, fmt.Errorf("hashing password: %w", err)
+		return identity.User{}, identity.Session{}, "", fmt.Errorf("hashing password: %w", err)
 	}
-
-	user.LoginName = login
-	if display != "" {
-		user.DisplayName = display
-	} else if user.DisplayName == "" {
-		user.DisplayName = login
-	}
-	if email != "" {
-		user.Email = email
-	}
-	// The role is enforced here rather than inherited from whatever the row
-	// happened to hold: both callers are creating the account that owns the
-	// organization.
-	user.Role = role
-	if err := s.identity.UpdateUser(user); err != nil {
-		return identity.User{}, fmt.Errorf("updating the local account: %w", err)
-	}
-	if err := s.identity.SetLocalCredential(&identity.LocalCredential{
-		UserID:       user.ID,
-		PasswordHash: hash,
-	}); err != nil {
-		return identity.User{}, fmt.Errorf("storing the local password: %w", err)
-	}
-	return user, nil
+	return s.identity.ClaimLocalAccount(ctx, identity.LocalAccountClaim{
+		Kind: kind, LoginName: login, DisplayName: display, Email: email,
+		PasswordHash: hash, SessionTTL: s.sessionTTL,
+	})
 }

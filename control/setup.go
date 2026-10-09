@@ -1,9 +1,12 @@
 package control
 
 import (
+	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,7 +14,6 @@ import (
 	"time"
 
 	"github.com/xunara-net/xunara-server/identity"
-	"github.com/xunara-net/xunara-server/state"
 )
 
 // First-run setup.
@@ -41,35 +43,60 @@ const (
 // initSetupToken arms the one-time token when the deployment needs one. It
 // never logs the token: the path is enough for an operator with access to the
 // state directory.
-func (s *Server) initSetupToken() {
+func (s *Server) initSetupToken(ctx context.Context) error {
 	if !s.localLogin {
-		return
+		return nil
 	}
-	if s.identity.CountLocalCredentials() > 0 {
+	required, err := s.localSetupRequired(ctx)
+	if err != nil {
+		return err
+	}
+	if !required {
 		// An administrator exists; a stale token must not stay armed.
 		if err := s.clearSetupToken(); err != nil {
 			s.log.Warn("removing stale setup token", "err", err)
 		}
-		return
+		return nil
 	}
 
 	path := s.setupTokenPath()
-	if token, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(token))) >= 16 {
+	if _, err := s.loadSetupToken(); err == nil {
 		s.log.Info("administrator setup is pending", "token_file", path)
-		return
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("control: reading setup token: %w", err)
 	}
 
 	token, err := identity.NewSecret(setupTokenBytes)
 	if err != nil {
-		s.log.Error("generating setup token", "err", err)
-		return
+		return fmt.Errorf("control: generating setup token: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
-		s.log.Error("writing setup token", "path", path, "err", err)
-		return
+	// 先完整写入 0600 临时文件，再以不覆盖已有目标的硬链接发布。
+	// 多实例启动采用同一个已发布令牌，不能截断文件或改写另一实例的证明。
+	file, err := os.CreateTemp(s.cfg.StateDir, ".setup-token-*")
+	if err != nil {
+		return fmt.Errorf("control: creating setup token file: %w", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if _, err := file.WriteString(token + "\n"); err != nil {
+		return fmt.Errorf("control: writing setup token: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("control: syncing setup token: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("control: closing setup token: %w", err)
+	}
+	if err := os.Link(file.Name(), path); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("control: publishing setup token: %w", err)
+	}
+	if _, err := s.loadSetupToken(); err != nil {
+		return fmt.Errorf("control: reading published setup token: %w", err)
 	}
 	s.log.Warn("no administrator is configured; read the one-time setup token and finish setup in the browser",
 		"token_file", path, "setup_url", "/setup")
+	return nil
 }
 
 // setupTokenPath is the file holding the one-time token.
@@ -77,13 +104,30 @@ func (s *Server) setupTokenPath() string {
 	return filepath.Join(s.cfg.StateDir, setupTokenFile)
 }
 
-// readSetupToken returns the armed token, or "" when setup is not pending.
-func (s *Server) readSetupToken() string {
-	raw, err := os.ReadFile(s.setupTokenPath())
+// loadSetupToken 校验文件类型、权限和证明长度，保留读取故障而不是返回空令牌。
+func (s *Server) loadSetupToken() (string, error) {
+	info, err := os.Lstat(s.setupTokenPath())
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return strings.TrimSpace(string(raw))
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return "", errors.New("control: setup token must be a regular file with permissions 0600")
+	}
+	file, err := os.Open(s.setupTokenPath())
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 128))
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(raw))
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(decoded) != setupTokenBytes || len(raw) == 128 {
+		return "", errors.New("control: invalid setup token file")
+	}
+	return token, nil
 }
 
 // clearSetupToken disarms the token. A missing file is not an error.
@@ -94,15 +138,30 @@ func (s *Server) clearSetupToken() error {
 	return nil
 }
 
-// setupRequired reports whether this deployment still needs its first
-// administrator: local sign-in is enabled and no local password exists.
-func (s *Server) setupRequired() bool {
-	return s.localLogin && s.identity.CountLocalCredentials() == 0
+// setupStateForPage 为兼容 HTML 提供同一失败关闭的状态读取，不把故障当成初始化。
+func (s *Server) setupStateForPage(w http.ResponseWriter, r *http.Request) (bool, bool) {
+	w.Header().Set("Cache-Control", "no-store")
+	required, err := s.localSetupRequired(r.Context())
+	if err != nil {
+		s.renderAuthenticationUnavailable(w, r)
+		return false, false
+	}
+	return required, true
+}
+
+func (s *Server) renderAuthenticationUnavailable(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Retry-After", "5")
+	s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
 }
 
 // handleSetupPage implements GET /setup.
 func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
-	if !s.setupRequired() {
+	required, ok := s.setupStateForPage(w, r)
+	if !ok {
+		return
+	}
+	if !required {
 		// Nothing to set up: send the operator to sign in rather than to a
 		// form that cannot work.
 		http.Redirect(w, r, "/login", http.StatusFound)
@@ -114,6 +173,7 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 		"Login":     "admin",
 		"FormToken": s.newFormToken(formPurposeSetup),
 		"TokenHint": s.setupTokenPath(),
+		"Setup":     true,
 	})
 }
 
@@ -128,7 +188,11 @@ const (
 // handleSetupSubmit implements POST /setup: it consumes the one-time token,
 // gives the built-in administrator a password and signs them in.
 func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
-	if !s.setupRequired() {
+	required, ok := s.setupStateForPage(w, r)
+	if !ok {
+		return
+	}
+	if !required {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
@@ -138,9 +202,10 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 
 	allowed, retryAfter, err := s.store.AllowRate("setup:"+s.clientIP(r), setupRateLimit, setupRateWindow, time.Now())
 	if err != nil {
-		s.log.Error("rate limiting setup", "err", err)
+		s.renderAuthenticationUnavailable(w, r)
+		return
 	}
-	if err == nil && !allowed {
+	if !allowed {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
 		fail(http.StatusTooManyRequests, "Too many attempts",
 			"Too many setup attempts from this address. Try again later.")
@@ -153,7 +218,11 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	armed := s.readSetupToken()
+	armed, err := s.loadSetupToken()
+	if err != nil {
+		s.renderAuthenticationUnavailable(w, r)
+		return
+	}
 	submitted := strings.TrimSpace(r.PostFormValue("token"))
 	if armed == "" || subtle.ConstantTimeCompare([]byte(armed), []byte(submitted)) != 1 {
 		s.audit("system", identity.AuditLoginFailed, "setup", "invalid setup token")
@@ -181,53 +250,27 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Setup claims the built-in account: the deployment is its owner
-	// (account.go). Reading the previous names first keeps the audit trail
-	// able to say what the placeholder used to be called.
-	var previousLogin, previousDisplay, previousEmail string
-	if current, ok := s.identity.GetUser(state.DefaultUserID); ok {
-		previousLogin, previousDisplay, previousEmail = current.LoginName, current.DisplayName, current.Email
-	}
-	user, err := s.claimLocalAccount(login, display, email, identity.RoleOwner, password)
+	_, session, token, err := s.claimLocalAccount(r.Context(), identity.ClaimAdministrator, login, display, email, password)
 	switch {
-	case errors.Is(err, errLocalAccountMissing):
+	case errors.Is(err, identity.ErrUserNotFound):
 		fail(http.StatusInternalServerError, "Setup failed", "The administrator account is missing.")
 		return
-	case errors.Is(err, errLoginNameTaken):
+	case errors.Is(err, identity.ErrLoginNameTaken):
 		fail(http.StatusConflict, "Setup rejected", "That login name is already taken.")
+		return
+	case errors.Is(err, identity.ErrLocalAccountClaimed):
+		fail(http.StatusConflict, "Setup rejected", "The administrator has already been initialized. Sign in instead.")
 		return
 	case err != nil:
 		s.log.Error("setting up the administrator", "err", err)
-		fail(http.StatusInternalServerError, "Setup failed", "Please try again.")
+		s.renderAuthenticationUnavailable(w, r)
 		return
 	}
 
-	// The token is single use: remove it before the session is created so a
-	// failure after this point cannot leave a live token behind.
+	// 数据库完成事实已经使证明失效；文件清理失败不能留下可重放的认领权限。
 	if err := s.clearSetupToken(); err != nil {
 		s.log.Error("clearing setup token", "err", err)
 	}
-
-	actor := fmt.Sprintf("user:%d", user.ID)
-	s.audit(actor, identity.AuditAdminBootstrap, "user:"+login,
-		fmt.Sprintf("administrator set up (was %q, display %q)", previousLogin, previousDisplay))
-	if previousLogin != login || previousDisplay != user.DisplayName || previousEmail != user.Email {
-		s.audit("system", identity.AuditUserUpdated, fmt.Sprintf("user:%d", user.ID),
-			"login, display name or email changed during setup")
-	}
-
-	session, token, err := s.identity.CreateSession(identity.NewSessionOptions{
-		UserID:     user.ID,
-		AuthMethod: identity.LocalProviderID,
-		TTL:        s.sessionTTL,
-	})
-	if err != nil {
-		s.log.Error("creating session after setup", "err", err)
-		fail(http.StatusInternalServerError, "Setup finished", "Sign in with the password you just set.")
-		return
-	}
-	s.audit(actor, identity.AuditLoginSucceeded, "provider:"+identity.LocalProviderID, "authenticated "+login)
-	s.audit(actor, identity.AuditSessionCreated, "session:"+session.ID, "auth method "+identity.LocalProviderID)
 	s.setSessionCookie(w, token, session.ExpiresAt)
 
 	http.Redirect(w, r, "/console/", http.StatusFound)

@@ -525,7 +525,10 @@ func New(cfg Config) (*Server, error) {
 		cfg.Logger.Info("passkey sign-in enabled", "rp_id", cfg.Passkeys.RPID)
 	}
 	// Arm the first-run setup token before anything can serve a request.
-	srv.initSetupToken()
+	if err := srv.initSetupToken(context.Background()); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("control: preparing administrator setup: %w", err)
+	}
 	if flux != nil {
 		cfg.Logger.Info("flux file transfer enabled",
 			"dir", flux.dir, "max_size", flux.maxSize, "ttl", flux.ttl)
