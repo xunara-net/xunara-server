@@ -44,22 +44,11 @@ func (store *SQLiteStore) RevokeAccountSessions(ctx context.Context, userID tail
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE sessions SET last_seen_at = last_seen_at
-		WHERE id = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?
-		AND EXISTS (SELECT 1 FROM users WHERE id = ?)`,
-		initiatingID, int64(userID), now.UnixNano(), int64(userID))
-	if err != nil {
-		return 0, fmt.Errorf("identity: checking initiating session: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("identity: checking initiating session count: %w", err)
-	}
-	if affected != 1 {
-		return 0, ErrSessionRevoked
+	if err := lockAccountSession(ctx, tx, userID, initiatingID, now); err != nil {
+		return 0, err
 	}
 
+	// 只撤销事务执行时仍活动的会话；重复操作不重写已失效记录的原因和时间。
 	query := "UPDATE sessions SET revoked_at = ?, revoked_reason = ? WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?"
 	reason := "signed out all sessions"
 	var filter []any
@@ -81,7 +70,7 @@ func (store *SQLiteStore) RevokeAccountSessions(ctx context.Context, userID tail
 		reason = "signed out one session"
 	}
 	arguments := append([]any{now.UnixNano(), reason, int64(userID), now.UnixNano()}, filter...)
-	result, err = tx.ExecContext(ctx, query, arguments...)
+	result, err := tx.ExecContext(ctx, query, arguments...)
 	if err != nil {
 		return 0, fmt.Errorf("identity: revoking account sessions: %w", err)
 	}

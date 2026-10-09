@@ -224,6 +224,7 @@ func TestPasskeyRegisterAndLogin(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	authenticator := newSoftwareAuthenticator(t)
+	initiatingID := passkeyTestSessionID(t, store, alice)
 
 	creation, ceremonyID, browserSecret, err := svc.BeginRegistration(alice)
 	if err != nil {
@@ -234,12 +235,12 @@ func TestPasskeyRegisterAndLogin(t *testing.T) {
 	}
 
 	// A guessed ceremony ID or a missing browser binding cannot finish.
-	if _, err := svc.FinishRegistration(ceremonyID, "not-the-secret", alice, "Laptop",
+	if _, err := svc.FinishRegistration(ceremonyID, "not-the-secret", alice, initiatingID, "Laptop",
 		authenticator.creationRequest(t, "login.example.com", "https://login.example.com", creation)); !errors.Is(err, ErrPasskeyCeremonyNotFound) {
 		t.Errorf("FinishRegistration with a wrong browser binding = %v", err)
 	}
 
-	passkey, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, "Laptop",
+	passkey, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, initiatingID, "Laptop",
 		authenticator.creationRequest(t, "login.example.com", "https://login.example.com", creation))
 	if err != nil {
 		t.Fatalf("FinishRegistration: %v", err)
@@ -252,7 +253,7 @@ func TestPasskeyRegisterAndLogin(t *testing.T) {
 	}
 
 	// The challenge response is single use.
-	if _, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, "Laptop",
+	if _, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, initiatingID, "Laptop",
 		authenticator.creationRequest(t, "login.example.com", "https://login.example.com", creation)); !errors.Is(err, ErrPasskeyCeremonyConsumed) {
 		t.Errorf("replayed registration = %v, want ErrPasskeyCeremonyConsumed", err)
 	}
@@ -268,11 +269,11 @@ func TestPasskeyRegisterAndLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginRegistration: %v", err)
 	}
-	if _, err := svc.FinishRegistration(stolenID, stolenSecret, bob, "Stolen",
+	if _, err := svc.FinishRegistration(stolenID, stolenSecret, bob, initiatingID, "Stolen",
 		authenticator.creationRequest(t, "login.example.com", "https://login.example.com", stolenCreation)); !errors.Is(err, ErrPasskeyCeremonyNotFound) {
 		t.Errorf("FinishRegistration by another user = %v", err)
 	}
-	if _, err := svc.FinishRegistration(stolenID, stolenSecret, alice, "Laptop",
+	if _, err := svc.FinishRegistration(stolenID, stolenSecret, alice, initiatingID, "Laptop",
 		authenticator.creationRequest(t, "login.example.com", "https://login.example.com", stolenCreation)); !errors.Is(err, ErrPasskeyCeremonyConsumed) {
 		t.Errorf("ceremony survived a foreign finish attempt: %v", err)
 	}
@@ -343,12 +344,13 @@ func TestPasskeyLoginWrongRPID(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	authenticator := newSoftwareAuthenticator(t)
+	initiatingID := passkeyTestSessionID(t, store, alice)
 
 	creation, ceremonyID, browserSecret, err := svc.BeginRegistration(alice)
 	if err != nil {
 		t.Fatalf("BeginRegistration: %v", err)
 	}
-	if _, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, "Laptop",
+	if _, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, initiatingID, "Laptop",
 		authenticator.creationRequest(t, "login.example.com", "https://login.example.com", creation)); err != nil {
 		t.Fatalf("FinishRegistration: %v", err)
 	}
@@ -374,12 +376,13 @@ func TestPasskeyLoginForeignOrigin(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	authenticator := newSoftwareAuthenticator(t)
+	initiatingID := passkeyTestSessionID(t, store, alice)
 
 	creation, ceremonyID, browserSecret, err := svc.BeginRegistration(alice)
 	if err != nil {
 		t.Fatalf("BeginRegistration: %v", err)
 	}
-	if _, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, "Laptop",
+	if _, err := svc.FinishRegistration(ceremonyID, browserSecret, alice, initiatingID, "Laptop",
 		authenticator.creationRequest(t, "login.example.com", "https://login.example.com", creation)); err != nil {
 		t.Fatalf("FinishRegistration: %v", err)
 	}

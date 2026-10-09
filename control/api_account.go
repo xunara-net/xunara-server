@@ -16,6 +16,8 @@ import (
 	"github.com/xunara-net/xunara-server/identity"
 )
 
+// requireAccountSession 拒绝 Service API Key：网络操作权限不能代替人类账户身份。
+// 普通成员可管理自己的安全设置，写入还必须持有与当前会话绑定的 CSRF 令牌。
 func (server *Server) requireAccountSession(writer http.ResponseWriter, request *http.Request, write bool) (apiPrincipal, bool) {
 	writer.Header().Set("Cache-Control", "no-store")
 	principal, ok := server.requireSelfScope(writer, request, identity.ScopeRead)
@@ -64,12 +66,17 @@ func (server *Server) handleAPIAccount(writer http.ResponseWriter, request *http
 }
 
 func decodeAccountBody(writer http.ResponseWriter, request *http.Request, body any) bool {
+	return decodeAccountBodyLimit(writer, request, body, 8<<10)
+}
+
+// WebAuthn 凭据包含认证器响应，需要更大上限，但仍拒绝额外字段和拼接 JSON。
+func decodeAccountBodyLimit(writer http.ResponseWriter, request *http.Request, body any, limit int64) bool {
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		writeAPIError(writer, http.StatusUnsupportedMediaType, "JSON_REQUIRED: send an application/json body")
 		return false
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 8<<10)
+	request.Body = http.MaxBytesReader(writer, request.Body, limit)
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	var extra any

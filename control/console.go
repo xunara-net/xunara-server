@@ -95,13 +95,11 @@ func (s *Server) consoleRouter() http.Handler {
 	r.Get("/plan", s.handleConsolePlan)
 	r.Get("/ssh-check", s.handleConsoleSSHCheck)
 	r.Get("/audit", s.handleConsoleAudit)
-	r.Get("/passkeys", s.handleConsolePasskeys)
-
-	// Passkeys belong to the signed-in user, not to the tailnet, so any role
-	// may manage its own; the handlers enforce session + CSRF themselves.
-	r.Post("/passkeys/begin", s.handleConsolePasskeyBegin)
-	r.Post("/passkeys/finish", s.handleConsolePasskeyFinish)
-	r.Post("/passkeys/{id}/delete", s.handleConsoleDeletePasskey)
+	// 旧管理页面和业务处理器已删除；旧地址暂留弃用提示与薄适配，方便平滑升级。
+	r.Method(http.MethodGet, "/passkeys", deprecatedAccountEndpoint(http.RedirectHandler("/security", http.StatusFound)))
+	r.With(deprecatedAccountEndpoint).Post("/passkeys/begin", s.handleAPIAccountPasskeyBegin)
+	r.With(deprecatedAccountEndpoint).Post("/passkeys/finish", s.handleAPIAccountPasskeyFinish)
+	r.With(deprecatedAccountEndpoint).Post("/passkeys/{id}/delete", s.handleLegacyDeletePasskey)
 
 	// Every write goes through the role guard: members may look at the
 	// tailnet, admins and owners may change it.

@@ -37,7 +37,9 @@ func (s *Server) apiAuthRouter() http.Handler {
 	r.Get("/providers", s.handleAPIAuthProviders)
 	r.Post("/login", s.handleAPIAuthLogin)
 	r.Post("/signup", s.handleAPIAuthSignup)
-	r.Post("/logout", s.handleAPIAuthLogout)
+	r.With(deprecatedAccountEndpoint).Post("/logout", s.handleAPIAuthLogout)
+	r.Post("/passkey/begin", s.handlePasskeyLoginBegin)
+	r.Post("/passkey/finish", s.handlePasskeyLoginFinish)
 	return r
 }
 
@@ -400,19 +402,26 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.apiSessionPayload(user, session))
 }
 
-// handleAPIAuthLogout implements POST /api/v1/auth/logout. It is idempotent:
-// signing out twice, or without a session, is not an error.
+// handleAPIAuthLogout 保留旧 JSON 退出入口，但撤销与新账户接口共用同一事务。
+// 匿名重复退出仍返回 204；有效会话必须有 CSRF，写入失败不能伪装成成功。
 func (s *Server) handleAPIAuthLogout(w http.ResponseWriter, r *http.Request) {
-	token := s.sessionToken(r)
-	if token != "" {
-		if session, err := s.identity.GetSessionByToken(token); err == nil {
-			if err := s.identity.RevokeSession(session.ID, "logout"); err != nil {
-				s.log.Error("revoking session", "session", session.ID, "err", err)
-			}
-			s.audit(fmt.Sprintf("user:%d", session.UserID), identity.AuditSessionRevoked, "session:"+session.ID, "logout")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Header.Get("Authorization") == "" {
+		if _, authenticated := s.currentSession(r); !authenticated {
+			s.clearSessionCookie(w)
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
 	}
-	s.clearSessionCookie(w)
+	principal, ok := s.requireAccountSession(w, r, true)
+	if !ok {
+		return
+	}
+	if _, _, ok := s.revokeAccountSessions(w, r, principal, identity.SessionRevocation{
+		Mode: identity.RevokeSingleSession, SessionID: principal.Session.ID,
+	}); !ok {
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -200,6 +200,10 @@ func (s *Server) apiRouter() http.Handler {
 	r.Get("/account/sessions", s.handleAPIAccountSessions)
 	r.Post("/account/sessions/revoke", s.handleAPIRevokeAccountSessions)
 	r.Delete("/account/sessions/{id}", s.handleAPIRevokeAccountSession)
+	r.Get("/account/passkeys", s.handleAPIAccountPasskeys)
+	r.Post("/account/passkeys/begin", s.handleAPIAccountPasskeyBegin)
+	r.Post("/account/passkeys/finish", s.handleAPIAccountPasskeyFinish)
+	r.Delete("/account/passkeys/{id}", s.handleAPIDeleteAccountPasskey)
 
 	r.Get("/machines", s.handleAPIMachines)
 	r.Get("/machines/{ref}", s.handleAPIMachine)
@@ -230,8 +234,9 @@ func (s *Server) apiRouter() http.Handler {
 	r.Post("/api-keys", s.handleAPICreateAPIKey)
 	r.Delete("/api-keys/{id}", s.handleAPIRevokeAPIKey)
 
-	r.Get("/sessions", s.handleAPISessions)
-	r.Delete("/sessions/{id}", s.handleAPIRevokeSession)
+	r.With(deprecatedAccountEndpoint).Get("/sessions", s.handleAPISessions)
+	// 旧路径只做兼容适配，不能绕过账户接口的人类身份、CSRF 和事务边界。
+	r.With(deprecatedAccountEndpoint).Delete("/sessions/{id}", s.handleAPIRevokeAccountSession)
 
 	return r
 }

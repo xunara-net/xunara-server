@@ -10,6 +10,7 @@ import (
 	"github.com/xunara-net/xunara-server/identity"
 )
 
+// API 只公开管理所需字段；会话标识不是登录令牌，也不返回令牌哈希。
 type accountSessionView struct {
 	ID            string     `json:"id"`
 	AuthMethod    string     `json:"auth_method"`
@@ -25,10 +26,8 @@ func (server *Server) handleAPIAccountSessions(writer http.ResponseWriter, reque
 	if !ok {
 		return
 	}
-	sessions, err := server.identity.ListAccountSessions(request.Context(), principal.UserID)
-	if err != nil {
-		server.log.Error("listing account sessions", "user", uint64(principal.UserID), "err", err)
-		writeAPIError(writer, http.StatusInternalServerError, "SESSION_LIST_FAILED: could not read account sessions")
+	sessions, ok := server.readAccountSessions(writer, request, principal)
+	if !ok {
 		return
 	}
 	now := time.Now().UTC()
@@ -68,7 +67,7 @@ func (server *Server) handleAPIRevokeAccountSessions(writer http.ResponseWriter,
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_SESSION_REVOCATION: choose others or all")
 		return
 	}
-	server.revokeAccountSessions(writer, request, principal, identity.SessionRevocation{Mode: body.Mode})
+	server.writeAccountSessionRevocation(writer, request, principal, identity.SessionRevocation{Mode: body.Mode})
 }
 
 func (server *Server) handleAPIRevokeAccountSession(writer http.ResponseWriter, request *http.Request) {
@@ -76,12 +75,47 @@ func (server *Server) handleAPIRevokeAccountSession(writer http.ResponseWriter, 
 	if !ok {
 		return
 	}
-	server.revokeAccountSessions(writer, request, principal, identity.SessionRevocation{
+	server.writeAccountSessionRevocation(writer, request, principal, identity.SessionRevocation{
 		Mode: identity.RevokeSingleSession, SessionID: chi.URLParam(request, "id"),
 	})
 }
 
-func (server *Server) revokeAccountSessions(writer http.ResponseWriter, request *http.Request, principal apiPrincipal, selection identity.SessionRevocation) {
+func (server *Server) readAccountSessions(writer http.ResponseWriter, request *http.Request, principal apiPrincipal) ([]identity.Session, bool) {
+	sessions, err := server.identity.ListAccountSessions(request.Context(), principal.UserID)
+	if err != nil {
+		server.log.Error("listing account sessions", "user", uint64(principal.UserID), "err", err)
+		writeAPIError(writer, http.StatusInternalServerError, "SESSION_LIST_FAILED: could not read account sessions")
+		return nil, false
+	}
+	return sessions, true
+}
+
+// 旧列表只保留字段形状，不再维持会吞掉读取错误的第二套存储逻辑。
+func (server *Server) handleAPISessions(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := server.requireAccountSession(writer, request, false)
+	if !ok {
+		return
+	}
+	sessions, ok := server.readAccountSessions(writer, request, principal)
+	if ok {
+		writeJSON(writer, http.StatusOK, map[string]any{"sessions": sessions})
+	}
+}
+
+func (server *Server) writeAccountSessionRevocation(writer http.ResponseWriter, request *http.Request, principal apiPrincipal, selection identity.SessionRevocation) {
+	revoked, currentRevoked, ok := server.revokeAccountSessions(writer, request, principal, selection)
+	if !ok {
+		return
+	}
+	payload := map[string]any{"revoked_sessions": revoked, "current_revoked": currentRevoked}
+	if selection.Mode == identity.RevokeSingleSession {
+		payload["revoked"] = selection.SessionID
+	}
+	writeJSON(writer, http.StatusOK, payload)
+}
+
+// Cookie 只在数据库撤销与审计提交成功后清理，失败时保留会话供用户重试。
+func (server *Server) revokeAccountSessions(writer http.ResponseWriter, request *http.Request, principal apiPrincipal, selection identity.SessionRevocation) (int64, bool, bool) {
 	revoked, err := server.identity.RevokeAccountSessions(request.Context(), principal.UserID, principal.Session.ID, selection)
 	if err != nil {
 		switch {
@@ -93,11 +127,11 @@ func (server *Server) revokeAccountSessions(writer http.ResponseWriter, request 
 			server.log.Error("revoking account sessions", "user", uint64(principal.UserID), "err", err)
 			writeAPIError(writer, http.StatusInternalServerError, "SESSION_REVOKE_FAILED: could not revoke account sessions")
 		}
-		return
+		return 0, false, false
 	}
 	currentRevoked := selection.Mode == identity.RevokeAllSessions || selection.Mode == identity.RevokeSingleSession && selection.SessionID == principal.Session.ID
 	if currentRevoked {
 		server.clearSessionCookie(writer)
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"revoked_sessions": revoked, "current_revoked": currentRevoked})
+	return revoked, currentRevoked, true
 }

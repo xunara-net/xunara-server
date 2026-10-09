@@ -136,6 +136,32 @@ func (store *SQLiteStore) ChangeLocalPassword(ctx context.Context, userID tailcf
 	return revoked, nil
 }
 
+// lockAccountSession 用条件写入取得数据库写锁，并再次确认发起会话仍有效。
+// 即使另一实例同时撤销或轮换会话，也不能凭 HTTP 层旧快照继续修改安全凭据。
+// 自赋值不是活动心跳，不改变用户可见的最后使用时间。
+func lockAccountSession(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, sessionID string, now time.Time) error {
+	if userID == 0 || sessionID == "" {
+		return ErrSessionRevoked
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE sessions SET last_seen_at = last_seen_at
+		WHERE id = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?
+		AND EXISTS (SELECT 1 FROM users WHERE id = ?)`,
+		sessionID, int64(userID), now.UnixNano(), int64(userID))
+	if err != nil {
+		return fmt.Errorf("identity: checking initiating session: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("identity: checking initiating session count: %w", err)
+	}
+	if affected != 1 {
+		return ErrSessionRevoked
+	}
+	return nil
+}
+
+// insertAccountAudit 与账户变更共用事务：写审计失败时，业务变更也必须回滚。
 func insertAccountAudit(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, action, detail string, now time.Time) error {
 	target := fmt.Sprintf("user:%d", userID)
 	if _, err := tx.ExecContext(ctx,

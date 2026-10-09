@@ -456,6 +456,7 @@ func TestSelfServiceRevocation(t *testing.T) {
 	}
 	req, _ = http.NewRequest(http.MethodDelete, hs.URL+"/api/v1/sessions/"+aliceSession.ID, nil)
 	req.AddCookie(aliceCookie)
+	req.Header.Set("X-CSRF-Token", csrfTokenFor(aliceCookie.Value))
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("self session revoke: %v", err)

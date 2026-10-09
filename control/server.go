@@ -105,9 +105,8 @@ type Config struct {
 	// Providers are additional identity providers registered as-is (custom
 	// adapters and tests). Prefer OIDCProviders for OIDC issuers.
 	Providers []identity.IdentityProvider
-	// Passkeys enables passkey (WebAuthn) sign-in and console credential
-	// management. Nil disables the feature: the endpoints answer 404 and the
-	// sign-in page offers no passkey button.
+	// Passkeys 启用 WebAuthn 登录和账户 JSON 管理；产品页面位于 xunara-web。
+	// nil 禁止新增和登录，但用户仍可查看、删除自己的已有凭据。
 	Passkeys *identity.PasskeyConfig
 	// Flux configures Xunara Flux file transfers. Nil (or
 	// FluxConfig.Disabled) keeps the feature off and its endpoints answer

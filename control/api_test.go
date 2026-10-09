@@ -346,11 +346,14 @@ func TestAPIMiscEndpoints(t *testing.T) {
 	client := noRedirectClient()
 	_, token := seedAPIKey(t, s)
 
-	for _, path := range []string{"/api/v1/overview", "/api/v1/machines", "/api/v1/routes", "/api/v1/users", "/api/v1/dns", "/api/v1/policy", "/api/v1/devices", "/api/v1/audit", "/api/v1/auth-keys", "/api/v1/api-keys", "/api/v1/sessions"} {
+	for _, path := range []string{"/api/v1/overview", "/api/v1/machines", "/api/v1/routes", "/api/v1/users", "/api/v1/dns", "/api/v1/policy", "/api/v1/devices", "/api/v1/audit", "/api/v1/auth-keys", "/api/v1/api-keys"} {
 		resp := apiRequest(t, client, http.MethodGet, hs.URL+path, token, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s status = %d, want 200", path, resp.StatusCode)
 		}
+	}
+	if resp := apiRequest(t, client, http.MethodGet, hs.URL+"/api/v1/sessions", token, nil); resp.StatusCode != http.StatusForbidden {
+		t.Error("service key was allowed to read human sessions through a legacy path")
 	}
 
 	// Unknown paths and invalid bodies are handled, not panicked on.

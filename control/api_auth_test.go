@@ -139,9 +139,10 @@ func TestAPIAuthLoginSessionLogout(t *testing.T) {
 	}
 	decodeJSONBody(t, planResp, &planBody)
 
-	logout := postJSON(t, client, hs.URL+"/api/v1/auth/logout", map[string]string{}, cookie)
-	if logout.StatusCode != http.StatusNoContent {
-		t.Fatalf("POST /api/v1/auth/logout = %d, want 204", logout.StatusCode)
+	logout := accountRequest(t, s, http.MethodPost, "/api/v1/auth/logout", map[string]string{}, cookie,
+		map[string]string{"X-CSRF-Token": csrfTokenFor(cookie.Value)})
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("POST /api/v1/auth/logout = %d, want 204", logout.Code)
 	}
 	after := getRequest(t, client, hs.URL+"/api/v1/auth/session", cookie)
 	var afterBody struct {

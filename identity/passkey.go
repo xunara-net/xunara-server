@@ -1,14 +1,10 @@
 package identity
 
-// This file is the WebAuthn relying-party logic: it wraps the go-webauthn
-// library with the trust plane's store, config validation and the browser
-// binding of a ceremony.
-//
-// Passkey sign-in is Human Identity (AGENTS.md section 5): an assertion signs
-// a user in and never authorizes a machine. Challenges are single-use and
-// persisted (section 7 replay, section 9 multi-instance).
+// 本模块复用 go-webauthn 验证器，负责配置校验、持久挑战和浏览器绑定。
+// 通行密钥属于 Human Identity，不批准 Machine Identity；挑战跨实例单次消费。
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -200,7 +196,11 @@ func (s *PasskeyService) BeginRegistration(user User) (options *protocol.Credent
 		return nil, "", "", errors.New("identity: passkey registration needs a user")
 	}
 
-	adapter := s.newUser(user, s.store.ListPasskeys(user.ID))
+	passkeys, err := s.store.ListAccountPasskeys(context.Background(), user.ID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	adapter := s.newUser(user, passkeys)
 	creation, session, err := s.wa.BeginRegistration(adapter,
 		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
 			ResidentKey:        protocol.ResidentKeyRequirementRequired,
@@ -219,10 +219,9 @@ func (s *PasskeyService) BeginRegistration(user User) (options *protocol.Credent
 	return creation, ceremonyID, browserSecret, nil
 }
 
-// FinishRegistration verifies the authenticator's answer and stores the
-// passkey under name for user. The ceremony must have been started by the same
-// user in the same browser.
-func (s *PasskeyService) FinishRegistration(ceremonyID, browserSecret string, user User, name string, finish *http.Request) (Passkey, error) {
+// FinishRegistration 验证签名后，仍须在事务中复核发起会话，才能保存新凭据。
+// 挑战属于同一用户和浏览器；通过通行密钥认证不会推导任何机器信任。
+func (s *PasskeyService) FinishRegistration(ceremonyID, browserSecret string, user User, initiatingID, name string, finish *http.Request) (Passkey, error) {
 	ceremony, err := s.takeCeremony(ceremonyID, browserSecret, PasskeyCeremonyRegister)
 	if err != nil {
 		return Passkey{}, err
@@ -237,7 +236,11 @@ func (s *PasskeyService) FinishRegistration(ceremonyID, browserSecret string, us
 		return Passkey{}, err
 	}
 
-	adapter := s.newUser(user, s.store.ListPasskeys(user.ID))
+	passkeys, err := s.store.ListAccountPasskeys(finish.Context(), user.ID)
+	if err != nil {
+		return Passkey{}, err
+	}
+	adapter := s.newUser(user, passkeys)
 	credential, err := s.wa.FinishRegistration(adapter, session, finish)
 	if err != nil {
 		return Passkey{}, fmt.Errorf("identity: passkey registration failed: %w", err)
@@ -249,10 +252,7 @@ func (s *PasskeyService) FinishRegistration(ceremonyID, browserSecret string, us
 		CredentialID: credential.ID,
 		Credential:   *credential,
 	}
-	if err := s.store.CreatePasskey(&passkey); err != nil {
-		return Passkey{}, err
-	}
-	return passkey, nil
+	return s.store.CreateAccountPasskey(finish.Context(), initiatingID, passkey)
 }
 
 // BeginLogin starts a usernameless login ceremony: the authenticator offers a
@@ -296,7 +296,11 @@ func (s *PasskeyService) FinishLogin(ceremonyID, browserSecret string, finish *h
 			return nil, ErrUserNotFound
 		}
 		used = passkey
-		return s.newUser(user, s.store.ListPasskeys(user.ID)), nil
+		passkeys, err := s.store.ListAccountPasskeys(finish.Context(), user.ID)
+		if err != nil {
+			return nil, err
+		}
+		return s.newUser(user, passkeys), nil
 	}
 
 	_, credential, err := s.wa.FinishPasskeyLogin(handler, session, finish)
@@ -335,11 +339,8 @@ func (s *PasskeyService) saveCeremony(kind PasskeyCeremonyKind, userID tailcfg.U
 	return ceremony.ID, browserSecret, nil
 }
 
-// takeCeremony checks the browser binding, then consumes the ceremony so the
-// same challenge response cannot be replayed.
-//
-// The binding is verified before consuming: someone who merely guesses a
-// ceremony ID must not be able to burn an honest user's ceremony.
+// takeCeremony 先校验浏览器绑定，再原子消费挑战，防止跨实例重放。
+// 仅猜到公共挑战 ID 不能消耗他人的挑战；绑定正确后的验证失败则需重新开始。
 func (s *PasskeyService) takeCeremony(id, browserSecret string, kind PasskeyCeremonyKind) (PasskeyCeremony, error) {
 	if id == "" || browserSecret == "" {
 		return PasskeyCeremony{}, ErrPasskeyCeremonyNotFound
@@ -370,8 +371,7 @@ type webauthnUser struct {
 	credentials []webauthn.Credential
 }
 
-// newUser adapts user with the given passkeys. A nil slice is loaded from the
-// store so the library always sees the current credential set.
+// newUser 只适配已成功读取的账户凭据，不以空列表掩盖存储读取错误。
 func (s *PasskeyService) newUser(user User, passkeys []Passkey) webauthnUser {
 	credentials := make([]webauthn.Credential, 0, len(passkeys))
 	for _, passkey := range passkeys {

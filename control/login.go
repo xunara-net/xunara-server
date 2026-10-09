@@ -344,10 +344,16 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.identity.RevokeSession(session.ID, "logout"); err != nil {
-		s.log.Error("revoking session", "session", session.ID, "err", err)
+	if !checkCSRF(r, token) {
+		s.renderError(w, r, http.StatusForbidden, "Invalid form token", "Reload the page and try signing out again.")
+		return
 	}
-	s.audit(fmt.Sprintf("user:%d", session.UserID), identity.AuditSessionRevoked, "session:"+session.ID, "logout")
+	if _, err := s.identity.RevokeAccountSessions(r.Context(), session.UserID, session.ID, identity.SessionRevocation{
+		Mode: identity.RevokeSingleSession, SessionID: session.ID,
+	}); err != nil {
+		s.renderError(w, r, http.StatusInternalServerError, "Sign out failed", "Your session could not be revoked. Please try again.")
+		return
+	}
 
 	s.clearSessionCookie(w)
 	http.Redirect(w, r, "/", http.StatusFound)

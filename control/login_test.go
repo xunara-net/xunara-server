@@ -216,7 +216,7 @@ func TestLocalLoginCreatesServerSideSession(t *testing.T) {
 	}
 
 	// Logout revokes the session server-side, not just the cookie.
-	out := postForm(t, client, hs.URL+"/logout", url.Values{}, cookie)
+	out := postForm(t, client, hs.URL+"/logout", url.Values{"csrf": {csrfTokenFor(cookie.Value)}}, cookie)
 	if out.StatusCode != http.StatusFound {
 		t.Fatalf("logout status = %d, want 302", out.StatusCode)
 	}

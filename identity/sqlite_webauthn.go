@@ -15,6 +15,14 @@ const passkeyColumns = "id, user_id, name, credential_id, credential, created_at
 
 // CreatePasskey implements [PasskeyStore].
 func (s *SQLiteStore) CreatePasskey(p *Passkey) error {
+	return insertPasskey(context.Background(), s.db, p)
+}
+
+// insertPasskey 共享底层插入逻辑，允许账户注册将凭据和审计放在同一事务中。
+// 私钥始终留在认证器，数据库只保存 WebAuthn 库验证过的凭据记录。
+func insertPasskey(ctx context.Context, executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, p *Passkey) error {
 	if p == nil {
 		return fmt.Errorf("identity: nil passkey")
 	}
@@ -39,7 +47,7 @@ func (s *SQLiteStore) CreatePasskey(p *Passkey) error {
 		p.CreatedAt = now
 	}
 
-	_, err = s.db.ExecContext(context.Background(), `
+	_, err = executor.ExecContext(ctx, `
 		INSERT INTO webauthn_credentials (id, user_id, name, credential_id, credential, created_at, last_used_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, int64(p.UserID), p.Name, p.CredentialID, string(raw), p.CreatedAt.UnixNano(), int64(0))
@@ -55,23 +63,8 @@ func (s *SQLiteStore) CreatePasskey(p *Passkey) error {
 
 // ListPasskeys implements [PasskeyStore].
 func (s *SQLiteStore) ListPasskeys(userID tailcfg.UserID) []Passkey {
-	rows, err := s.db.QueryContext(context.Background(),
-		"SELECT "+passkeyColumns+" FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at, id",
-		int64(userID))
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-
-	var out []Passkey
-	for rows.Next() {
-		p, err := scanPasskey(rows)
-		if err != nil {
-			return out
-		}
-		out = append(out, p)
-	}
-	return out
+	passkeys, _ := s.ListAccountPasskeys(context.Background(), userID)
+	return passkeys
 }
 
 // GetPasskeyByCredentialID implements [PasskeyStore].

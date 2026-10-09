@@ -148,6 +148,56 @@ go run ./cmd/xunarad \
 旧 `/api/v1/sessions` 与平台管理员强制下线接口保留兼容。读写存储故障返回
 明确错误，不把失败显示为零活动登录或退出成功。
 
+### 通行密钥
+
+登录页与安全中心通过统一账户接口使用 WebAuthn（[ADR-0011](docs/adr/ADR-0011-passkey-web-and-auth-consolidation.md)）：
+
+- `POST /api/v1/auth/passkey/begin` 返回浏览器登录参数；`POST .../finish`
+  接受认证器断言，成功返回与密码登录相同的会话快照，Cookie 为 HttpOnly。
+  登录挑战每个 IP 五分钟最多发起 20 次；挑战持久化、浏览器绑定且单次消费。
+- `GET /api/v1/account/passkeys` 返回 `enabled`、`csrf_token` 和公开凭据列表
+  （`id`、`name`、`created_at`、可选 `last_used_at`），不返回凭据原始 ID、公钥或私钥。
+- `POST .../passkeys/begin`、`POST .../passkeys/finish` 注册自己的凭据；完成请求
+  是 `{"name":"我的笔记本","credential":<WebAuthn JSON>}`，JSON 上限 64 KiB、
+  名称最多 64 个字符。验证由 go-webauthn 完成，凭据与审计事务提交，成功返回 201。
+- `DELETE .../passkeys/{id}` 删除自己的凭据，成功返回 204；不撤销已建立的登录。
+  需退出旧登录时使用会话管理。关闭功能后仍可读取、删除已有凭据。
+- 所有账户接口仅接受本租户 Human Session，普通成员亦可使用；所有写入需要
+  当前会话的 CSRF，事务内再次检查发起会话。签发新登录前也复核凭据未被删除。
+
+通行密钥需要固定域名、HTTPS 和正确的 RP ID / Origin allowlist；仅 localhost
+开发环境可使用 HTTP。以下在本仓库启动 API，并配合另一个终端在 `xunara-web`
+目录执行 `npm run dev`，由默认开发代理保证浏览器同源。先在
+`http://localhost:8080/setup` 完成初始化，再访问 `http://localhost:5173/login`：
+
+```sh
+go run ./cmd/xunarad -listen 127.0.0.1:8080 -server-url http://localhost:5173
+```
+
+`-passkey-rpid` 与可重复的 `-passkey-origin` 可显式配置；多租户使用组织配置中
+对应的 WebAuthn 配置，配置入口以 `cmd/xunarad/orgconfig.go` 为准。
+本功能只建立人类会话，不自动审批设备，也不是 TOTP/2FA 或账号恢复。
+
+<a id="account-api-migration"></a>
+
+### 旧账户接口迁移
+
+旧通行密钥管理模板和旧撤销业务实现已删除；以下地址仅保留薄适配，不维护第二套逻辑。
+它们返回 `Deprecation` 日期头与指向本节的 `Link`，最终删除时间另行公告：
+
+| 旧入口 | 新入口 |
+| --- | --- |
+| `/console/passkeys` | 重定向到 Web `/security` |
+| `POST /console/passkeys/begin`、`finish` | `/api/v1/account/passkeys/begin`、`finish` |
+| `POST /console/passkeys/{id}/delete`（表单 CSRF） | `DELETE /api/v1/account/passkeys/{id}`（CSRF header） |
+| `GET /api/v1/sessions`、`DELETE .../sessions/{id}` | `/api/v1/account/sessions` 与单个撤销接口 |
+| `POST /api/v1/auth/logout` | 撤销当前 `/api/v1/account/sessions/{id}` |
+
+旧 JSON 会话写接口也必须使用 Human Session + CSRF；API Key 和无 CSRF 写入不再支持。
+顶部退出与安全中心已统一调用新接口，存储失败不会清 Cookie 或假报成功。
+官方客户端授权必需的 HTML 登录及其通行密钥登录入口保留；其他尚未功能对等的
+内嵌控制台模块按 ADR-0003 继续分阶段迁移，不把它们混入新的产品前端。
+
 ## 测试
 
 ```bash

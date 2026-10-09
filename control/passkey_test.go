@@ -114,16 +114,15 @@ func sessionCookieFromJar(t *testing.T, client *http.Client, baseURL string) str
 	return ""
 }
 
-// registerPasskey runs the console registration ceremony and returns the
-// stored credential.
+// registerPasskey 通过统一账户 API 注册，不依赖已删除的内嵌管理页面。
 func registerPasskey(t *testing.T, s *Server, hs *httptest.Server, client *http.Client, authenticator *softwareAuthenticator, name string) identity.Passkey {
 	t.Helper()
 	token := sessionCookieFromJar(t, client, hs.URL)
 	csrf := csrfTokenFor(token)
 
-	begin := postJSONRequest(t, client, hs.URL+"/console/passkeys/begin", []byte("{}"), csrf)
+	begin := postJSONRequest(t, client, hs.URL+"/api/v1/account/passkeys/begin", []byte("{}"), csrf)
 	if begin.StatusCode != http.StatusOK {
-		t.Fatalf("POST /console/passkeys/begin = %d (%s)", begin.StatusCode, readBody(t, begin))
+		t.Fatalf("account passkey begin = %d (%s)", begin.StatusCode, readBody(t, begin))
 	}
 	options := decodeJSON[struct {
 		Options protocol.CredentialCreation `json:"options"`
@@ -136,9 +135,9 @@ func registerPasskey(t *testing.T, s *Server, hs *httptest.Server, client *http.
 	body := append([]byte(`{"name":`+fmt.Sprintf("%q", name)+`,"credential":`), credential...)
 	body = append(body, '}')
 
-	finish := postJSONRequest(t, client, hs.URL+"/console/passkeys/finish", body, csrf)
-	if finish.StatusCode != http.StatusOK {
-		t.Fatalf("POST /console/passkeys/finish = %d (%s)", finish.StatusCode, readBody(t, finish))
+	finish := postJSONRequest(t, client, hs.URL+"/api/v1/account/passkeys/finish", body, csrf)
+	if finish.StatusCode != http.StatusCreated {
+		t.Fatalf("account passkey finish = %d (%s)", finish.StatusCode, readBody(t, finish))
 	}
 
 	passkeys := s.identity.ListPasskeys(sessionUserID(t, s, token))
@@ -153,7 +152,7 @@ func sessionUserID(t *testing.T, s *Server, token string) tailcfg.UserID {
 	t.Helper()
 	session, err := s.identity.GetSessionByToken(token)
 	if err != nil {
-		t.Fatalf("session %q is not valid: %v", token, err)
+		t.Fatalf("session is not valid: %v", err)
 	}
 	return session.UserID
 }
@@ -184,13 +183,16 @@ func TestPasskeyRegisterAndLoginFlow(t *testing.T) {
 	authenticator := newSoftwareAuthenticator(t)
 	registered := registerPasskey(t, s, hs, client, authenticator, "Test Key")
 
-	// The console lists the label and never the credential material.
-	resp = getRequest(t, client, hs.URL+"/console/passkeys", nil)
+	// 列表只返回显示字段，旧管理页跳转到独立 Web。
+	resp = getRequest(t, client, hs.URL+"/api/v1/account/passkeys", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /console/passkeys = %d, want 200", resp.StatusCode)
+		t.Fatalf("account passkeys = %d, want 200", resp.StatusCode)
 	}
-	if page := bodyString(t, resp); !strings.Contains(page, "Test Key") || !strings.Contains(page, "navigator.credentials.create") {
-		t.Fatalf("console page does not list the passkey with its script:\n%s", page)
+	if body := bodyString(t, resp); !strings.Contains(body, "Test Key") || strings.Contains(body, "credential_id") {
+		t.Fatal("invalid public passkey list")
+	}
+	if legacy := getRequest(t, client, hs.URL+"/console/passkeys", nil); legacy.StatusCode != http.StatusFound || legacy.Header.Get("Location") != "/security" {
+		t.Fatal("old passkey page was not retired")
 	}
 
 	// A fresh browser (no session) signs in with the passkey.
@@ -306,12 +308,12 @@ func TestPasskeyDisabled(t *testing.T) {
 	}
 
 	cookie := loginLocal(t, client, hs.URL, "/console/passkeys")
-	resp = getRequest(t, client, hs.URL+"/console/passkeys", cookie)
+	resp = getRequest(t, client, hs.URL+"/api/v1/account/passkeys", cookie)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /console/passkeys = %d, want 200", resp.StatusCode)
+		t.Fatalf("account passkeys = %d, want 200", resp.StatusCode)
 	}
-	if page := bodyString(t, resp); !strings.Contains(page, "not configured") {
-		t.Fatalf("console page does not say passkeys are disabled:\n%s", page)
+	if body := bodyString(t, resp); !strings.Contains(body, `"enabled":false`) {
+		t.Fatal("account API did not report passkeys disabled")
 	}
 }
 
@@ -338,11 +340,10 @@ func TestPasskeyDeleteOnlyOwnCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	resp := postForm(t, client, hs.URL+"/console/passkeys/"+registered.ID+"/delete",
-		url.Values{"csrf": {csrfTokenFor(token)}},
-		&http.Cookie{Name: sessionCookieName, Value: token})
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("cross-account delete = %d, want 404", resp.StatusCode)
+	resp := accountRequest(t, s, http.MethodDelete, "/api/v1/account/passkeys/"+registered.ID, nil,
+		&http.Cookie{Name: sessionCookieName, Value: token}, map[string]string{"X-CSRF-Token": csrfTokenFor(token)})
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("cross-account delete = %d, want 404", resp.Code)
 	}
 	if got := s.identity.ListPasskeys(registered.UserID); len(got) != 1 {
 		t.Fatalf("Alice's passkey was removed by another account: %v", got)
@@ -350,11 +351,10 @@ func TestPasskeyDeleteOnlyOwnCredentials(t *testing.T) {
 
 	// The owner can delete it, and the deletion is audited.
 	ownerToken := sessionCookieFromJar(t, client, hs.URL)
-	resp = postForm(t, client, hs.URL+"/console/passkeys/"+registered.ID+"/delete",
-		url.Values{"csrf": {csrfTokenFor(ownerToken)}},
-		&http.Cookie{Name: sessionCookieName, Value: ownerToken})
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("owner delete = %d, want 302", resp.StatusCode)
+	resp = accountRequest(t, s, http.MethodDelete, "/api/v1/account/passkeys/"+registered.ID, nil,
+		&http.Cookie{Name: sessionCookieName, Value: ownerToken}, map[string]string{"X-CSRF-Token": csrfTokenFor(ownerToken)})
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("owner delete = %d, want 204", resp.Code)
 	}
 	if got := s.identity.ListPasskeys(registered.UserID); len(got) != 0 {
 		t.Fatalf("passkey still stored after delete: %v", got)

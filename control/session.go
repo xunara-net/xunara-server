@@ -154,7 +154,8 @@ func splitBrowserBinding(r *http.Request, name string) (id, secret string, ok bo
 	return id, secret, true
 }
 
-// sessionToken returns the raw session token presented by the browser.
+// sessionToken 遍历同名 Cookie：自助注册的父域 Cookie 可能与后续主机 Cookie 并存。
+// 已撤销或属于其他租户的旧 Cookie 不能遮蔽当前租户的新登录。
 func (server *Server) sessionToken(request *http.Request) string {
 	for _, cookie := range request.Cookies() {
 		if cookie.Name == sessionCookieName {
@@ -179,11 +180,8 @@ func (s *Server) currentSession(r *http.Request) (identity.Session, bool) {
 	return session, true
 }
 
-// csrfTokenFor derives a per-session CSRF token from the session secret.
-//
-// Deriving it from the (HttpOnly, unguessable) session token means no extra
-// server-side storage and no server-local secret, so any instance can verify
-// any other instance's token.
+// csrfTokenFor 从 HttpOnly 会话秘密派生 CSRF 令牌，不需要实例本地密钥或缓存。
+// 所有实例可验证同一令牌；会话撤销或轮换后，旧令牌不能用于新会话。
 func csrfTokenFor(token string) string {
 	sum := sha256.Sum256([]byte("xunara-csrf:" + token))
 	return hex.EncodeToString(sum[:])
