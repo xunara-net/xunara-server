@@ -52,6 +52,18 @@ func (s *Server) apiV2Router() http.Handler {
 	r.Get("/tka", s.handleAPIV2TKA)
 	r.Get("/derp", s.handleAPIV2DERP)
 	r.Get("/policy", s.handleAPIV2Policy)
+	r.Get("/policy/configuration", s.handleAPIV2PolicyConfiguration)
+	r.Post("/policy/validate", s.handleAPIV2ValidatePolicy)
+	r.Put("/policy/configuration", s.handleAPIV2PublishPolicy)
+	r.Get("/policy/history", s.handleAPIV2PolicyHistory)
+	r.Post("/policy/simulate", s.handleAPIV2SimulatePolicy)
+	r.Post("/policy/matrix", s.handleAPIV2PolicyMatrix)
+	r.Get("/dns/configuration", s.handleAPIV2DNSConfiguration)
+	r.Put("/dns/configuration", s.handleAPIV2SaveDNSConfiguration)
+	r.Get("/dns/records", s.handleAPIV2DNSRecords)
+	r.Post("/dns/records", s.handleAPIV2SaveDNSRecord)
+	r.Put("/dns/records/{id}", s.handleAPIV2SaveDNSRecord)
+	r.Delete("/dns/records/{id}", s.handleAPIV2DeleteDNSRecord)
 	r.Get("/security", s.handleAPIV2Security)
 	r.Get("/exit-nodes", s.handleAPIV2ExitNodes)
 	r.Get("/relays", s.handleAPIV2Relays)
@@ -263,7 +275,7 @@ func (s *Server) handleAPIV2Meta(w http.ResponseWriter, r *http.Request) {
 		"webhooksEnabled":       s.webhooksEnabled(),
 		"dnsProviderConfigured": s.cfg.DNSProvider != nil,
 		"certDomains":           s.certDomains,
-		"derpMapConfigured":     s.cfg.DERPMap != nil,
+		"derpMapConfigured":     s.DERPMap() != nil,
 		"derpPolicy":            string(s.cfg.DERPPolicy.Mode),
 		"derpRegionsServed":     s.derpRegionsServed(),
 		"identityTokensEnabled": s.tokens != nil,
@@ -292,11 +304,12 @@ func (s *Server) webhooksEnabled() bool {
 
 // derpRegionsServed counts the DERP regions this organization advertises.
 func (s *Server) derpRegionsServed() int {
-	if s.derpMap == nil {
+	derpMap := s.DERPMap()
+	if derpMap == nil {
 		return 0
 	}
 	served := 0
-	for _, region := range s.derpMap.Regions {
+	for _, region := range derpMap.Regions {
 		if region != nil {
 			served++
 		}

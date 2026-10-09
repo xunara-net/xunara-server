@@ -1,6 +1,7 @@
 package control
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 
 	"github.com/xunara-net/xunara-server/identity"
 	"github.com/xunara-net/xunara-server/state"
@@ -64,6 +67,8 @@ type relayEnrollRequest struct {
 	Name       string `json:"name"`
 	RegionCode string `json:"region_code"`
 	RegionName string `json:"region_name"`
+	RegionID   int    `json:"region_id,omitempty"`
+	CertName   string `json:"cert_name,omitempty"`
 	HostName   string `json:"hostname"`
 	NodeKey    string `json:"node_key"`
 	Version    string `json:"version"`
@@ -173,6 +178,7 @@ func (s *Server) handleRelayEnroll(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("enrolled from %s (region %s)", relay.HostName, relay.RegionCode))
 	s.log.Info("relay enrolled",
 		"relay", id, "hostname", relay.HostName, "region", relay.RegionCode, "visibility", relay.Visibility)
+	s.refreshRelayMapAfterChange(r.Context())
 
 	writeJSON(w, http.StatusOK, relayEnrollResponse{
 		RelayID:    id,
@@ -185,6 +191,27 @@ func (s *Server) handleRelayEnroll(w http.ResponseWriter, r *http.Request) {
 // validatedRelayFromRequest turns a validated request into a relay value. It
 // writes the protocol error and reports false when the request is invalid.
 func (s *Server) validatedRelayFromRequest(w http.ResponseWriter, req relayEnrollRequest, record state.RelayEnrollmentToken) (state.Relay, bool) {
+	if req.RegionID < 0 || req.RegionID > 65535 || req.CertName != "" && !validRelayCertPin(req.CertName) {
+		writeRelayError(w, http.StatusBadRequest, "RELAY_REQUEST_INVALID", "region_id must be 0..65535 and cert_name must be a SHA-256 certificate pin")
+		return state.Relay{}, false
+	}
+	if req.RegionID != 0 {
+		var publicKey key.NodePublic
+		if publicKey.UnmarshalText([]byte(req.NodeKey)) != nil || publicKey.IsZero() {
+			writeRelayError(w, http.StatusBadRequest, "RELAY_REQUEST_INVALID", "managed map requires a valid DERP public key")
+			return state.Relay{}, false
+		}
+		if s.cfg.DERPMap != nil && s.cfg.DERPMap.Regions[tailcfg.DERPRegionID(req.RegionID)] != nil {
+			writeRelayError(w, http.StatusConflict, "RELAY_REGION_CONFLICT", "region ID is reserved by the deployment map; choose another region ID")
+			return state.Relay{}, false
+		}
+		for _, existing := range s.store.ListRelays() {
+			if existing.RegionID == req.RegionID {
+				writeRelayError(w, http.StatusConflict, "RELAY_REGION_CONFLICT", "region ID is already enrolled; choose another region ID")
+				return state.Relay{}, false
+			}
+		}
+	}
 	host := strings.TrimSpace(req.HostName)
 	if !validRelayHostname(host) {
 		writeRelayError(w, http.StatusBadRequest, "RELAY_REQUEST_INVALID", "hostname must be a DNS name or IP address without a scheme")
@@ -208,6 +235,10 @@ func (s *Server) validatedRelayFromRequest(w http.ResponseWriter, req relayEnrol
 		writeRelayError(w, http.StatusBadRequest, "RELAY_REQUEST_INVALID", "version is too long")
 		return state.Relay{}, false
 	}
+	if len(req.RegionCode) > maxRelayVersionBytes || len(req.RegionName) > maxRelayNameBytes {
+		writeRelayError(w, http.StatusBadRequest, "RELAY_REQUEST_INVALID", "region code or name is too long")
+		return state.Relay{}, false
+	}
 	visibility := strings.TrimSpace(req.Visibility)
 	if visibility == "" {
 		// The operator's token may pin the visibility; otherwise a relay is
@@ -219,6 +250,11 @@ func (s *Server) validatedRelayFromRequest(w http.ResponseWriter, req relayEnrol
 	}
 	if !state.ValidRelayVisibility(visibility) {
 		writeRelayError(w, http.StatusBadRequest, "RELAY_REQUEST_INVALID", "visibility is not supported")
+		return state.Relay{}, false
+	}
+	// 接入凭据只授权签发时指定的范围，服务身份不能自行升级为公共中继。
+	if record.Visibility != "" && visibility != record.Visibility {
+		writeRelayError(w, http.StatusForbidden, "RELAY_VISIBILITY_FORBIDDEN", "visibility must match the enrollment token")
 		return state.Relay{}, false
 	}
 	if !validRelayPort(req.DERPPort) || !validRelayPort(req.STUNPort) {
@@ -233,11 +269,21 @@ func (s *Server) validatedRelayFromRequest(w http.ResponseWriter, req relayEnrol
 
 	return state.Relay{
 		Name: name, HostName: host,
+		RegionID: req.RegionID, CertName: req.CertName,
 		RegionCode: strings.TrimSpace(req.RegionCode), RegionName: strings.TrimSpace(req.RegionName),
 		NodeKey: nodeKey, Version: req.Version,
 		DERPPort: req.DERPPort, STUNPort: req.STUNPort,
 		Visibility: visibility, DesiredState: state.RelayStateOnline,
 	}, true
+}
+
+func validRelayCertPin(value string) bool {
+	pin, found := strings.CutPrefix(value, "sha256-raw:")
+	if !found || len(pin) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(pin)
+	return err == nil
 }
 
 // handleRelayHeartbeat implements POST /api/relay/v1/heartbeat.
@@ -290,6 +336,7 @@ func (s *Server) handleRelayHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "relay token is unknown")
 		return
 	}
+	s.refreshRelayMapAfterChange(r.Context())
 	writeJSON(w, http.StatusOK, relayRemoteConfig{
 		DesiredState:   relay.DesiredState,
 		ConfigVersion:  strconv.FormatUint(relay.ConfigVersion, 10),
@@ -322,8 +369,13 @@ func validRelayHostname(host string) bool {
 	// A DNS name: at least one dot or a single label, labels bounded to 63
 	// characters by DNS itself.
 	for _, label := range strings.Split(host, ".") {
-		if label == "" || len(label) > 63 {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
 			return false
+		}
+		for _, character := range label {
+			if character != '-' && !(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') && !(character >= '0' && character <= '9') {
+				return false
+			}
 		}
 	}
 	return true
@@ -333,6 +385,8 @@ func validRelayPort(port int) bool { return port >= 0 && port <= 65535 }
 
 // relayView is the JSON shape of an enrolled relay.
 type relayView struct {
+	RegionID         int    `json:"regionId"`
+	CertName         string `json:"certName,omitempty"`
 	ID               string `json:"id"`
 	Name             string `json:"name"`
 	Hostname         string `json:"hostname,omitempty"`
@@ -361,6 +415,7 @@ type relayView struct {
 // what clients pin, not a secret.
 func relayViewFor(relay state.Relay, now time.Time) relayView {
 	view := relayView{
+		RegionID: relay.RegionID, CertName: relay.CertName,
 		ID: relay.ID, Name: relay.Name, Hostname: relay.HostName,
 		RegionCode: relay.RegionCode, RegionName: relay.RegionName,
 		NodeKey: relay.NodeKey, Version: relay.Version,
@@ -491,12 +546,28 @@ func (s *Server) handleAPIV2RelaysEnrolled(w http.ResponseWriter, r *http.Reques
 	if _, ok := s.requireScope(w, r, identity.ScopeRead); !ok {
 		return
 	}
-	views := s.relayViews()
+	store, ok := s.store.(*state.SQLiteStore)
+	if !ok {
+		s.writeNetworkError(w, errors.New("relay management requires a durable store"))
+		return
+	}
+	relays, err := store.ListRelaysContext(r.Context())
+	if err != nil {
+		s.writeNetworkError(w, err)
+		return
+	}
+	views := make([]relayView, 0, len(relays))
+	for _, relay := range relays {
+		views = append(views, relayViewFor(relay, time.Now()))
+	}
 	used, limit := len(views), s.Plan().MaxRelays
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": views,
-		"used":  used,
-		"limit": limit,
+		"items":       views,
+		"used":        used,
+		"limit":       limit,
+		"csrf_token":  csrfTokenFor(s.accountSessionToken(r)),
+		"control_url": s.cfg.ServerURL,
 	})
 }
 
@@ -517,12 +588,16 @@ func (s *Server) handleAPIV2Relay(w http.ResponseWriter, r *http.Request) {
 // /api/v2/relays/enroll-tokens. The secret is returned once and never stored
 // in plaintext, so a lost token must be replaced rather than re-read.
 func (s *Server) handleAPIV2CreateRelayEnrollToken(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireNetworkWriter(w, r)
 	if !ok {
 		return
 	}
 	var req apiRelayEnrollTokenCreateRequest
 	if !decodeAPIBody(w, r, &req) {
+		return
+	}
+	if req.Visibility == state.RelayVisibilityPublic {
+		writeAPIError(w, http.StatusForbidden, "public relay enrollment requires platform administration")
 		return
 	}
 
@@ -551,18 +626,28 @@ func (s *Server) handleAPIV2RelayEnrollTokens(w http.ResponseWriter, r *http.Req
 		return
 	}
 	now := time.Now().UTC()
-	tokens := s.store.ListRelayEnrollmentTokens()
+	store, ok := s.store.(*state.SQLiteStore)
+	if !ok {
+		s.writeNetworkError(w, errors.New("relay management requires a durable store"))
+		return
+	}
+	tokens, err := store.ListRelayEnrollmentTokensContext(r.Context())
+	if err != nil {
+		s.writeNetworkError(w, err)
+		return
+	}
 	items := make([]relayEnrollTokenView, 0, len(tokens))
 	for _, tok := range tokens {
 		items = append(items, relayEnrollTokenViewFor(tok, now))
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // handleAPIV2DeleteRelayEnrollToken implements DELETE
 // /api/v2/relays/enroll-tokens/{id}.
 func (s *Server) handleAPIV2DeleteRelayEnrollToken(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireNetworkWriter(w, r)
 	if !ok {
 		return
 	}
@@ -590,7 +675,7 @@ type apiRelayConfigRequest struct {
 
 // handleAPIV2UpdateRelay implements PATCH /api/v2/relays/{id}.
 func (s *Server) handleAPIV2UpdateRelay(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireNetworkWriter(w, r)
 	if !ok {
 		return
 	}
@@ -629,13 +714,14 @@ func (s *Server) handleAPIV2UpdateRelay(w http.ResponseWriter, r *http.Request) 
 	s.audit(principal.actor(), identity.AuditRelayUpdated, "relay:"+id,
 		"desired state "+relay.DesiredState)
 	s.log.Info("relay updated", "relay", id, "state", relay.DesiredState, "actor", principal.actor())
+	s.refreshRelayMapAfterChange(r.Context())
 	writeJSON(w, http.StatusOK, relayViewFor(relay, time.Now().UTC()))
 }
 
 // handleAPIV2DeleteRelay implements DELETE /api/v2/relays/{id}. Deleting a
 // relay removes its credential; a relay that heartbeats afterwards is rejected.
 func (s *Server) handleAPIV2DeleteRelay(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireNetworkWriter(w, r)
 	if !ok {
 		return
 	}
@@ -651,5 +737,6 @@ func (s *Server) handleAPIV2DeleteRelay(w http.ResponseWriter, r *http.Request) 
 	}
 	s.audit(principal.actor(), identity.AuditRelayDeleted, "relay:"+id, "deleted relay "+relay.Name)
 	s.log.Info("relay deleted", "relay", id, "actor", principal.actor())
+	s.refreshRelayMapAfterChange(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }

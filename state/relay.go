@@ -93,6 +93,8 @@ type Relay struct {
 	HostName   string
 	RegionCode string
 	RegionName string
+	RegionID   int
+	CertName   string
 	// NodeKey is the relay's DERP node public key ("nodekey:...").
 	NodeKey string
 	// Version is the relay build reported at enrollment, refreshed by

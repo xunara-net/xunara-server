@@ -93,10 +93,11 @@ func (s *Server) derpStatus() (derpStatusView, []derpNodeView) {
 		nodeViews = append(nodeViews, placement)
 	}
 
-	served := s.derpMap
+	served := s.DERPMap()
 	if served == nil {
 		return view, nodeViews
 	}
+	view.MapConfigured = true
 	ids := make([]tailcfg.DERPRegionID, 0, len(served.Regions))
 	for id := range served.Regions {
 		ids = append(ids, id)

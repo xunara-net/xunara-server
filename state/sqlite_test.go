@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -23,6 +24,23 @@ func openTestSQLite(t *testing.T, path string) *SQLiteStore {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// 历史测试使用当前库构造业务数据，再移除新增结构，不能仅倒改 user_version。
+func downgradeSQLiteTestVersion(t *testing.T, store *SQLiteStore, version int) {
+	t.Helper()
+	for _, statement := range []string{
+		"DROP TABLE network_documents", "DROP TABLE network_document_history",
+		"ALTER TABLE dns_records DROP COLUMN revision", "DROP INDEX idx_relays_region_id",
+		"ALTER TABLE relays DROP COLUMN region_id", "ALTER TABLE relays DROP COLUMN cert_name",
+	} {
+		if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.db.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSQLiteStoreConformance(t *testing.T) {
@@ -183,9 +201,7 @@ func TestSQLiteMigratesV7ToV8(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "ALTER TABLE nodes DROP COLUMN nl_key"); err != nil {
 		t.Fatalf("dropping nl_key: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 7"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 7)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -227,9 +243,7 @@ func TestSQLiteMigratesV8ToV9(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE node_device_attrs"); err != nil {
 		t.Fatalf("dropping node_device_attrs: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 8"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 8)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -266,9 +280,7 @@ func TestSQLiteMigratesV9ToV10(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE node_services"); err != nil {
 		t.Fatalf("dropping node_services: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 9"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 9)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -304,9 +316,7 @@ func TestSQLiteMigratesV10ToV11(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE flux_transfers"); err != nil {
 		t.Fatalf("dropping flux_transfers: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 10"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 10)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -345,9 +355,7 @@ func TestSQLiteMigratesV12ToV13(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE rate_limits"); err != nil {
 		t.Fatalf("dropping rate_limits: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 12"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 12)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -380,9 +388,7 @@ func TestSQLiteMigratesV13ToV14(t *testing.T) {
 			t.Fatalf("dropping %s: %v", table, err)
 		}
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 13"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 13)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -417,9 +423,7 @@ func TestSQLiteMigratesV15ToV16(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE node_service_visibility"); err != nil {
 		t.Fatalf("dropping node_service_visibility: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 15"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 15)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -458,9 +462,7 @@ func TestSQLiteMigratesV16ToV17(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE node_service_shared"); err != nil {
 		t.Fatalf("dropping node_service_shared: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 16"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 16)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -505,9 +507,7 @@ func TestSQLiteMigratesV17ToV18(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE node_service_acl_visibility"); err != nil {
 		t.Fatalf("dropping node_service_acl_visibility: %v", err)
 	}
-	if _, err := first.db.ExecContext(ctx, "PRAGMA user_version = 17"); err != nil {
-		t.Fatalf("downgrading schema version: %v", err)
-	}
+	downgradeSQLiteTestVersion(t, first, 17)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

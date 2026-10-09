@@ -2,97 +2,137 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"os"
 	"time"
 
+	"github.com/tailscale/hujson"
 	"tailscale.com/tailcfg"
 
 	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/networkconfig"
 	"github.com/xunara-net/xunara-server/policy"
 )
 
-// policyWatchInterval is how often the server checks the policy file for
-// changes, so an edited ACL takes effect without a restart.
 const policyWatchInterval = 2 * time.Second
+const legacyDefaultPolicy = `{"acls":[{"action":"accept","src":["*"],"dst":["*:*"]}]}`
 
-// loadPolicy reads, parses and compiles the configured policy document,
-// replacing the engine the server compiles netmaps from.
-//
-// A broken document is never applied: the previous policy stays in force and
-// the error is returned, because silently falling back to allow-all would open
-// the tailnet up.
-func (s *Server) loadPolicy() error {
-	if s.cfg.PolicyPath == "" {
+type policyConfiguration struct {
+	Revision uint64
+	Source   string
+	Content  string
+	JSON     json.RawMessage
+}
+
+func contentHash(content string) string {
+	hash := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(hash[:])
+}
+
+func (server *Server) policyOptions() policy.Options {
+	return policy.Options{Domain: server.cfg.Domain, LoginName: server.userLoginName, ServerURL: server.cfg.ServerURL}
+}
+
+func (server *Server) loadPolicy() error {
+	server.networkMu.Lock()
+	defer server.networkMu.Unlock()
+	return server.loadPolicyLocked(context.Background(), true)
+}
+
+// 数据库发布后不再读取文件作为权威；读取/编译失败绝不替换为 allow-all。
+func (server *Server) loadPolicyLocked(ctx context.Context, force ...bool) error {
+	document, found, err := server.networkConfig.Get(ctx, networkconfig.Policy)
+	if err != nil {
+		return err
+	}
+	configuration := &policyConfiguration{Source: "default", Content: legacyDefaultPolicy}
+	if !found && server.policyConfig.Load() != nil && server.policyConfig.Load().Source == "database" {
+		return networkconfig.ErrNotFound
+	}
+	if found {
+		configuration.Revision = document.Revision
+		configuration.Source = "database"
+		configuration.Content = document.Content
+	} else if server.cfg.PolicyPath != "" {
+		raw, err := os.ReadFile(server.cfg.PolicyPath)
+		if err != nil {
+			return err
+		}
+		configuration.Source = "file"
+		configuration.Content = string(raw)
+	}
+	forceFileReload := len(force) != 0 && force[0] && configuration.Source == "file"
+	if current := server.policyConfig.Load(); !forceFileReload && current != nil && configuration.Revision == current.Revision && configuration.Source == current.Source && configuration.Content == current.Content {
 		return nil
 	}
-
-	doc, err := policy.Load(s.cfg.PolicyPath)
+	var parsed *policy.Document
+	if found {
+		parsed, configuration.JSON, err = policy.ParseManaged([]byte(configuration.Content))
+	} else {
+		parsed, err = policy.ParseString(configuration.Content)
+		if err == nil {
+			configuration.JSON, err = hujson.Standardize([]byte(configuration.Content))
+		}
+	}
 	if err != nil {
 		return err
 	}
-
-	engine, err := policy.NewEngine(doc, policy.Options{
-		Domain:    s.cfg.Domain,
-		LoginName: s.userLoginName,
-		ServerURL: s.cfg.ServerURL,
-	})
+	engine, err := policy.NewEngine(parsed, server.policyOptions())
 	if err != nil {
 		return err
 	}
-
-	for _, warning := range engine.Warnings() {
-		s.log.Warn("policy", "warning", warning)
+	if configuration.Source != "default" {
+		if !found {
+			if err := server.identity.ClearSSHCheckAuth(); err != nil {
+				return err
+			}
+		}
+		server.policy.Store(engine)
+	} else {
+		server.policy.Store(nil)
 	}
-	s.log.Info("policy loaded",
-		"path", s.cfg.PolicyPath,
-		"rules", engine.RuleCount(),
-		"unsupported_fields", doc.Unsupported)
-
-	s.policy.Store(engine)
-
-	// Remembered SSH check approvals belong to the rules that granted them;
-	// a policy swap must not silently keep them alive.
-	if err := s.identity.ClearSSHCheckAuth(); err != nil {
-		s.log.Warn("clearing ssh check approvals", "err", err)
-	}
+	server.policyConfig.Store(configuration)
 	return nil
 }
 
-// runPolicyWatcher reloads the policy file when it changes on disk.
-func (s *Server) runPolicyWatcher(ctx context.Context) {
-	if s.cfg.PolicyPath == "" {
-		return
+func (server *Server) refreshManagedConfiguration(ctx context.Context) error {
+	server.networkMu.Lock()
+	defer server.networkMu.Unlock()
+	previousPolicy, previousDNS := server.policyConfig.Load(), server.dnsConfig.Load()
+	result := errors.Join(server.loadPolicyLocked(ctx), server.loadDNSConfiguration(ctx), server.refreshRelayMap(ctx))
+	if previousPolicy != server.policyConfig.Load() || previousDNS != server.dnsConfig.Load() {
+		server.notifyWatchers()
 	}
+	return result
+}
 
+func (server *Server) runPolicyWatcher(ctx context.Context) {
 	ticker := time.NewTicker(policyWatchInterval)
 	defer ticker.Stop()
-
-	last := policyModTime(s.cfg.PolicyPath)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			mod := policyModTime(s.cfg.PolicyPath)
-			if mod.IsZero() || mod.Equal(last) {
+			previousPolicy := server.policyConfig.Load()
+			previousDNS := server.dnsConfig.Load()
+			if err := server.refreshManagedConfiguration(ctx); err != nil {
+				server.log.Error("configuration refresh failed; keeping last valid snapshots for failed components", "err", err)
 				continue
 			}
-			last = mod
-
-			if err := s.loadPolicy(); err != nil {
-				s.log.Error("reloading policy failed; keeping the previous policy",
-					"path", s.cfg.PolicyPath, "err", err)
-				continue
+			if server.policyConfig.Load() != previousPolicy || server.dnsConfig.Load() != previousDNS {
+				if current := server.policyConfig.Load(); current.Source == "file" && current != previousPolicy {
+					server.audit("system", identity.AuditPolicyReloaded, "policy", "reloaded deployment policy")
+				}
+				server.notifyWatchers()
 			}
-			s.audit("system", identity.AuditPolicyReloaded, "policy:"+s.cfg.PolicyPath,
-				"reloaded after the file changed on disk")
-			s.notifyWatchers()
 		}
 	}
 }
 
-// policyModTime returns the file's modification time, or the zero time when it
-// cannot be read.
 func policyModTime(path string) time.Time {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -101,11 +141,6 @@ func policyModTime(path string) time.Time {
 	return info.ModTime()
 }
 
-// userLoginName maps a user to the login name ACL selectors are written with.
-//
-// It reads the trust plane so that renaming a user also renames what selectors
-// like "user:alice@example.com" match, and falls back to the default profile
-// for users the identity store does not know.
-func (s *Server) userLoginName(id tailcfg.UserID) string {
-	return s.UserProfile(id).LoginName
+func (server *Server) userLoginName(userID tailcfg.UserID) string {
+	return server.UserProfile(userID).LoginName
 }

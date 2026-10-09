@@ -140,6 +140,9 @@ func (ns *noiseServer) serveStreamingMap(ctx context.Context, w http.ResponseWri
 			if sess.syncDNS(msg, s.dnsConfigFor(self)) {
 				changed = true
 			}
+			if sess.syncDERP(msg, s.DERPMap()) {
+				changed = true
+			}
 			if sess.syncPacketFilter(msg, s.packetFilterFor(self), req.Version) {
 				changed = true
 			}
@@ -246,7 +249,7 @@ func (s *Server) mapperConfigFor(shares *shareNetmap) mapper.Config {
 		Resolvers:      s.resolvers,
 		Routes:         s.dnsRoutes,
 		CertDomainsFor: s.certDomainsFor,
-		DERPMap:        s.derpMap,
+		DERPMap:        s.DERPMap(),
 		FilterFor:      s.packetFilterFor,
 		UserProfile:    s.UserProfile,
 		SSHPolicyFor:   s.sshPolicyFor,
@@ -254,6 +257,13 @@ func (s *Server) mapperConfigFor(shares *shareNetmap) mapper.Config {
 		ClientVersion:  s.clientVersionFor(),
 		TKAInfo:        s.tkaInfo(),
 		UnsignedPeers:  s.unsignedPeers(s.store.ListNodes()),
+	}
+	if runtime := s.dnsConfig.Load(); runtime != nil {
+		cfg.Resolvers = runtime.Resolvers
+		cfg.Routes = runtime.Routes
+		cfg.SearchDomains = runtime.Settings.SearchDomains
+		cfg.DisableMagicDNS = !runtime.Settings.MagicDNS
+		cfg.ExplicitDNS = runtime.Revision != 0
 	}
 	if shares != nil {
 		cfg.PeerShare = shares.peers
@@ -486,7 +496,7 @@ func (s *Server) recordMapRequest(node state.Node, req tailcfg.MapRequest) state
 // singleDERPRegion returns the served DERP region when the tailnet has exactly
 // one, so nodes can be homed without a latency hunt.
 func (s *Server) singleDERPRegion() (tailcfg.DERPRegionID, bool) {
-	m := s.derpMap
+	m := s.DERPMap()
 	if m == nil || len(m.Regions) != 1 {
 		return 0, false
 	}
@@ -500,12 +510,12 @@ func (s *Server) singleDERPRegion() (tailcfg.DERPRegionID, bool) {
 // organization serves. A region the policy filtered out is not known, so it is
 // neither adopted as a home region nor admitted to DERP.
 func (s *Server) derpRegionKnown(region tailcfg.DERPRegionID) bool {
-	m := s.derpMap
-	if m == nil {
+	derpMap := s.DERPMap()
+	if derpMap == nil {
 		return false
 	}
-	r, ok := m.Regions[region]
-	return ok && r != nil
+	configuredRegion, ok := derpMap.Regions[region]
+	return ok && configuredRegion != nil
 }
 
 // writeMapResponse writes a length-prefixed (optionally zstd-compressed)

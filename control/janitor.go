@@ -299,6 +299,10 @@ func (s *Server) runConfigWatcher(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if rev := s.store.ConfigRevision(); rev != last {
+				if err := s.refreshManagedConfiguration(ctx); err != nil {
+					s.log.Error("refreshing committed network configuration", "err", err)
+					continue
+				}
 				last = rev
 				s.notifyWatchers()
 			}

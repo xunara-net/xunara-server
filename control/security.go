@@ -194,7 +194,7 @@ func (s *Server) securityView() securityView {
 	}
 	view.Webhooks.Enabled = s.webhooksEnabled()
 
-	view.DERP.MapConfigured = s.cfg.DERPMap != nil
+	view.DERP.MapConfigured = s.DERPMap() != nil
 	view.DERP.Policy = string(s.cfg.DERPPolicy.Mode)
 	view.DERP.RegionsServed = s.derpRegionsServed()
 

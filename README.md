@@ -19,11 +19,13 @@ xunara-web（用户控制台）   xunara-admin（平台后台）   CLI / SDK / �
 ## 能力
 
 - **官方客户端兼容**：TS2021 / Noise / Map / DERP 协调，官方客户端可直接接入。
-- **多租户**：组织、成员、角色（owner / admin / member / viewer）、单租户部署兼容。
+- **多租户**：组织、成员、角色（owner / admin / member）、单租户部署兼容。
 - **用户与身份**：本地密码登录、邀请/开放注册、OIDC/OAuth、Passkey、会话管理、
   自助资料与密码修改、API Key、身份令牌。
 - **设备与网络**：设备注册与审批、Tailnet 网段分配、子网路由、Exit Node、
   MagicDNS、DERP 策略、共享与访问策略。
+- **网络控制台**：持久 ACL / Grants 发布、编译器模拟与版本恢复、DNS 设置与地址
+  记录、租户私有 DERP 地区与 TLS pin；[实现与升级边界](docs/network-console.md)。
 - **商业化**：套餐目录（内置 free/pro/business 或 `-plans` 外置）、设备/成员/
   密钥/路由配额、租户网段自定义与冲突检测、平台运营 API。
 - **可观测与审计**：结构化日志、`/health`、`/version`、审计日志、Webhook、

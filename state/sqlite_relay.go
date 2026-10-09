@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -12,7 +13,7 @@ import (
 
 const relayColumns = `id, name, hostname, region_code, region_name, node_key, version,
 	derp_port, stun_port, visibility, desired_state, config_version, bandwidth_limit,
-	healthy, uptime_seconds, connected_clients, bytes_in, bytes_out, last_seen, created, created_by`
+	healthy, uptime_seconds, connected_clients, bytes_in, bytes_out, last_seen, created, created_by, region_id, cert_name`
 
 const relayEnrollmentColumns = `id, name, secret_hash, visibility, expiry, used_at, created, created_by`
 
@@ -78,22 +79,27 @@ func (s *SQLiteStore) RelayEnrollmentTokenByID(id string) (RelayEnrollmentToken,
 
 // ListRelayEnrollmentTokens implements [RelayStore].
 func (s *SQLiteStore) ListRelayEnrollmentTokens() []RelayEnrollmentToken {
-	rows, err := s.db.QueryContext(context.Background(),
+	tokens, _ := s.ListRelayEnrollmentTokensContext(context.Background())
+	return tokens
+}
+
+func (s *SQLiteStore) ListRelayEnrollmentTokensContext(ctx context.Context) ([]RelayEnrollmentToken, error) {
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+relayEnrollmentColumns+` FROM relay_enrollment_tokens ORDER BY created DESC, id DESC`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
-	var out []RelayEnrollmentToken
+	out := make([]RelayEnrollmentToken, 0)
 	for rows.Next() {
 		tok, err := scanRelayEnrollmentToken(rows)
 		if err != nil {
-			return out
+			return nil, err
 		}
 		out = append(out, tok)
 	}
-	return out
+	return out, rows.Err()
 }
 
 // EnrollRelay 把令牌、配额和身份绑定在一个写事务内；跨连接竞争由 BEGIN IMMEDIATE 串行化。
@@ -204,16 +210,20 @@ type relaySQLExecutor interface {
 func insertRelay(ctx context.Context, executor relaySQLExecutor, relay Relay, token string) error {
 	_, err := executor.ExecContext(ctx, `
 		INSERT INTO relays (`+relayColumns+`, token_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		relay.ID, relay.Name, relay.HostName, relay.RegionCode, relay.RegionName,
 		relay.NodeKey, relay.Version, relay.DERPPort, relay.STUNPort,
 		relayVisibilityOrPrivate(relay.Visibility), relay.DesiredState, int64(relay.ConfigVersion),
 		relay.BandwidthLimit, boolToInt(relay.Healthy), relay.UptimeSeconds,
 		relay.ConnectedClients, relay.BytesIn, relay.BytesOut,
 		nullableTimePtr(relay.LastSeen), relay.Created.UnixNano(), relay.CreatedBy,
+		relay.RegionID, relay.CertName,
 		RelaySecretHash(token))
 	if err != nil {
 		if isUniqueViolation(err) {
+			if strings.Contains(err.Error(), "relays.region_id") {
+				return ErrRelayAlreadyEnrolled
+			}
 			return ErrRelayTokenExists
 		}
 		return fmt.Errorf("state: storing relay %s: %w", relay.ID, err)
@@ -267,22 +277,27 @@ func (s *SQLiteStore) relayByNodeKeyLocked(ctx context.Context, nodeKey string) 
 
 // ListRelays implements [RelayStore].
 func (s *SQLiteStore) ListRelays() []Relay {
-	rows, err := s.db.QueryContext(context.Background(),
+	relays, _ := s.ListRelaysContext(context.Background())
+	return relays
+}
+
+func (s *SQLiteStore) ListRelaysContext(ctx context.Context) ([]Relay, error) {
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+relayColumns+` FROM relays ORDER BY created ASC, id ASC`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
-	var out []Relay
+	out := make([]Relay, 0)
 	for rows.Next() {
 		relay, err := scanRelay(rows)
 		if err != nil {
-			return out
+			return nil, err
 		}
 		out = append(out, relay)
 	}
-	return out
+	return out, rows.Err()
 }
 
 // UpdateRelayHeartbeat implements [RelayStore].
@@ -363,6 +378,7 @@ func scanRelay(rows interface{ Scan(...any) error }) (Relay, error) {
 		&relay.Visibility, &relay.DesiredState, &configVersion, &relay.BandwidthLimit,
 		&healthy, &relay.UptimeSeconds, &relay.ConnectedClients,
 		&relay.BytesIn, &relay.BytesOut, &lastSeen, &created, &relay.CreatedBy,
+		&relay.RegionID, &relay.CertName,
 	); err != nil {
 		return Relay{}, err
 	}

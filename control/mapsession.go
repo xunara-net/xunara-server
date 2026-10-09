@@ -19,6 +19,7 @@ import (
 // frame) and the monotonic Seq that a client echoes back in
 // MapRequest.MapSessionSeq when it reattaches.
 type mapSession struct {
+	derp   string
 	handle string
 	seq    int64
 
@@ -63,6 +64,7 @@ func newMapSession() (*mapSession, error) {
 // netmap and the handle, so the client can tell a resumed session from a fresh
 // one.
 func (s *mapSession) initial(resp *tailcfg.MapResponse) {
+	s.derp = fingerprintDERP(resp.DERPMap)
 	s.record(resp.Node, peersOf(resp))
 	s.dns = fingerprintDNS(resp.DNSConfig)
 	s.filter = fingerprintFilter(filterFromResponse(resp))
@@ -163,6 +165,21 @@ func (s *mapSession) syncDNS(resp *tailcfg.MapResponse, dns *tailcfg.DNSConfig) 
 	}
 	s.dns = fp
 	resp.DNSConfig = dns
+	return true
+}
+
+func fingerprintDERP(derpMap *tailcfg.DERPMap) string {
+	encoded, _ := json.Marshal(derpMap)
+	return string(encoded)
+}
+
+func (session *mapSession) syncDERP(response *tailcfg.MapResponse, derpMap *tailcfg.DERPMap) bool {
+	fingerprint := fingerprintDERP(derpMap)
+	if fingerprint == session.derp {
+		return false
+	}
+	session.derp = fingerprint
+	response.DERPMap = derpMap
 	return true
 }
 

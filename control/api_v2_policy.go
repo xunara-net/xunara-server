@@ -6,13 +6,10 @@ import (
 
 	"github.com/xunara-net/xunara-server/identity"
 	"github.com/xunara-net/xunara-server/policy"
+	"github.com/xunara-net/xunara-server/state"
 )
 
-// This file is the read-only policy (Xunara Warden) management surface
-// (PROJECT_SPEC section 34): what the ACL document in force says, and whether
-// its own tests pass against the current machines. The document is loaded from
-// disk and reloaded by the watcher; nothing here can change it, and a bad
-// document never turns into a 5xx (the view reports it instead).
+// 兼容只读策略摘要；托管配置与文件配置共用正在生效的编译引擎。
 
 // policyACLView is one ACL row as written in the document.
 type policyACLView struct {
@@ -114,7 +111,7 @@ func (s *Server) policyView() policyView {
 		NodeAttrs:   []policyNodeAttrView{},
 		Tests:       policyTestsView{Results: []policyTestResultView{}},
 	}
-	if s.cfg.PolicyPath != "" {
+	if configuration := s.policyConfig.Load(); s.cfg.PolicyPath != "" && (configuration == nil || configuration.Source != "database") {
 		if _, err := policy.Load(s.cfg.PolicyPath); err != nil {
 			view.LoadError = err.Error()
 		}
@@ -188,8 +185,12 @@ func (s *Server) policyView() policyView {
 // tailnet with no machines yet reports Ran=false instead of misleading
 // failures.
 func (s *Server) runPolicyTests(engine *policy.Engine, total int) policyTestsView {
+	return s.runPolicyTestsForNodes(engine, total, s.store.ListNodes())
+}
+
+func (s *Server) runPolicyTestsForNodes(engine *policy.Engine, total int, nodes []state.Node) policyTestsView {
 	view := policyTestsView{Total: total, Results: []policyTestResultView{}}
-	switch nodes := s.store.ListNodes(); {
+	switch {
 	case total == 0:
 		view.Reason = "the document declares no tests"
 	case len(nodes) == 0:

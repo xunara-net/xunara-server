@@ -23,6 +23,7 @@ import (
 
 	"github.com/xunara-net/xunara-server/identity"
 	"github.com/xunara-net/xunara-server/idtoken"
+	"github.com/xunara-net/xunara-server/networkconfig"
 	"github.com/xunara-net/xunara-server/plan"
 	"github.com/xunara-net/xunara-server/policy"
 	"github.com/xunara-net/xunara-server/state"
@@ -270,6 +271,11 @@ type Server struct {
 	// policy holds the compiled ACL policy, or nil when the tailnet has none.
 	policy atomic.Pointer[policy.Engine]
 
+	networkMu     sync.Mutex
+	networkConfig *networkconfig.SQLiteStore
+	policyConfig  atomic.Pointer[policyConfiguration]
+	dnsConfig     atomic.Pointer[dnsRuntimeConfig]
+
 	// webhooks delivers audit events, or nil when no endpoint is configured.
 	webhooks *webhook.Dispatcher
 
@@ -304,7 +310,9 @@ type Server struct {
 
 	// derpMap is the DERP map served to this organization's clients after
 	// DERPPolicy is applied; nil when there is no map to advertise.
-	derpMap *tailcfg.DERPMap
+	derpMap     *tailcfg.DERPMap
+	managedDERP atomic.Pointer[derpMapSnapshot]
+	relayMapMu  sync.Mutex
 
 	// derpPolicy is the validated configuration policy used by the DERP
 	// admission controller.
@@ -495,6 +503,7 @@ func New(cfg Config) (*Server, error) {
 		store:             store,
 		closer:            store,
 		identity:          identityStore,
+		networkConfig:     networkconfig.NewSQLiteStore(store.DB()),
 		providers:         providers,
 		providerRedirects: redirects,
 		passkeys:          passkeys,
@@ -544,6 +553,14 @@ func New(cfg Config) (*Server, error) {
 	}
 	srv.derpMap = derpMap
 	srv.derpPolicy = cfg.DERPPolicy
+	if err := srv.refreshRelayMap(context.Background()); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("control: loading managed relay map: %w", err)
+	}
+	if err := srv.loadDNSConfiguration(context.Background()); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("control: loading DNS configuration: %w", err)
+	}
 
 	// A broken policy file must stop the server from starting: falling back to
 	// allow-all would silently open the tailnet.
@@ -756,7 +773,12 @@ func (s *Server) NoisePublicKey() key.MachinePublic { return s.noiseKey.Public()
 // DERPMap returns the DERP map served to this organization's clients, after
 // the organization's DERP policy is applied. It is nil when there is nothing
 // to advertise.
-func (s *Server) DERPMap() *tailcfg.DERPMap { return s.derpMap }
+func (s *Server) DERPMap() *tailcfg.DERPMap {
+	if snapshot := s.managedDERP.Load(); snapshot != nil {
+		return snapshot.Map
+	}
+	return s.derpMap
+}
 
 // Handler returns the public HTTP router: the endpoints reachable before a
 // Noise session exists.

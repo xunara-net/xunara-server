@@ -128,7 +128,7 @@ func (s *Server) apiCapabilities() []string {
 	if s.webhooksEnabled() {
 		caps = append(caps, "webhooks")
 	}
-	if s.cfg.DERPMap != nil {
+	if s.DERPMap() != nil {
 		caps = append(caps, "derp")
 	}
 	if s.cfg.DNSProvider != nil {

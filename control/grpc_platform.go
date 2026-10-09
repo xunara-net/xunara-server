@@ -200,7 +200,7 @@ func (g *grpcPlatformServer) GetMeta(ctx context.Context, _ *xunarav2.GetMetaReq
 		WebhooksEnabled:       s.webhooksEnabled(),
 		DnsProviderConfigured: s.cfg.DNSProvider != nil,
 		CertDomains:           slices.Clone(s.certDomains),
-		DerpMapConfigured:     s.cfg.DERPMap != nil,
+		DerpMapConfigured:     s.DERPMap() != nil,
 		DerpPolicy:            string(s.cfg.DERPPolicy.Mode),
 		DerpRegionsServed:     uint32(s.derpRegionsServed()),
 		IdentityTokensEnabled: s.tokens != nil,

@@ -281,7 +281,7 @@ func TestRelayEnrollValidation(t *testing.T) {
 func TestRelayPlanLimit(t *testing.T) {
 	s := newTestServer(t)
 	s.planSource = func(string) plan.Plan {
-		return plan.Plan{ID: "free", Name: "Free", MaxRelays: 1}
+		return plan.Plan{ID: "limited-relay", Name: "Limited relay", MaxRelays: 1, AllowAPI: true}
 	}
 	_, apiKey := seedAPIKey(t, s, identity.ScopeRead, identity.ScopeWrite)
 	hs := newTestHTTPServer(t, s)

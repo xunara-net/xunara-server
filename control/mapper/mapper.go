@@ -50,7 +50,10 @@ type Config struct {
 	Domain string
 
 	// Resolvers are the tailnet's global DNS resolvers, in preference order.
-	Resolvers []*dnstype.Resolver
+	Resolvers       []*dnstype.Resolver
+	SearchDomains   []string
+	DisableMagicDNS bool
+	ExplicitDNS     bool
 
 	// Routes is the split-DNS table: DNS suffix to the resolvers that answer
 	// it.
@@ -371,7 +374,7 @@ func certDomainsFor(cfg Config, self state.Node) []string {
 func DNSConfig(cfg Config, self state.Node) *tailcfg.DNSConfig {
 	domain := strings.Trim(cfg.Domain, ".")
 	certDomains := dedupeDomains(certDomainsFor(cfg, self))
-	if domain == "" && len(certDomains) == 0 {
+	if !cfg.ExplicitDNS && domain == "" && len(certDomains) == 0 && len(cfg.Resolvers) == 0 && len(cfg.Routes) == 0 && len(cfg.SearchDomains) == 0 {
 		return nil
 	}
 
@@ -380,9 +383,14 @@ func DNSConfig(cfg Config, self state.Node) *tailcfg.DNSConfig {
 		Routes:      cfg.Routes,
 		CertDomains: certDomains,
 	}
-	if domain != "" {
+	if domain != "" && !cfg.DisableMagicDNS {
 		out.Domains = []string{domain}
 		out.Proxied = true
+	}
+	for _, searchDomain := range cfg.SearchDomains {
+		if !slices.Contains(out.Domains, searchDomain) {
+			out.Domains = append(out.Domains, searchDomain)
+		}
 	}
 	for _, r := range cfg.ExtraRecords {
 		out.ExtraRecords = append(out.ExtraRecords, tailcfg.DNSRecord{

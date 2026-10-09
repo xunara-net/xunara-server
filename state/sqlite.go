@@ -320,6 +320,32 @@ CREATE TABLE IF NOT EXISTS relay_enrollment_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_relay_enrollment_created ON relay_enrollment_tokens(created);
 `,
+
+	// v20：配置头与不可变历史；旧二进制必须拒绝此版本，避免忽略已发布 ACL。
+	`
+ALTER TABLE dns_records ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS network_documents (
+	kind       TEXT PRIMARY KEY,
+	revision   INTEGER NOT NULL,
+	content    TEXT NOT NULL,
+	actor      TEXT NOT NULL,
+	created    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS network_document_history (
+	kind       TEXT NOT NULL,
+	revision   INTEGER NOT NULL,
+	content    TEXT NOT NULL,
+	actor      TEXT NOT NULL,
+	created    INTEGER NOT NULL,
+	PRIMARY KEY (kind, revision)
+);
+`,
+	// v21：地区 0 保留旧托管记录，不推断其证书信任或下发地区。
+	`
+ALTER TABLE relays ADD COLUMN region_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE relays ADD COLUMN cert_name TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relays_region_id ON relays(region_id) WHERE region_id > 0;
+`,
 }
 
 // SQLiteStore is a durable [Store] backed by SQLite.
@@ -449,14 +475,26 @@ func (s *SQLiteStore) GetNodesByMachineKey(mk key.MachinePublic) []Node {
 }
 
 func (s *SQLiteStore) ListNodes() []Node {
-	rows, err := s.db.QueryContext(context.Background(),
+	nodes, _ := s.ListNodesContext(context.Background())
+	return nodes
+}
+
+func (s *SQLiteStore) ListNodesContext(ctx context.Context) ([]Node, error) {
+	rows, err := s.db.QueryContext(ctx,
 		"SELECT "+nodeColumns+" FROM nodes ORDER BY id")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
-
-	return collectNodes(rows)
+	nodes := make([]Node, 0)
+	for rows.Next() {
+		node, err := scanNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, rows.Err()
 }
 
 func (s *SQLiteStore) queryNode(ctx context.Context, query string, args ...any) (Node, bool) {

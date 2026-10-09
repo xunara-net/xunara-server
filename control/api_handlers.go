@@ -28,6 +28,12 @@ type apiMachine struct {
 	Ephemeral       bool       `json:"ephemeral"`
 	Expired         bool       `json:"expired"`
 	Method          string     `json:"method"`
+	OS              string     `json:"os,omitempty"`
+	OSVersion       string     `json:"osVersion,omitempty"`
+	ClientVersion   string     `json:"clientVersion,omitempty"`
+	DNSName         string     `json:"dnsName,omitempty"`
+	Tags            []string   `json:"tags"`
+	Expires         *time.Time `json:"expires,omitempty"`
 	IPv4            string     `json:"ipv4,omitempty"`
 	IPv6            string     `json:"ipv6,omitempty"`
 	Created         time.Time  `json:"created"`
@@ -49,7 +55,7 @@ type apiMachine struct {
 // apiMachineView builds the JSON shape of a node.
 func (s *Server) apiMachineView(n state.Node) apiMachine {
 	profile := s.UserProfile(n.UserID)
-	return apiMachine{
+	view := apiMachine{
 		ID:              uint64(n.ID),
 		StableID:        n.StableID,
 		Hostname:        n.Hostname,
@@ -67,7 +73,23 @@ func (s *Server) apiMachineView(n state.Node) apiMachine {
 		AnnouncedRoutes: prefixStrings(n.AnnouncedRoutes()),
 		EffectiveRoutes: prefixStrings(n.EffectiveRoutes()),
 		ExitNode:        n.IsExitNode(),
+		Tags:            append([]string{}, n.Tags...),
 	}
+	// 只发布用户管理所需的已上报元数据，不把授权方式或 HomeDERP 当成实时连接路径。
+	// 禁止直接序列化 Hostinfo：其中还包含日志标识、推送令牌和其他非展示属性。
+	if n.Hostinfo != nil {
+		view.OS = n.Hostinfo.OS
+		view.OSVersion = n.Hostinfo.OSVersion
+		view.ClientVersion = n.Hostinfo.IPNVersion
+	}
+	if s.cfg.Domain != "" {
+		view.DNSName = strings.TrimSuffix(n.FQDN(s.cfg.Domain), ".")
+	}
+	if !n.Expiry.IsZero() {
+		expires := n.Expiry
+		view.Expires = &expires
+	}
+	return view
 }
 
 func addrString(a netip.Addr) string {
@@ -511,41 +533,7 @@ func (s *Server) handleAPIDNS(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIDeleteDNS implements DELETE /api/v1/dns/{id}.
 func (s *Server) handleAPIDeleteDNS(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
-	if !ok {
-		return
-	}
-
-	id, err := strconv.ParseUint(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid record ID")
-		return
-	}
-
-	var record *state.DNSRecord
-	for _, rec := range s.store.ListDNSRecords() {
-		if rec.ID == id {
-			record = &rec
-			break
-		}
-	}
-	if record == nil {
-		writeAPIError(w, http.StatusNotFound, "record not found")
-		return
-	}
-
-	if err := s.store.DeleteDNSRecord(id); err != nil {
-		s.log.Error("deleting DNS record", "record", id, "err", err)
-		writeAPIError(w, http.StatusInternalServerError, "could not delete record")
-		return
-	}
-	if err := s.store.BumpConfigRevision(); err != nil {
-		s.log.Error("bumping config revision", "err", err)
-	}
-	s.audit(principal.actor(), identity.AuditDNSRecordDeleted,
-		fmt.Sprintf("dns:%s/%s", record.Name, record.Type), fmt.Sprintf("deleted record %d", record.ID))
-	s.notifyWatchers()
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+	s.deleteDNSRecord(w, r, true)
 }
 
 // handleAPIPolicy implements GET /api/v1/policy.
@@ -566,10 +554,11 @@ func (s *Server) handleAPIPolicy(w http.ResponseWriter, r *http.Request) {
 		"rules":      engine.RuleCount(),
 		"warnings":   engine.Warnings(),
 	}
-	if doc, err := policy.Load(s.cfg.PolicyPath); err == nil {
-		resp["unsupported"] = doc.Unsupported
-	} else {
-		resp["loadError"] = err.Error()
+	resp["unsupported"] = engine.Document().Unsupported
+	if configuration := s.policyConfig.Load(); s.cfg.PolicyPath != "" && (configuration == nil || configuration.Source != "database") {
+		if _, err := policy.Load(s.cfg.PolicyPath); err != nil {
+			resp["loadError"] = err.Error()
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
