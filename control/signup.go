@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,13 +11,8 @@ import (
 	"github.com/xunara-net/xunara-server/identity"
 )
 
-// Registration by invitation.
-//
-// The deployment has no external identity provider, so the only way to create
-// an account is an invitation an administrator minted: it is single use,
-// expires, and carries the role it grants. There is deliberately no open
-// self-registration — a control plane that anyone can join is not a tailnet,
-// it is a public network.
+// 注册入口共享 closed / invite / open 准入策略；独立租户开通不在此路径处理。
+// 准入判断不代替提交检查，成员配额和邀请使用必须与账户写入共用事务。
 
 const (
 	signupRateLimit  = 20
@@ -76,23 +72,8 @@ type signupRejection struct {
 
 func (e signupRejection) Error() string { return e.Message }
 
-// errSignupNoSession reports that the account was created but a session could
-// not be started; the caller sends the new user to the sign-in page.
-var errSignupNoSession = errors.New("registration succeeded but no session could be started")
-
-// signupLocalUser validates a registration attempt, creates the account and
-// opens a session. The returned errors are either signupRejection, for
-// problems the applicant caused, or internal errors to log and answer with a
-// generic failure.
-// signupAdmission is who an applicant becomes, decided before anything is
-// created. An invitation carries its own role; open registration always
-// grants the least privilege.
+// signupAdmission 只记录注册路径，授权角色以提交事务内读取的邀请为准。
 type signupAdmission struct {
-	role identity.Role
-	// invite is the invitation being redeemed. It is the zero value when the
-	// attempt did not present one (open registration).
-	invite identity.RegistrationInvite
-	// token is the invitation token as presented, empty in open mode.
 	token string
 }
 
@@ -113,7 +94,7 @@ func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 	token := strings.TrimSpace(req.Invite)
 	switch s.registration {
 	case RegistrationInvite:
-		invite, err := s.identity.FindRegistrationInvite(token)
+		_, err := s.identity.FindRegistrationInvite(token)
 		switch {
 		case errors.Is(err, identity.ErrInviteNotFound):
 			s.audit("system", identity.AuditLoginFailed, "signup", "unknown invitation")
@@ -130,11 +111,11 @@ func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 		case err != nil:
 			return signupAdmission{}, fmt.Errorf("reading invitation: %w", err)
 		}
-		return signupAdmission{role: invite.Role, invite: invite, token: token}, nil
+		return signupAdmission{token: token}, nil
 	case RegistrationOpen:
 		// Self-service accounts start as members: an owner or admin is
 		// promoted deliberately (console users page), never by signing up.
-		return signupAdmission{role: identity.RoleMember}, nil
+		return signupAdmission{}, nil
 	default:
 		s.audit("system", identity.AuditLoginFailed, "signup", "registration is closed")
 		return signupAdmission{}, reject(http.StatusForbidden,
@@ -142,7 +123,7 @@ func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 	}
 }
 
-func (s *Server) signupLocalUser(req localSignupRequest, now time.Time) (identity.User, identity.Session, string, error) {
+func (s *Server) signupLocalUser(ctx context.Context, req localSignupRequest) (identity.User, identity.Session, string, error) {
 	reject := func(code int, message string) error {
 		return signupRejection{Code: code, Title: "Registration rejected", Message: message}
 	}
@@ -162,10 +143,6 @@ func (s *Server) signupLocalUser(req localSignupRequest, now time.Time) (identit
 		return identity.User{}, identity.Session{}, "", reject(http.StatusBadRequest,
 			"Choose a login name (letters, digits, @ . _ - +).")
 	}
-	if _, taken := s.identity.GetUserByLoginName(login); taken {
-		return identity.User{}, identity.Session{}, "", reject(http.StatusConflict,
-			"That login name is already taken.")
-	}
 	if err := identity.CheckPassword(login, password); err != nil {
 		return identity.User{}, identity.Session{}, "", reject(http.StatusBadRequest, passwordPolicyMessage(err))
 	}
@@ -174,115 +151,25 @@ func (s *Server) signupLocalUser(req localSignupRequest, now time.Time) (identit
 			"The two passwords do not match.")
 	}
 
-	if err := s.assertUserQuota(); err != nil {
-		var he HTTPError
-		if errors.As(err, &he) {
-			return identity.User{}, identity.Session{}, "", signupRejection{
-				Code: he.Code, Title: "Registration rejected", Message: he.Msg,
-			}
-		}
-		return identity.User{}, identity.Session{}, "", err
-	}
-
-	user, err := s.createLocalAccount(login, display, email, admission.role, password, now)
-	if err != nil {
-		return identity.User{}, identity.Session{}, "", err
-	}
-
-	// Redeem after the account exists, and roll the account back if the
-	// invitation turns out to be gone: an account created by an invitation
-	// nobody redeemed must not stay behind. Open registration has nothing to
-	// redeem, which is the only difference between the two paths.
-	if admission.token != "" {
-		if _, err := s.identity.RedeemRegistrationInvite(admission.token, user.ID, now); err != nil {
-			if delErr := s.identity.DeleteUser(user.ID); delErr != nil {
-				s.log.Error("rolling back registered user", "user", int(user.ID), "err", delErr)
-			}
-			s.audit("system", identity.AuditLoginFailed, "signup", "invitation could not be redeemed")
-			return identity.User{}, identity.Session{}, "", reject(http.StatusConflict,
-				"That invitation has already been used. Ask an administrator for a new link.")
-		}
-	}
-
-	if admission.invite.ID != "" {
-		s.audit("system", identity.AuditUserRegistered, fmt.Sprintf("user:%d", user.ID),
-			"registered with an invitation as "+string(user.Role))
-		s.audit("system", identity.AuditInviteRedeemed, "invite:"+admission.invite.ID, "redeemed by user "+user.LoginName)
-	} else {
-		s.audit("system", identity.AuditUserRegistered, fmt.Sprintf("user:%d", user.ID),
-			"self-service registration as "+string(user.Role))
-	}
-
-	session, sessionToken, err := s.identity.CreateSession(identity.NewSessionOptions{
-		UserID:     user.ID,
-		AuthMethod: identity.LocalProviderID,
-		TTL:        s.sessionTTL,
-	})
-	if err != nil {
-		s.log.Error("creating session after registration", "user", int(user.ID), "err", err)
-		return user, identity.Session{}, "", errSignupNoSession
-	}
-
-	actor := fmt.Sprintf("user:%d", user.ID)
-	s.audit(actor, identity.AuditLoginSucceeded, "provider:"+identity.LocalProviderID, "authenticated "+user.LoginName)
-	s.audit(actor, identity.AuditSessionCreated, "session:"+session.ID, "auth method "+identity.LocalProviderID)
-
-	return user, session, sessionToken, nil
-}
-
-// createLocalAccount creates a local account together with its password
-// credential. It is the shared tail of every local sign-up path — invitation,
-// open self-service registration and the platform's tenant provisioner — so a
-// rule added here applies to all of them (AGENTS.md section 15). The caller
-// has already validated the login name and the password policy, and has
-// already applied its own quota gate.
-//
-// A failure after the user row exists rolls it back: an account that cannot
-// sign in (because it has no credential) is worse than no account.
-func (s *Server) createLocalAccount(login, display, email string, role identity.Role, password string, _ time.Time) (identity.User, error) {
 	hash, err := identity.HashPassword(password)
 	if err != nil {
-		return identity.User{}, fmt.Errorf("hashing registration password: %w", err)
+		return identity.User{}, identity.Session{}, "", fmt.Errorf("hashing registration password: %w", err)
 	}
-
-	user := identity.User{
-		LoginName:   login,
-		DisplayName: display,
-		Email:       email,
-		Role:        role,
+	user, session, token, err := s.identity.RegisterLocalAccount(ctx, identity.LocalRegistration{
+		LoginName: login, DisplayName: display, Email: email, PasswordHash: hash,
+		InviteToken: admission.token, MaxUsers: s.Plan().MaxUsers, SessionTTL: s.sessionTTL,
+	})
+	switch {
+	case errors.Is(err, identity.ErrMemberLimitReached):
+		err = reject(http.StatusForbidden, MsgUserLimitReached)
+	case errors.Is(err, identity.ErrLoginNameTaken):
+		err = reject(http.StatusConflict, "That login name is already taken.")
+	case errors.Is(err, identity.ErrInviteUsed):
+		err = reject(http.StatusConflict, "That invitation has already been used. Ask an administrator for a new code.")
+	case errors.Is(err, identity.ErrInviteExpired), errors.Is(err, identity.ErrInviteNotFound):
+		err = reject(http.StatusForbidden, "That invitation is no longer valid. Ask an administrator for a new code.")
 	}
-	if user.DisplayName == "" {
-		user.DisplayName = login
-	}
-	if err := s.identity.CreateUser(&user); err != nil {
-		return identity.User{}, fmt.Errorf("creating registered user: %w", err)
-	}
-
-	if err := s.identity.SetLocalCredential(&identity.LocalCredential{
-		UserID:       user.ID,
-		PasswordHash: hash,
-	}); err != nil {
-		if delErr := s.identity.DeleteUser(user.ID); delErr != nil {
-			s.log.Error("rolling back a user without a credential", "user", int(user.ID), "err", delErr)
-		}
-		return identity.User{}, fmt.Errorf("storing registration password: %w", err)
-	}
-
-	// Local accounts are reachable as the (local, login) external identity,
-	// exactly like the built-in administrator, so later features that key on
-	// an identity link see them too.
-	link := identity.ExternalIdentity{
-		ProviderID:  identity.LocalProviderID,
-		Subject:     user.LoginName,
-		UserID:      user.ID,
-		Email:       user.Email,
-		DisplayName: user.DisplayName,
-	}
-	if err := s.identity.LinkExternalIdentity(&link); err != nil {
-		s.log.Error("linking registered identity", "user", int(user.ID), "err", err)
-	}
-
-	return user, nil
+	return user, session, token, err
 }
 
 // handleSignupSubmit implements POST /signup.
@@ -305,8 +192,10 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 	allowed, retryAfter, err := s.store.AllowRate("signup:"+s.clientIP(r), signupRateLimit, signupRateWindow, now)
 	if err != nil {
 		s.log.Error("rate limiting registration", "err", err)
+		fail(http.StatusServiceUnavailable, "Registration unavailable", "Please try again later.")
+		return
 	}
-	if err == nil && !allowed {
+	if !allowed {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
 		fail(http.StatusTooManyRequests, "Too many attempts",
 			"Too many registration attempts from this address. Try again later.")
@@ -319,21 +208,19 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, session, sessionToken, err := s.signupLocalUser(localSignupRequest{
+	_, session, sessionToken, err := s.signupLocalUser(r.Context(), localSignupRequest{
 		Invite:   r.PostFormValue("invite"),
 		Login:    r.PostFormValue("login"),
 		Display:  r.PostFormValue("display_name"),
 		Email:    r.PostFormValue("email"),
 		Password: r.PostFormValue("password"),
 		Confirm:  r.PostFormValue("confirm"),
-	}, now)
+	})
 	if err != nil {
 		var rejection signupRejection
 		switch {
 		case errors.As(err, &rejection):
 			fail(rejection.Code, rejection.Title, rejection.Message)
-		case errors.Is(err, errSignupNoSession):
-			http.Redirect(w, r, "/login", http.StatusFound)
 		default:
 			s.log.Error("registration failed", "err", err)
 			fail(http.StatusInternalServerError, "Registration failed", "Please try again.")

@@ -71,6 +71,16 @@ func (s *Server) startExternalLogin(w http.ResponseWriter, r *http.Request, prov
 			"The requested identity provider is not configured on this server.")
 		return
 	}
+	allowed, retryAfter, err := s.store.AllowRate("login-oidc-ip:"+s.clientIP(r), loginAddressLimit, loginAddressWindow, time.Now())
+	if err != nil {
+		s.renderError(w, r, http.StatusServiceUnavailable, "Sign-in unavailable", "Please try again later.")
+		return
+	}
+	if !allowed {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
+		s.renderError(w, r, http.StatusTooManyRequests, "Too many attempts", "Too many sign-in attempts. Try again later.")
+		return
+	}
 
 	tx, browserSecret, err := s.identity.CreateAuthTransaction(identity.NewAuthTransactionOptions{
 		ProviderID:  providerID,
@@ -87,7 +97,7 @@ func (s *Server) startExternalLogin(w http.ResponseWriter, r *http.Request, prov
 	authReq, err := provider.Begin(r.Context(), &tx)
 	if err != nil {
 		s.audit("system", identity.AuditLoginFailed, "provider:"+providerID, loginFailureReason(err))
-		s.log.Warn("starting login", "provider", providerID, "err", err)
+		s.log.Warn("starting login", "provider", providerID, "reason", loginFailureReason(err))
 		s.renderError(w, r, http.StatusBadGateway, "Provider unavailable",
 			"The identity provider could not be reached. Please try again later.")
 		return
@@ -278,7 +288,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 	result, err := provider.Callback(ctx, &tx, cb)
 	if err != nil {
 		s.audit("system", identity.AuditLoginFailed, "provider:"+provider.ID(), loginFailureReason(err))
-		s.log.Warn("login rejected", "provider", provider.ID(), "err", err)
+		s.log.Warn("login rejected", "provider", provider.ID(), "reason", loginFailureReason(err))
 		s.renderError(w, r, http.StatusForbidden, "Sign-in failed",
 			"The identity provider did not confirm this sign-in. Start again from your device.")
 		return
@@ -471,11 +481,13 @@ func sanitizeLoginName(name string) string {
 // safeReturnTo only accepts same-origin absolute paths: anything else could
 // turn the login endpoint into an open redirect.
 func safeReturnTo(raw string) string {
-	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\") || strings.ContainsFunc(raw, func(character rune) bool {
+		return character < 0x20 || character == 0x7f
+	}) {
 		return "/"
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.IsAbs() || u.Host != "" {
+	if err != nil || u.IsAbs() || u.Host != "" || strings.HasPrefix(u.Path, "//") || strings.ContainsAny(u.Path, "\\") {
 		return "/"
 	}
 	return raw

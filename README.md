@@ -104,6 +104,27 @@ go run ./cmd/xunarad \
 中继、节点已注册且未过期、租户策略允许时才放行。静态组织仍使用各自配置中的
 `derp_map`，不会把某个租户的私有中继、身份或密钥复制给其他租户。
 
+## 第三方登录与成员邀请
+
+正式 Web 的提供方入口从 `/api/v1/auth/providers` 获取，浏览器整页导航到
+`/api/v1/auth/start`，不再把 GET `/login` 的 SPA 页面当成认证 API。
+`return_to` 只接受本站路径；OIDC callback URI 仍来自服务配置而非请求输入。
+新旧第三方入口共享持久限流和认证事务，不改变客户端设备授权流程。
+
+成员页面通过 `/api/v1/member-invitations` 提供列表、创建和按 ID 撤销。
+仅有效 owner 人类会话可操作；写入需会话绑定 CSRF，服务 API Key 不可代替人类身份。
+创建代码仅展示一次，注册页面地址单独分享，不把代码放进 URL。
+新邀请有期限，只授予 member/admin；已有兑换记录保留，Free 的单成员额度仍拒绝新增。
+邀请模式与独立网络自助开通严格区分，不接受在入口租户绕过开通规则。
+
+注册通过 `identity.RegistrationStore` 将成员额度、账户、密码、身份链接、邀请、会话
+和审计合并提交。任一步失败全部回滚，邀请仍可重试；旧补偿删除和独立兑换入口已移除。
+旧控制台只作为兼容适配，共用相同邀请业务，不再生成带代码的链接，也不允许 admin
+管理邀请。未实现的 viewer 角色不在 Web 角色下拉框提供。
+
+数据流、测试范围及未闭环并发路径见 [ADR-0014](docs/adr/ADR-0014-browser-auth-and-member-invitations.md)。
+此处不代表邮箱验证/找回、2FA 或第三方首次建号事务已经全部完成。
+
 ## 账户自助管理
 
 用户控制台的个人设置使用独立账户接口（[ADR-0009](docs/adr/ADR-0009-account-self-service.md)）：

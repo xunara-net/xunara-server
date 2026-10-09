@@ -119,4 +119,5 @@ type Store interface {
 	LocalCredentialStore
 	AccountStore
 	RegistrationInviteStore
+	RegistrationStore
 }

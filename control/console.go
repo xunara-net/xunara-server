@@ -582,12 +582,13 @@ func (s *Server) consoleUsersPageData(data map[string]any) {
 		views = append(views, s.apiUserView(u))
 	}
 	data["Users"] = views
-	data["Invites"] = s.consoleInviteViews()
+	if owner, _ := data["IsOwner"].(bool); owner {
+		data["Invites"] = s.consoleInviteViews()
+	}
+	data["InvitationsEnabled"] = s.memberInvitationsEnabled()
 }
 
-// handleConsoleCreateInvite implements POST /console/invites: mint a
-// single-use registration invitation. The plaintext link is part of this
-// response only; the server keeps nothing but its hash.
+// 旧表单保留书签兼容，但邀请规则、owner 复核和事务审计复用正式 API 的实现。
 func (s *Server) handleConsoleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	session, data, ok := s.consoleSession(w, r, "users")
 	if !ok {
@@ -597,42 +598,19 @@ func (s *Server) handleConsoleCreateInvite(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !s.planGateOrRender(w, r, s.assertUserQuota(), "Invitation rejected") {
-		return
-	}
-
-	role, err := identity.ParseRole(strings.TrimSpace(r.PostFormValue("role")))
-	if err != nil || role == identity.RoleOwner {
-		// An owner is promoted deliberately, never handed out in a link.
-		s.renderError(w, r, http.StatusBadRequest, "Invitation rejected",
-			"Choose the member or admin role; invitations cannot grant the owner role.")
-		return
-	}
-
-	var ttl time.Duration
 	hours, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("ttl")))
-	if err != nil || hours < 0 || hours > 24*365 {
+	if err != nil {
 		s.renderError(w, r, http.StatusBadRequest, "Invitation rejected", "Choose how long the invitation stays valid.")
 		return
 	}
-	ttl = time.Duration(hours) * time.Hour
-
-	invite, token, err := s.identity.CreateRegistrationInvite(identity.NewRegistrationInviteOptions{
-		Role:      role,
-		Note:      strings.TrimSpace(r.PostFormValue("note")),
-		CreatedBy: fmt.Sprintf("user:%d", session.UserID),
-		TTL:       ttl,
+	_, token, err := s.createMemberInvitation(r.Context(), session, memberInviteRequest{
+		Role: r.PostFormValue("role"), Note: r.PostFormValue("note"), TTLHours: hours,
 	})
-	if err != nil {
-		s.log.Error("creating registration invite", "err", err)
-		s.renderError(w, r, http.StatusInternalServerError, "Invitation failed", "Please try again.")
+	if !s.planGateOrRender(w, r, err, "Invitation rejected") {
 		return
 	}
-
-	s.audit(fmt.Sprintf("user:%d", session.UserID), identity.AuditInviteCreated,
-		"invite:"+invite.ID, "role "+string(invite.Role))
 	data["Notice"] = "Invitation created."
-	data["NewInviteLink"] = strings.TrimRight(s.cfg.ServerURL, "/") + "/signup?invite=" + url.QueryEscape(token)
+	data["NewInviteCode"] = token
 	s.consoleUsersPageData(data)
 	s.renderConsole(w, consoleUsersTemplate, data)
 }
@@ -648,22 +626,10 @@ func (s *Server) handleConsoleRevokeInvite(w http.ResponseWriter, r *http.Reques
 	}
 
 	id := chi.URLParam(r, "id")
-	err := s.identity.RevokeRegistrationInvite(id)
-	switch {
-	case errors.Is(err, identity.ErrInviteNotFound):
-		s.renderError(w, r, http.StatusNotFound, "Unknown invitation", "This invitation does not exist.")
-		return
-	case errors.Is(err, identity.ErrInviteUsed):
-		s.renderError(w, r, http.StatusConflict, "Invitation already used",
-			"This invitation was redeemed; it is kept as a record.")
-		return
-	case err != nil:
-		s.log.Error("revoking registration invite", "invite", id, "err", err)
-		s.renderError(w, r, http.StatusInternalServerError, "Revoke failed", "Please try again.")
+	err := s.identity.RevokeMemberInvitation(r.Context(), session.UserID, session.ID, id)
+	if !s.planGateOrRender(w, r, memberInvitationError(err), "Invitation rejected") {
 		return
 	}
-
-	s.audit(fmt.Sprintf("user:%d", session.UserID), identity.AuditInviteRevoked, "invite:"+id, "revoked through the console")
 	data["Notice"] = "Invitation revoked."
 	s.consoleUsersPageData(data)
 	s.renderConsole(w, consoleUsersTemplate, data)

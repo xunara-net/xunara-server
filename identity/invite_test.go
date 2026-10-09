@@ -1,13 +1,13 @@
 package identity
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"tailscale.com/tailcfg"
 )
 
 func TestRegistrationInviteLifecycle(t *testing.T) {
@@ -59,14 +59,15 @@ func TestRegistrationInviteLifecycle(t *testing.T) {
 	}
 
 	// Redeeming marks it used, records the user and makes it unusable.
-	redeemed, err := s.RedeemRegistrationInvite(token, tailcfg.UserID(7), time.Now())
+	user, _, _, err := s.RegisterLocalAccount(context.Background(), registrationFixture("invite-member", token))
 	if err != nil {
-		t.Fatalf("RedeemRegistrationInvite: %v", err)
+		t.Fatalf("RegisterLocalAccount: %v", err)
 	}
-	if !redeemed.Redeemed() || redeemed.UsedBy != 7 {
+	redeemed, ok := s.GetRegistrationInvite(invite.ID)
+	if !ok || !redeemed.Redeemed() || redeemed.UsedBy != user.ID {
 		t.Errorf("redeemed invite = %+v", redeemed)
 	}
-	if _, err := s.RedeemRegistrationInvite(token, 8, time.Now()); !errors.Is(err, ErrInviteUsed) {
+	if _, _, _, err := s.RegisterLocalAccount(context.Background(), registrationFixture("invite-replay", token)); !errors.Is(err, ErrInviteUsed) {
 		t.Errorf("second redeem error = %v, want ErrInviteUsed", err)
 	}
 	if _, err := s.FindRegistrationInvite(token); !errors.Is(err, ErrInviteUsed) {
@@ -87,16 +88,18 @@ func TestRegistrationInviteExpiryAndRevocation(t *testing.T) {
 
 	expired, expiredToken, err := s.CreateRegistrationInvite(NewRegistrationInviteOptions{
 		Role: RoleMember,
-		TTL:  time.Millisecond,
+		TTL:  time.Hour,
 	})
 	if err != nil {
 		t.Fatalf("CreateRegistrationInvite: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
+	if _, err := s.db.Exec("UPDATE registration_invites SET expires_at = ? WHERE id = ?", time.Now().Add(-time.Minute).UnixNano(), expired.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.FindRegistrationInvite(expiredToken); !errors.Is(err, ErrInviteExpired) {
 		t.Errorf("Find of an expired invite = %v, want ErrInviteExpired", err)
 	}
-	if _, err := s.RedeemRegistrationInvite(expiredToken, 1, time.Now()); !errors.Is(err, ErrInviteExpired) {
+	if _, _, _, err := s.RegisterLocalAccount(context.Background(), registrationFixture("expired-member", expiredToken)); !errors.Is(err, ErrInviteExpired) {
 		t.Errorf("redeem of an expired invite = %v, want ErrInviteExpired", err)
 	}
 	if got, ok := s.GetRegistrationInvite(expired.ID); !ok || !got.Expired(time.Now()) {
@@ -146,8 +149,8 @@ func TestRegistrationInviteRoles(t *testing.T) {
 	if perpetual.Expired(time.Now().AddDate(1, 0, 0)) {
 		t.Error("an invite without a TTL expired")
 	}
-	if _, err := s.RedeemRegistrationInvite(token, 3, time.Now()); err != nil {
-		t.Fatalf("RedeemRegistrationInvite: %v", err)
+	if _, _, _, err := s.RegisterLocalAccount(context.Background(), registrationFixture("perpetual-member", token)); err != nil {
+		t.Fatalf("RegisterLocalAccount: %v", err)
 	}
 }
 
@@ -165,14 +168,14 @@ func TestRegistrationInviteRedeemIsAtomic(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan error, racers)
 	var wg sync.WaitGroup
-	for i := 0; i < racers; i++ {
+	for index := 0; index < racers; index++ {
 		wg.Add(1)
-		go func(userID tailcfg.UserID) {
+		go func(login string) {
 			defer wg.Done()
 			<-start
-			_, err := s.RedeemRegistrationInvite(token, userID, time.Now())
+			_, _, _, err := s.RegisterLocalAccount(context.Background(), registrationFixture(login, token))
 			results <- err
-		}(tailcfg.UserID(100 + i))
+		}(fmt.Sprintf("invite-racer-%d", index))
 	}
 	close(start)
 	wg.Wait()
@@ -190,6 +193,9 @@ func TestRegistrationInviteRedeemIsAtomic(t *testing.T) {
 	}
 	if winners != 1 {
 		t.Fatalf("concurrent redeem winners = %d, want exactly 1", winners)
+	}
+	if len(s.ListUsers()) != 1 {
+		t.Fatal("failed invitations left orphan accounts")
 	}
 }
 

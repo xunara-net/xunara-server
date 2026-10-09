@@ -35,6 +35,7 @@ func (s *Server) apiAuthRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/session", s.handleAPIAuthSession)
 	r.Get("/providers", s.handleAPIAuthProviders)
+	r.Get("/start", s.handleAPIAuthStart)
 	r.Post("/login", s.handleAPIAuthLogin)
 	r.Post("/signup", s.handleAPIAuthSignup)
 	r.With(deprecatedAccountEndpoint).Post("/logout", s.handleAPIAuthLogout)
@@ -239,7 +240,7 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 		views = append(views, map[string]any{
 			"id":        id,
 			"name":      s.providerName(id),
-			"start_url": "/login?provider=" + url.QueryEscape(id),
+			"start_url": "/api/v1/auth/start?provider=" + url.QueryEscape(id),
 		})
 	}
 	payload := map[string]any{
@@ -256,6 +257,22 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 		payload["self_service"] = info
 	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleAPIAuthStart 供浏览器整页导航，避免 SPA 的 /login 吞掉第三方认证请求。
+// 这里只更换入口，状态、PKCE、浏览器绑定与回调仍由同一套持久认证事务处理。
+func (server *Server) handleAPIAuthStart(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	providerID := request.URL.Query().Get("provider")
+	if providerID == "" || providerID == identity.LocalProviderID {
+		writeAPIError(writer, http.StatusBadRequest, "EXTERNAL_PROVIDER_REQUIRED: choose a configured external provider")
+		return
+	}
+	returnTo := request.URL.Query().Get("return_to")
+	if returnTo == "" {
+		returnTo = "/dashboard"
+	}
+	server.startExternalLogin(writer, request, providerID, safeReturnTo(returnTo))
 }
 
 // apiLoginRequest is the JSON body of POST /api/v1/auth/login.
@@ -360,6 +377,7 @@ type apiSignupRequest struct {
 // handleAPIAuthSignup implements POST /api/v1/auth/signup: the JSON twin of
 // the invitation page, enforcing the same invitation and quota rules.
 func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !s.localLogin {
 		writeAPIError(w, http.StatusForbidden, "registration is disabled on this server")
 		return
@@ -378,28 +396,28 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 	allowed, retryAfter, err := s.store.AllowRate("signup:"+s.clientIP(r), signupRateLimit, signupRateWindow, now)
 	if err != nil {
 		s.log.Error("rate limiting registration", "err", err)
+		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: try again later")
+		return
 	}
-	if err == nil && !allowed {
+	if !allowed {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
 		writeAPIError(w, http.StatusTooManyRequests, "too many registration attempts from this address; try again later")
 		return
 	}
 
-	user, session, token, err := s.signupLocalUser(localSignupRequest{
+	user, session, token, err := s.signupLocalUser(r.Context(), localSignupRequest{
 		Invite:   req.Invite,
 		Login:    req.Login,
 		Display:  req.DisplayName,
 		Email:    req.Email,
 		Password: req.Password,
 		Confirm:  req.Password,
-	}, now)
+	})
 	if err != nil {
 		var rejection signupRejection
 		switch {
 		case errors.As(err, &rejection):
 			writeAPIError(w, rejection.Code, rejection.Message)
-		case errors.Is(err, errSignupNoSession):
-			writeAPIError(w, http.StatusInternalServerError, "the account was created; sign in to continue")
 		default:
 			s.log.Error("registration failed", "err", err)
 			writeAPIError(w, http.StatusInternalServerError, "registration failed; try again")

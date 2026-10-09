@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,11 +10,8 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-// Registration invites are how a person who is not an administrator gets an
-// account on a deployment without an external identity provider. They are the
-// only self-service way in, so they are single use, expire, carry the role
-// they grant, and are stored hashed: the plaintext token exists only in the
-// link the inviter copied.
+// 邀请模式下，成员凭一次性代码加入当前租户。开放注册和独立租户自助开通使用
+// 各自的准入规则。这里只保存代码哈希，不能把明文当成链接、日志或审计字段。
 
 // InvitePrefix marks a registration invite token so it is recognisable in
 // logs and support requests without being usable.
@@ -27,6 +25,18 @@ var ErrInviteUsed = errors.New("identity: registration invite already used")
 
 // ErrInviteExpired is returned when an invite is past its expiry.
 var ErrInviteExpired = errors.New("identity: registration invite expired")
+
+var ErrInviteOwnerRequired = errors.New("identity: invitations require an owner session")
+
+// MemberInvitation 携带发起人会话，写事务会重新检查会话有效性及 owner 角色。
+type MemberInvitation struct {
+	UserID    tailcfg.UserID
+	SessionID string
+	Role      Role
+	Note      string
+	TTL       time.Duration
+	MaxUsers  int
+}
 
 // RegistrationInvite is one single-use invitation.
 type RegistrationInvite struct {
@@ -47,7 +57,7 @@ func (i RegistrationInvite) Redeemed() bool { return !i.UsedAt.IsZero() }
 
 // Expired reports whether the invite is past its expiry at now.
 func (i RegistrationInvite) Expired(now time.Time) bool {
-	return !i.ExpiresAt.IsZero() && now.After(i.ExpiresAt)
+	return !i.ExpiresAt.IsZero() && !now.Before(i.ExpiresAt)
 }
 
 // NewRegistrationInviteOptions describes an invite to create.
@@ -67,6 +77,9 @@ type RegistrationInviteStore interface {
 	GetRegistrationInvite(id string) (RegistrationInvite, bool)
 	// ListRegistrationInvites returns every invite, newest first.
 	ListRegistrationInvites() []RegistrationInvite
+	ListRegistrationInvitesContext(ctx context.Context) ([]RegistrationInvite, error)
+	CreateMemberInvitation(ctx context.Context, invitation MemberInvitation) (RegistrationInvite, string, error)
+	RevokeMemberInvitation(ctx context.Context, userID tailcfg.UserID, sessionID, inviteID string) error
 	// RevokeRegistrationInvite deletes an unused invite. Redeemed invites
 	// are kept as a record, so revoking one fails with ErrInviteUsed.
 	RevokeRegistrationInvite(id string) error
@@ -74,10 +87,6 @@ type RegistrationInviteStore interface {
 	// consuming it, so a caller can read the role it grants before creating
 	// the account. Invalid, used and expired invites are errors.
 	FindRegistrationInvite(token string) (RegistrationInvite, error)
-	// RedeemRegistrationInvite consumes an invite atomically: exactly one
-	// caller can turn a given token into an account, even under concurrent
-	// submissions.
-	RedeemRegistrationInvite(token string, userID tailcfg.UserID, now time.Time) (RegistrationInvite, error)
 }
 
 // inviteRole returns the role an invite may grant: an invite never mints

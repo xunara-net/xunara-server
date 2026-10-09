@@ -611,10 +611,11 @@ device a human identity.</p>
 </form>
 {{end}}
 {{end}}
+{{if .IsOwner}}
 <h2>Invitations</h2>
-<p>Registration is by invitation only: an invitation works once, carries the role it grants, and is stored hashed. The link below is shown once, when it is created; the server cannot show it again.</p>
-{{if .NewInviteLink}}<p class="notice" role="status">Invitation created. Share this link:</p>
-<p><code>{{.NewInviteLink}}</code></p>{{end}}
+<p>An invitation works once and is stored hashed. The code is shown only when created; share it separately from the registration page address.</p>
+{{if .NewInviteCode}}<p class="notice" role="status">Invitation created. Share this code:</p>
+<p><code id="invitation-code">{{.NewInviteCode}}</code></p>{{end}}
 {{if .Invites}}
 <table>
 <thead><tr><th scope="col">Role</th><th scope="col">Note</th><th scope="col">Created</th><th scope="col">Expires</th><th scope="col">Status</th><th scope="col"></th></tr></thead>
@@ -627,7 +628,7 @@ device a human identity.</p>
 <td>{{fmtTime .Expires}}</td>
 <td>{{if .Redeemed}}<span>redeemed</span> <span translate="no">{{.UsedBy}}</span>{{else if .Expired}}expired{{else}}open{{end}}</td>
 <td>
-{{if and $.CanWrite .Open}}
+{{if and $.IsOwner .Open}}
 <form method="post" action="/console/invites/{{.ID}}/delete">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <button class="danger" type="submit">Revoke</button>
@@ -641,7 +642,7 @@ device a human identity.</p>
 {{else}}
 <p>No invitations yet.</p>
 {{end}}
-{{if .CanWrite}}
+{{if .InvitationsEnabled}}
 <form method="post" action="/console/invites">
 <h3>Create an invitation</h3>
 <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -655,11 +656,11 @@ device a human identity.</p>
 <option value="24">24 hours</option>
 <option value="168" selected>7 days</option>
 <option value="720">30 days</option>
-<option value="0">no expiry</option>
 </select></label>
 <button type="submit">Create invitation</button>
 </div>
 </form>
+{{end}}
 {{end}}
 `)
 

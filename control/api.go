@@ -243,6 +243,9 @@ func (s *Server) apiRouter() http.Handler {
 	r.Get("/users", s.handleAPIUsers)
 	r.Get("/users/{id}", s.handleAPIUser)
 	r.Patch("/users/{id}", s.handleAPIUpdateUser)
+	r.Get("/member-invitations", s.handleAPIMemberInvites)
+	r.Post("/member-invitations", s.handleAPICreateMemberInvite)
+	r.Delete("/member-invitations/{id}", s.handleAPIRevokeMemberInvite)
 
 	r.Get("/dns", s.handleAPIDNS)
 	r.Delete("/dns/{id}", s.handleAPIDeleteDNS)

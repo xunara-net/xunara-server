@@ -505,7 +505,7 @@ func TestConsoleInvitations(t *testing.T) {
 		t.Fatalf("create invitation status = %d (%s)", create.StatusCode, bodyString(t, create))
 	}
 	created := bodyString(t, create)
-	token := linkTokenFromPage(t, created)
+	token := invitationCodeFromPage(t, created)
 	if !strings.HasPrefix(token, identity.InvitePrefix) {
 		t.Fatalf("invitation link carries %q, want a %s token", token, identity.InvitePrefix)
 	}
@@ -592,26 +592,20 @@ func TestConsoleInvitations(t *testing.T) {
 	}
 }
 
-// linkTokenFromPage pulls the invitation token out of the one-time link the
-// console printed.
-func linkTokenFromPage(t *testing.T, page string) string {
+func invitationCodeFromPage(t *testing.T, page string) string {
 	t.Helper()
 
-	const marker = "/signup?invite="
+	const marker = `<code id="invitation-code">`
 	i := strings.Index(page, marker)
 	if i < 0 {
-		t.Fatalf("page has no invitation link:\n%s", page)
+		t.Fatal("page has no one-time invitation code")
 	}
 	rest := page[i+len(marker):]
 	end := strings.IndexAny(rest, `"<&`)
 	if end < 0 {
 		t.Fatalf("malformed invitation link in page")
 	}
-	token, err := url.QueryUnescape(rest[:end])
-	if err != nil {
-		t.Fatalf("decoding invitation token: %v", err)
-	}
-	return token
+	return rest[:end]
 }
 
 // TestConsoleDoesNotTranslateRuntimeData checks that a login name that reads
