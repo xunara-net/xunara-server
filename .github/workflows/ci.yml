@@ -8,6 +8,7 @@ on:
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -21,4 +22,5 @@ jobs:
       - name: Test
         run: go test ./... -count=1
       - name: Race
-        run: go test -race ./... -count=1
+        # 整包包含大量真实密码哈希和协议回归，竞态插桩后不能沿用默认十分钟预算。
+        run: go test -race ./... -count=1 -timeout=20m
