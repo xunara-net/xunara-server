@@ -124,6 +124,9 @@ go run ./cmd/xunarad \
 
 数据流、测试范围及未闭环并发路径见 [ADR-0014](docs/adr/ADR-0014-browser-auth-and-member-invitations.md)。
 此处不代表邮箱验证/找回、2FA 或第三方首次建号事务已经全部完成。
+自助开通入口拒绝未知第三方身份直接加入入口网络，不按邮箱认领 owner；已有显式
+绑定仍可登录。第三方自动创建独立租户尚未完成，见
+[ADR-0015](docs/adr/ADR-0015-self-service-external-admission.md)。
 
 ## 账户自助管理
 

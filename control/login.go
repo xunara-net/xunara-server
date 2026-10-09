@@ -400,6 +400,11 @@ func (s *Server) userForIdentity(result *identity.IdentityResult) (identity.User
 		}
 		return user, nil
 	}
+	// 自助入口不是共享网络：第三方确认身份也不能在入口隐式创建成员。
+	// 只有显式绑定的身份可继续登录；未知身份须走独立租户开通流程。
+	if s.selfServiceInfo() != nil {
+		return identity.User{}, NewHTTPError(http.StatusForbidden, msgTenantSignupRequired, nil)
+	}
 
 	// A new sign-in may provision a member, so the plan's member quota applies
 	// here exactly as it does to invitations: a tenant must not be able to

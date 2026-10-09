@@ -87,8 +87,7 @@ func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 	}
 
 	if s.selfServiceInfo() != nil {
-		return signupAdmission{}, reject(http.StatusForbidden,
-			"TENANT_SIGNUP_REQUIRED: create an independent network through the self-service registration page")
+		return signupAdmission{}, reject(http.StatusForbidden, msgTenantSignupRequired)
 	}
 
 	token := strings.TrimSpace(req.Invite)

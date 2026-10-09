@@ -37,6 +37,8 @@ import (
 // the console's contract, so it is a constant rather than a literal.
 const selfServiceSignupPath = "/api/self-service/v1/signup"
 
+const msgTenantSignupRequired = "TENANT_SIGNUP_REQUIRED: create an independent network through the self-service registration page"
+
 // setSelfService attaches the sign-up desk to one organization's console
 // payload. Only the front-door organization gets one.
 func (s *Server) setSelfService(info *SelfServiceInfo) { s.selfService.Store(info) }
