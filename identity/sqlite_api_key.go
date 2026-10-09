@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -80,8 +81,11 @@ func (s *SQLiteStore) GetAPIKeyByToken(token string) (APIKey, error) {
 		HashSecret(token), now.UnixNano())
 
 	key, err := scanAPIKey(row)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrAPIKeyNotFound
+	}
+	if err != nil {
+		return APIKey{}, fmt.Errorf("identity: looking up API key: %w", err)
 	}
 	return key, nil
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -157,27 +158,36 @@ func splitBrowserBinding(r *http.Request, name string) (id, secret string, ok bo
 // sessionToken 遍历同名 Cookie：自助注册的父域 Cookie 可能与后续主机 Cookie 并存。
 // 已撤销或属于其他租户的旧 Cookie 不能遮蔽当前租户的新登录。
 func (server *Server) sessionToken(request *http.Request) string {
+	_, token, _ := server.resolveCookieSession(request)
+	return token
+}
+
+// 只有已确认失效的 Cookie 才能跳过；存储失败不等于会话不存在。
+// 若其他同名 Cookie 确实有效，仍使用已验证身份；否则保留故障供调用方拒绝操作。
+func (server *Server) resolveCookieSession(request *http.Request) (identity.Session, string, error) {
+	var lookupError error
 	for _, cookie := range request.Cookies() {
-		if cookie.Name == sessionCookieName {
-			if _, err := server.identity.GetSessionByToken(cookie.Value); err == nil {
-				return cookie.Value
-			}
+		if cookie.Name != sessionCookieName || cookie.Value == "" {
+			continue
+		}
+		session, err := server.identity.GetSessionByToken(cookie.Value)
+		if err == nil {
+			return session, cookie.Value, nil
+		}
+		if !errors.Is(err, identity.ErrSessionNotFound) {
+			lookupError = err
 		}
 	}
-	return ""
+	if lookupError != nil {
+		return identity.Session{}, "", lookupError
+	}
+	return identity.Session{}, "", identity.ErrSessionNotFound
 }
 
 // currentSession resolves the request's session cookie to a live session.
 func (s *Server) currentSession(r *http.Request) (identity.Session, bool) {
-	token := s.sessionToken(r)
-	if token == "" {
-		return identity.Session{}, false
-	}
-	session, err := s.identity.GetSessionByToken(token)
-	if err != nil {
-		return identity.Session{}, false
-	}
-	return session, true
+	session, _, err := s.resolveCookieSession(r)
+	return session, err == nil
 }
 
 // csrfTokenFor 从 HttpOnly 会话秘密派生 CSRF 令牌，不需要实例本地密钥或缓存。
@@ -205,12 +215,15 @@ func checkCSRFHeader(r *http.Request, token string) bool {
 // requireSession resolves the request's session or sends the browser to the
 // login page with a return path.
 func (s *Server) requireSession(w http.ResponseWriter, r *http.Request, returnTo string) (identity.Session, string, bool) {
-	token := s.sessionToken(r)
-	if token != "" {
-		if session, err := s.identity.GetSessionByToken(token); err == nil {
-			return session, token, true
-		}
-		s.clearSessionCookie(w)
+	session, token, err := s.resolveCookieSession(r)
+	if err == nil {
+		return session, token, true
+	}
+	if !errors.Is(err, identity.ErrSessionNotFound) {
+		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Cache-Control", "no-store")
+		s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+		return identity.Session{}, "", false
 	}
 	http.Redirect(w, r, "/login?return_to="+url.QueryEscape(returnTo), http.StatusFound)
 	return identity.Session{}, "", false

@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -392,13 +393,20 @@ func (s *SQLiteStore) CreateUser(u *User) error {
 
 // GetUser implements [UserStore].
 func (s *SQLiteStore) GetUser(id tailcfg.UserID) (User, bool) {
-	row := s.db.QueryRowContext(context.Background(),
-		"SELECT "+userColumns+" FROM users WHERE id = ?", int64(id))
-	u, err := scanUser(row)
-	if err != nil {
-		return User{}, false
+	user, err := s.LookupUser(context.Background(), id)
+	return user, err == nil
+}
+
+func (store *SQLiteStore) LookupUser(ctx context.Context, id tailcfg.UserID) (User, error) {
+	row := store.db.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users WHERE id = ?", int64(id))
+	user, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrUserNotFound
 	}
-	return u, true
+	if err != nil {
+		return User{}, fmt.Errorf("identity: looking up user: %w", err)
+	}
+	return user, nil
 }
 
 // GetUserByLoginName implements [UserStore].

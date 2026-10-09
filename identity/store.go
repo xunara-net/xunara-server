@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -23,6 +24,8 @@ type UserStore interface {
 	CreateUser(u *User) error
 	// GetUser returns a user by ID.
 	GetUser(id tailcfg.UserID) (User, bool)
+	// LookupUser 区分账户不存在与存储故障；认证不能把数据库不可用当成用户被删除。
+	LookupUser(ctx context.Context, id tailcfg.UserID) (User, error)
 	// GetUserByLoginName returns a user by login name, case-insensitively.
 	GetUserByLoginName(login string) (User, bool)
 	// ListUsers returns every user, oldest first.

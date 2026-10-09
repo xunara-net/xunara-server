@@ -332,15 +332,16 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 // handleLogout implements POST /logout: revoke the session server-side, then
 // clear the cookie.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	token := s.sessionToken(r)
-	if token == "" {
+	session, token, err := s.resolveCookieSession(r)
+	if errors.Is(err, identity.ErrSessionNotFound) {
+		s.clearSessionCookie(w)
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
-	session, err := s.identity.GetSessionByToken(token)
 	if err != nil {
-		s.clearSessionCookie(w)
-		http.Redirect(w, r, "/", http.StatusFound)
+		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Cache-Control", "no-store")
+		s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
 		return
 	}
 

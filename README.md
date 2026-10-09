@@ -1,7 +1,8 @@
 # Xunara Server（玄序 · 服务端）
 
 Xunara（玄序）是一个 **Tailscale 兼容的多租户网络服务平台**。
-本仓库是它的服务端：控制面 + 产品层 + Xunara Core API。**不含 Web UI。**
+本仓库是它的服务端：控制面 + 产品层 + Xunara Core API。产品 Web UI 由独立仓库
+提供；官方客户端必需的授权页面与尚未对等迁移的旧模板仍保留，见 ADR-0003。
 
 ```text
 xunara-web（用户控制台）   xunara-admin（平台后台）   CLI / SDK / 未来客户端
@@ -147,6 +148,12 @@ go run ./cmd/xunarad \
 
 旧 `/api/v1/sessions` 与平台管理员强制下线接口保留兼容。读写存储故障返回
 明确错误，不把失败显示为零活动登录或退出成功。
+
+认证查询只将已确认不存在、过期或撤销的凭据视为无效。会话、服务密钥或用户
+存储故障时，HTTP 返回不含内部错误的 503 与重试提示，gRPC 返回 Unavailable；
+不返回匿名会话、不清 Cookie，也不报告退出成功。独立 Web 显示可重试故障页，
+保留原访问地址。数据库结构与官方客户端协议不变，见
+[ADR-0012](docs/adr/ADR-0012-authentication-storage-failures.md)。
 
 ### 通行密钥
 

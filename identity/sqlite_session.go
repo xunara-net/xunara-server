@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -72,8 +73,11 @@ func (s *SQLiteStore) GetSessionByToken(token string) (Session, error) {
 		HashSecret(token), now.UnixNano())
 
 	session, err := scanSession(row)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("identity: looking up session: %w", err)
 	}
 	return session, nil
 }

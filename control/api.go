@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -42,42 +43,40 @@ func (p apiPrincipal) actor() string {
 
 // authenticateAPI resolves the request's credentials: a bearer token (API key
 // or session token) or the browser session cookie.
-func (s *Server) authenticateAPI(r *http.Request) (apiPrincipal, bool) {
+func (s *Server) authenticateAPI(r *http.Request) (apiPrincipal, error) {
 	if raw := r.Header.Get("Authorization"); raw != "" {
 		scheme, token, ok := strings.Cut(raw, " ")
 		if !ok || !strings.EqualFold(scheme, "Bearer") {
-			return apiPrincipal{}, false
+			return apiPrincipal{}, errAuthenticationRequired
 		}
 		token = strings.TrimSpace(token)
 		if token == "" {
-			return apiPrincipal{}, false
+			return apiPrincipal{}, errAuthenticationRequired
 		}
-		if principal, ok := s.principalForToken(token); ok {
-			return principal, true
-		}
-		return apiPrincipal{}, false
+		return s.principalForToken(r.Context(), token)
 	}
 
-	if session, ok := s.currentSession(r); ok {
-		return s.sessionPrincipal(session)
+	session, _, err := s.resolveCookieSession(r)
+	if err != nil {
+		return apiPrincipal{}, err
 	}
-	return apiPrincipal{}, false
+	return s.resolveSessionPrincipal(r.Context(), session)
 }
 
 // principalForToken resolves a bearer token, without an HTTP request: an API
 // key (service identity) or a session token. The gRPC surface uses it too, so
 // both transports accept exactly the same credentials.
-func (s *Server) principalForToken(token string) (apiPrincipal, bool) {
+func (s *Server) principalForToken(ctx context.Context, token string) (apiPrincipal, error) {
 	if strings.HasPrefix(token, identity.APIKeyPrefix) {
 		key, err := s.identity.GetAPIKeyByToken(token)
 		if err != nil {
-			return apiPrincipal{}, false
+			return apiPrincipal{}, err
 		}
-		user, ok := s.identity.GetUser(key.UserID)
-		if !ok {
+		user, err := s.identity.LookupUser(ctx, key.UserID)
+		if err != nil {
 			// The owning user is gone; the key is a dangling service
 			// identity and must not authenticate.
-			return apiPrincipal{}, false
+			return apiPrincipal{}, err
 		}
 		if err := s.identity.TouchAPIKey(key.ID, time.Now().UTC()); err != nil {
 			s.log.Warn("recording API key use", "key", key.ID, "err", err)
@@ -88,22 +87,28 @@ func (s *Server) principalForToken(token string) (apiPrincipal, bool) {
 			Role:   user.Role,
 			Scopes: scopeSet(key.Scopes),
 			APIKey: key,
-		}, true
+		}, nil
 	}
 
-	if session, err := s.identity.GetSessionByToken(token); err == nil {
-		return s.sessionPrincipal(session)
+	session, err := s.identity.GetSessionByToken(token)
+	if err != nil {
+		return apiPrincipal{}, err
 	}
-	return apiPrincipal{}, false
+	return s.resolveSessionPrincipal(ctx, session)
 }
 
 // sessionPrincipal grants a signed-in human the full scope set; the role still
 // bounds what those scopes can do.
 func (s *Server) sessionPrincipal(session identity.Session) (apiPrincipal, bool) {
-	user, ok := s.identity.GetUser(session.UserID)
-	if !ok {
+	principal, err := s.resolveSessionPrincipal(context.Background(), session)
+	return principal, err == nil
+}
+
+func (server *Server) resolveSessionPrincipal(ctx context.Context, session identity.Session) (apiPrincipal, error) {
+	user, err := server.identity.LookupUser(ctx, session.UserID)
+	if err != nil {
 		// A session for a deleted user is not a valid principal.
-		return apiPrincipal{}, false
+		return apiPrincipal{}, err
 	}
 	return apiPrincipal{
 		Kind:    "session",
@@ -111,17 +116,43 @@ func (s *Server) sessionPrincipal(session identity.Session) (apiPrincipal, bool)
 		Role:    user.Role,
 		Scopes:  map[string]bool{identity.ScopeRead: true, identity.ScopeWrite: true},
 		Session: session,
-	}, true
+	}, nil
+}
+
+var errAuthenticationRequired = errors.New("authentication required")
+
+func isAuthenticationRequired(err error) bool {
+	return errors.Is(err, errAuthenticationRequired) || errors.Is(err, identity.ErrSessionNotFound) ||
+		errors.Is(err, identity.ErrAPIKeyNotFound) || errors.Is(err, identity.ErrUserNotFound)
+}
+
+// 无效身份与认证服务故障使用不同结果；错误正文不暴露数据库信息或原始凭据。
+func writeAuthenticationError(writer http.ResponseWriter, err error) {
+	writer.Header().Set("Cache-Control", "no-store")
+	if isAuthenticationRequired(err) {
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="xunara"`)
+		writeAPIError(writer, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	writer.Header().Set("Retry-After", "5")
+	writeAPIError(writer, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE: could not check authentication; try again later")
+}
+
+func (server *Server) requireAPIPrincipal(writer http.ResponseWriter, request *http.Request) (apiPrincipal, bool) {
+	principal, err := server.authenticateAPI(request)
+	if err != nil {
+		writeAuthenticationError(writer, err)
+		return apiPrincipal{}, false
+	}
+	return principal, true
 }
 
 // requireScope authenticates the request and checks the scope. The write
 // scope additionally requires a role that may change tailnet state; service
 // keys inherit their owner's role.
 func (s *Server) requireScope(w http.ResponseWriter, r *http.Request, scope string) (apiPrincipal, bool) {
-	principal, ok := s.authenticateAPI(r)
+	principal, ok := s.requireAPIPrincipal(w, r)
 	if !ok {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="xunara"`)
-		writeAPIError(w, http.StatusUnauthorized, "authentication required")
 		return apiPrincipal{}, false
 	}
 	if err := authorizeScope(principal, scope); err != nil {
@@ -148,10 +179,8 @@ func authorizeScope(principal apiPrincipal, scope string) error {
 // consulting the role: it guards actions a principal may always take on its
 // own objects, such as revoking its own session or service key.
 func (s *Server) requireSelfScope(w http.ResponseWriter, r *http.Request, scope string) (apiPrincipal, bool) {
-	principal, ok := s.authenticateAPI(r)
+	principal, ok := s.requireAPIPrincipal(w, r)
 	if !ok {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="xunara"`)
-		writeAPIError(w, http.StatusUnauthorized, "authentication required")
 		return apiPrincipal{}, false
 	}
 	if !principal.Scopes[scope] {

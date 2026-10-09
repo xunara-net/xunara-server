@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -164,9 +165,15 @@ func (g *grpcPlatformServer) authorize(ctx context.Context, scope string) (*Serv
 	if !ok {
 		return nil, apiPrincipal{}, status.Error(codes.Unauthenticated, "authorization metadata with a Bearer token is required")
 	}
-	principal, ok := server.principalForToken(token)
-	if !ok {
-		return nil, apiPrincipal{}, status.Error(codes.Unauthenticated, "invalid credential")
+	principal, err := server.principalForToken(ctx, token)
+	if err != nil {
+		if isAuthenticationRequired(err) {
+			return nil, apiPrincipal{}, status.Error(codes.Unauthenticated, "invalid credential")
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, apiPrincipal{}, status.FromContextError(err).Err()
+		}
+		return nil, apiPrincipal{}, status.Error(codes.Unavailable, "authentication temporarily unavailable")
 	}
 	if err := authorizeScope(principal, scope); err != nil {
 		return nil, apiPrincipal{}, status.Error(codes.PermissionDenied, err.Error())

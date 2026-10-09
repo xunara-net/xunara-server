@@ -203,16 +203,25 @@ func (s *Server) writeAPIAnonymousSession(w http.ResponseWriter) {
 
 // handleAPIAuthSession implements GET /api/v1/auth/session.
 func (s *Server) handleAPIAuthSession(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.currentSession(r)
-	if !ok {
+	w.Header().Set("Cache-Control", "no-store")
+	session, _, err := s.resolveCookieSession(r)
+	if errors.Is(err, identity.ErrSessionNotFound) {
 		s.writeAPIAnonymousSession(w)
 		return
 	}
-	user, ok := s.identity.GetUser(session.UserID)
-	if !ok {
+	if err != nil {
+		writeAuthenticationError(w, err)
+		return
+	}
+	user, err := s.identity.LookupUser(r.Context(), session.UserID)
+	if errors.Is(err, identity.ErrUserNotFound) {
 		// A session whose user is gone is not a session.
 		s.clearSessionCookie(w)
 		s.writeAPIAnonymousSession(w)
+		return
+	}
+	if err != nil {
+		writeAuthenticationError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, s.apiSessionPayload(user, session))
@@ -407,9 +416,14 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIAuthLogout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Header.Get("Authorization") == "" {
-		if _, authenticated := s.currentSession(r); !authenticated {
+		_, _, err := s.resolveCookieSession(r)
+		if errors.Is(err, identity.ErrSessionNotFound) {
 			s.clearSessionCookie(w)
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if err != nil {
+			writeAuthenticationError(w, err)
 			return
 		}
 	}
