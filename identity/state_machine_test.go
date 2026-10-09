@@ -58,21 +58,28 @@ func TestAuthTransactionLifecycle(t *testing.T) {
 func TestAuthTransactionExpiry(t *testing.T) {
 	s := openTestStore(t)
 
-	tx, _, err := s.CreateAuthTransaction(NewAuthTransactionOptions{ProviderID: "dex", TTL: time.Millisecond})
+	tx, _, err := s.CreateAuthTransaction(NewAuthTransactionOptions{ProviderID: "dex", TTL: time.Hour})
 	if err != nil {
 		t.Fatalf("CreateAuthTransaction: %v", err)
 	}
-	time.Sleep(10 * time.Millisecond)
+	// 直接构造已过期的持久事实，不依赖 CI 磁盘速度或毫秒级调度才能通过。
+	if _, err := s.db.Exec("UPDATE auth_transactions SET expires_at = ? WHERE id = ?", time.Now().Add(-time.Hour).UnixNano(), tx.ID); err != nil {
+		t.Fatalf("expire transaction fixture: %v", err)
+	}
 
 	if _, err := s.ConsumeAuthTransaction(tx.ID); err != ErrTransactionExpired {
 		t.Errorf("consume expired = %v, want ErrTransactionExpired", err)
 	}
 
-	fresh, _, err := s.CreateAuthTransaction(NewAuthTransactionOptions{ProviderID: "dex", TTL: time.Millisecond})
+	fresh, _, err := s.CreateAuthTransaction(NewAuthTransactionOptions{ProviderID: "dex", TTL: time.Hour})
 	if err != nil {
 		t.Fatalf("CreateAuthTransaction: %v", err)
 	}
-	deleted, err := s.DeleteExpiredAuthTransactions(time.Now())
+	live, _, err := s.CreateAuthTransaction(NewAuthTransactionOptions{ProviderID: "dex", TTL: 2 * time.Hour})
+	if err != nil {
+		t.Fatalf("create unexpired transaction: %v", err)
+	}
+	deleted, err := s.DeleteExpiredAuthTransactions(fresh.ExpiresAt)
 	if err != nil {
 		t.Fatalf("DeleteExpiredAuthTransactions: %v", err)
 	}
@@ -81,6 +88,9 @@ func TestAuthTransactionExpiry(t *testing.T) {
 	}
 	if _, ok := s.GetAuthTransaction(fresh.ID); ok {
 		t.Error("deleted transaction is still present")
+	}
+	if _, ok := s.GetAuthTransaction(live.ID); !ok {
+		t.Error("unexpired transaction was deleted")
 	}
 }
 
