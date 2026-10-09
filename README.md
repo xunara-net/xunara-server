@@ -20,7 +20,7 @@ xunara-web（用户控制台）   xunara-admin（平台后台）   CLI / SDK / �
 - **官方客户端兼容**：TS2021 / Noise / Map / DERP 协调，官方客户端可直接接入。
 - **多租户**：组织、成员、角色（owner / admin / member / viewer）、单租户部署兼容。
 - **用户与身份**：本地密码登录、邀请/开放注册、OIDC/OAuth、Passkey、会话管理、
-  API Key、身份令牌。
+  自助资料与密码修改、API Key、身份令牌。
 - **设备与网络**：设备注册与审批、Tailnet 网段分配、子网路由、Exit Node、
   MagicDNS、DERP 策略、共享与访问策略。
 - **商业化**：套餐目录（内置 free/pro/business 或 `-plans` 外置）、设备/成员/
@@ -102,6 +102,28 @@ go run ./cmd/xunarad \
 `http://127.0.0.1:9190/api/relay/v1/admit`，不依赖租户 Host；只有有效 map 包含该
 中继、节点已注册且未过期、租户策略允许时才放行。静态组织仍使用各自配置中的
 `derp_map`，不会把某个租户的私有中继、身份或密钥复制给其他租户。
+
+## 账户自助管理
+
+用户控制台的个人设置使用独立账户接口（[ADR-0009](docs/adr/ADR-0009-account-self-service.md)）：
+
+- `GET /api/v1/account` 返回当前用户资料、`password_change_enabled` 和
+  `csrf_token`，仅接受本租户的人类 Session，API Key 不可访问。
+- `PATCH /api/v1/account` 仅接受可选的 `display_name` 与 `email`，不接受用户
+  ID、登录名、角色或组织。昵称最多 100 个字符；邮箱仅是可清空的未验证联系属性。
+- `POST /api/v1/account/password` 接受 `current_password` 与 `new_password`，
+  新密码沿用至少 12 个字符、最多 72 字节的规则，不能与登录名或当前密码相同。
+- 两个写接口要求 `application/json` 和 `X-CSRF-Token`，JSON 上限 8 KiB；
+  CSRF 值从账户读取接口取得，不放入 URL。
+- 改密成功时返回 `changed`、`revoked_sessions`，原子撤销该用户所有控制台
+  会话并写审计；必须重新登录。已注册的设备、API Key 和外部身份不受影响。
+  新建本地登录会话也检查已验证密码是否被并发替换。
+- 密码修改每用户 15 分钟最多 5 次、每 IP 最多 20 次；限流故障拒绝操作。
+  未启用本地登录或没有本地密码的用户不能通过此接口创建密码。
+
+原 `PATCH /api/v1/users/{id}` 和旧 HTML 用户管理写接口仅允许 owner。
+普通成员与 admin 使用自助账户接口管理自己的资料。邮箱验证、密码找回与
+2FA 不包含在本次实现内；正式使用必须部署 HTTPS。
 
 ## 测试
 

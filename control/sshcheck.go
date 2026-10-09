@@ -301,7 +301,7 @@ func (s *Server) handleSSHCheckPage(w http.ResponseWriter, req *http.Request) {
 		"Created":     s.consoleTime(sess.CreatedAt),
 		"Expires":     s.consoleTime(sess.ExpiresAt),
 		"LoginName":   s.UserProfile(session.UserID).LoginName,
-		"CSRF":        csrfTokenFor(sessionToken(req)),
+		"CSRF":        csrfTokenFor(s.sessionToken(req)),
 	})
 }
 

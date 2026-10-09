@@ -160,10 +160,19 @@ func (s *SQLiteStore) RotateSession(token string, ttl time.Duration) (Session, s
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE sessions SET revoked_at = ?, revoked_reason = 'rotated' WHERE id = ? AND revoked_at IS NULL",
-		time.Now().UTC().UnixNano(), old.ID); err != nil {
+	now := time.Now().UTC().UnixNano()
+	result, err := tx.ExecContext(ctx,
+		"UPDATE sessions SET revoked_at = ?, revoked_reason = 'rotated' WHERE id = ? AND revoked_at IS NULL AND expires_at > ?",
+		now, old.ID, now)
+	if err != nil {
 		return Session{}, "", fmt.Errorf("identity: revoking rotated session: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return Session{}, "", fmt.Errorf("identity: checking rotated session: %w", err)
+	}
+	if affected != 1 {
+		return Session{}, "", ErrSessionRevoked
 	}
 
 	session, err := s.createSession(ctx, tx, NewSessionOptions{

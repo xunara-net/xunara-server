@@ -155,17 +155,20 @@ func splitBrowserBinding(r *http.Request, name string) (id, secret string, ok bo
 }
 
 // sessionToken returns the raw session token presented by the browser.
-func sessionToken(r *http.Request) string {
-	c, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return ""
+func (server *Server) sessionToken(request *http.Request) string {
+	for _, cookie := range request.Cookies() {
+		if cookie.Name == sessionCookieName {
+			if _, err := server.identity.GetSessionByToken(cookie.Value); err == nil {
+				return cookie.Value
+			}
+		}
 	}
-	return c.Value
+	return ""
 }
 
 // currentSession resolves the request's session cookie to a live session.
 func (s *Server) currentSession(r *http.Request) (identity.Session, bool) {
-	token := sessionToken(r)
+	token := s.sessionToken(r)
 	if token == "" {
 		return identity.Session{}, false
 	}
@@ -204,7 +207,7 @@ func checkCSRFHeader(r *http.Request, token string) bool {
 // requireSession resolves the request's session or sends the browser to the
 // login page with a return path.
 func (s *Server) requireSession(w http.ResponseWriter, r *http.Request, returnTo string) (identity.Session, string, bool) {
-	token := sessionToken(r)
+	token := s.sessionToken(r)
 	if token != "" {
 		if session, err := s.identity.GetSessionByToken(token); err == nil {
 			return session, token, true

@@ -911,7 +911,7 @@ func (s *Server) handleRegisterPage(w http.ResponseWriter, req *http.Request) {
 		"OS":        os,
 		"Created":   s.consoleTime(da.CreatedAt),
 		"LoginName": profile.LoginName,
-		"CSRF":      csrfTokenFor(sessionToken(req)),
+		"CSRF":      csrfTokenFor(s.sessionToken(req)),
 	})
 }
 

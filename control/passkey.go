@@ -170,7 +170,7 @@ func (s *Server) consolePasskeySession(w http.ResponseWriter, r *http.Request) (
 		passkeyFail(w, http.StatusUnauthorized, "sign in to manage passkeys")
 		return identity.Session{}, "", false
 	}
-	return session, sessionToken(r), true
+	return session, s.sessionToken(r), true
 }
 
 // handleConsolePasskeyBegin implements POST /console/passkeys/begin: it starts

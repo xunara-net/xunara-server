@@ -187,7 +187,7 @@ func (s *Server) consoleSession(w http.ResponseWriter, r *http.Request, nav stri
 
 // consoleCheckCSRF verifies the form token of a console POST.
 func (s *Server) consoleCheckCSRF(w http.ResponseWriter, r *http.Request) bool {
-	if !checkCSRF(r, sessionToken(r)) {
+	if !checkCSRF(r, s.sessionToken(r)) {
 		s.renderError(w, r, http.StatusForbidden, "Request rejected",
 			"The form token is invalid. Reload the page and try again.")
 		return false
@@ -464,6 +464,11 @@ func (s *Server) handleConsoleUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConsoleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	session, data, ok := s.consoleSession(w, r, "users")
 	if !ok {
+		return
+	}
+	actor, ok := s.identity.GetUser(session.UserID)
+	if !ok || !actor.Role.IsOwner() {
+		s.renderError(w, r, http.StatusForbidden, "Owner role required", "Only an owner may manage users.")
 		return
 	}
 	if !s.consoleCheckCSRF(w, r) {

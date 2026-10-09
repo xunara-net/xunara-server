@@ -114,5 +114,6 @@ type Store interface {
 	PasskeyCeremonyStore
 	ShareUserStore
 	LocalCredentialStore
+	AccountStore
 	RegistrationInviteStore
 }

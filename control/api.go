@@ -194,6 +194,9 @@ func (s *Server) apiRouter() http.Handler {
 
 	r.Get("/overview", s.handleAPIOverview)
 	r.Get("/plan", s.handleAPIPlan)
+	r.Get("/account", s.handleAPIAccount)
+	r.Patch("/account", s.handleAPIUpdateAccount)
+	r.Post("/account/password", s.handleAPIChangePassword)
 
 	r.Get("/machines", s.handleAPIMachines)
 	r.Get("/machines/{ref}", s.handleAPIMachine)

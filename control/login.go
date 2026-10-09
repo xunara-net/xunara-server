@@ -191,11 +191,11 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, token, err := s.identity.CreateSession(identity.NewSessionOptions{
-		UserID:     user.ID,
-		AuthMethod: identity.LocalProviderID,
-		TTL:        s.sessionTTL,
-	})
+	session, token, err := s.identity.CreateLocalSession(r.Context(), user.ID, credential.PasswordHash, s.sessionTTL)
+	if errors.Is(err, identity.ErrCredentialChanged) {
+		reject(http.StatusUnauthorized, "Sign-in failed", "Wrong login name or password.", "credential changed during sign-in")
+		return
+	}
 	if err != nil {
 		s.log.Error("creating session", "user", int(user.ID), "err", err)
 		s.renderError(w, r, http.StatusInternalServerError, "Sign-in failed", "Please try again.")
@@ -332,7 +332,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 // handleLogout implements POST /logout: revoke the session server-side, then
 // clear the cookie.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	token := sessionToken(r)
+	token := s.sessionToken(r)
 	if token == "" {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return

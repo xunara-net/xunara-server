@@ -414,7 +414,7 @@ func (s *Server) lookupAPIUser(ref string) (identity.User, bool) {
 
 // handleAPIUpdateUser implements PATCH /api/v1/users/{id}.
 func (s *Server) handleAPIUpdateUser(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireOwner(w, r)
 	if !ok {
 		return
 	}

@@ -319,11 +319,11 @@ func (s *Server) handleAPIAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, token, err := s.identity.CreateSession(identity.NewSessionOptions{
-		UserID:     user.ID,
-		AuthMethod: identity.LocalProviderID,
-		TTL:        s.sessionTTL,
-	})
+	session, token, err := s.identity.CreateLocalSession(r.Context(), user.ID, credential.PasswordHash, s.sessionTTL)
+	if errors.Is(err, identity.ErrCredentialChanged) {
+		reject(http.StatusUnauthorized, "credential changed during sign-in")
+		return
+	}
 	if err != nil {
 		s.log.Error("creating session", "user", int(user.ID), "err", err)
 		writeAPIError(w, http.StatusInternalServerError, "sign-in failed; try again")
@@ -403,7 +403,7 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 // handleAPIAuthLogout implements POST /api/v1/auth/logout. It is idempotent:
 // signing out twice, or without a session, is not an error.
 func (s *Server) handleAPIAuthLogout(w http.ResponseWriter, r *http.Request) {
-	token := sessionToken(r)
+	token := s.sessionToken(r)
 	if token != "" {
 		if session, err := s.identity.GetSessionByToken(token); err == nil {
 			if err := s.identity.RevokeSession(session.ID, "logout"); err != nil {
