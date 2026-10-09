@@ -50,6 +50,8 @@ func main() {
 			"comma-separated OIDC scopes (default openid,profile,email)")
 		allowLocalLogin = flag.Bool("allow-local-login", false,
 			"offer the built-in local login even when OIDC is configured")
+		registration = flag.String("registration", string(control.DefaultRegistrationMode),
+			"self-service sign-up policy: closed (administrators only), invite (single-use invitation, default) or open (anyone, subject to the plan's member quota)")
 		passkey = flag.Bool("passkey", true,
 			"enable passkey (WebAuthn) sign-in; RP ID and origin default to -server-url")
 		passkeyRPID = flag.String("passkey-rpid", "",
@@ -216,6 +218,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	registrationMode, err := control.ParseRegistrationMode(*registration)
+	if err != nil {
+		logger.Error("invalid configuration", "err", err)
+		os.Exit(1)
+	}
+
 	// Self-hosted deployments do not sell plans, so the commercial layer stays
 	// off unless the operator asks for it with -plans. When it is on, the
 	// single tenant is the deployment itself ("default").
@@ -245,6 +253,7 @@ func main() {
 		ConsoleTimezone:     *consoleTimezone,
 		OIDCProviders:       oidcProviders,
 		AllowLocalLogin:     *allowLocalLogin,
+		Registration:        registrationMode,
 		Passkeys:            passkeyCfg,
 		CertDomains:         certDomains,
 		DNSProvider:         dnsProvider,
@@ -326,7 +335,7 @@ var orgScopedFlags = []string{
 	"state-dir", "server-url", "domain", "policy", "nameserver", "dns-route",
 	"derp-map", "derp-policy", "derp-regions", "client-version", "client-version-url",
 	"oidc-issuer", "oidc-id", "oidc-client-id", "oidc-redirect-url", "oidc-scopes",
-	"allow-local-login", "cert-domain",
+	"allow-local-login", "registration", "cert-domain",
 	"passkey", "passkey-rpid", "passkey-origin", "passkey-display-name",
 	"services-health-ttl", "id-token-rate-limit", "reach",
 	"flux", "flux-dir", "flux-max-size", "flux-ttl",
@@ -425,7 +434,7 @@ func loadPlanRegistry(ctx context.Context, dbPath, plansFile, networkPool string
 func runRouter(opts routerOptions, logger *slog.Logger) {
 	path, listen, grpcListen, platformTokenEnv, platformStateDir, consoleTimezone, plansFile, networkPool :=
 		opts.path, opts.listen, opts.grpcListen, opts.platformTokenEnv, opts.platformStateDir, opts.consoleTimezone, opts.plansFile, opts.networkPool
-	sites, err := loadOrgSites(path, logger)
+	sites, selfService, err := loadOrgConfig(path, logger)
 	if err != nil {
 		logger.Error("loading the organization table", "err", err)
 		os.Exit(1)
@@ -498,6 +507,7 @@ func runRouter(opts routerOptions, logger *slog.Logger) {
 		Registry:           registry,
 		Shares:             shares,
 		Plans:              plans,
+		SelfService:        selfService,
 		Logger:             logger,
 	})
 	if err != nil {

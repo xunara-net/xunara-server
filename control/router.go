@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -63,6 +64,11 @@ type RouterConfig struct {
 	// Shares, when non-nil, enables Xunara Share: a machine can be shared with
 	// a user in another organization hosted by this router (spec section 38).
 	Shares *ShareRegistry
+	// SelfService, when non-nil, turns the deployment's front door into a
+	// sign-up desk: POST /api/self-service/v1/signup on the named
+	// organization's hosts creates a brand-new organization per account, the
+	// tenant model of a hosted deployment (selfservice.go).
+	SelfService *SelfServiceConfig
 	// Plans, when non-nil, turns on the commercial layer (spec section 54):
 	// every organization is on a plan from the registry's catalog, quotas are
 	// enforced by its control plane, and each tenant's devices are allocated
@@ -93,6 +99,10 @@ type Router struct {
 	// while the router serves are started with it.
 	startCtx context.Context
 	started  bool
+
+	// selfService is the deployment's sign-up desk, or nil when it has none.
+	// It is written once, before the router serves, and read per request.
+	selfService atomic.Pointer[selfService]
 
 	// platformTokenHash is the SHA-256 of the platform admin token; hashing
 	// equalizes lengths so the constant-time comparison does not leak the
@@ -164,6 +174,14 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 
 	if cfg.PlatformAdminToken != "" {
 		r.platformTokenHash = sha256Sum(cfg.PlatformAdminToken)
+	}
+
+	if cfg.SelfService != nil {
+		// mu is still held here: the desk is attached to the organization
+		// table the caller just built.
+		if err := r.enableSelfServiceLocked(); err != nil {
+			return nil, err
+		}
 	}
 
 	return r, nil
@@ -576,6 +594,13 @@ func (r *Router) Handler() http.Handler {
 	// process-level endpoints: it is not a tenant surface, so no host's
 	// routing decides whether it exists (spec section 54).
 	r.mountAdmin(mux)
+
+	// The sign-up desk is platform-level like the console, but it answers
+	// only on its own site's hosts: everywhere else the request belongs to
+	// that organization and falls through to its handler.
+	if r.selfService.Load() != nil {
+		mux.Post(selfServiceSignupPath, r.handleSelfServiceSignup)
+	}
 
 	mux.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		org := r.orgForHost(req.Host)

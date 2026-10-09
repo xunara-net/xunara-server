@@ -1,0 +1,360 @@
+package control
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"testing"
+
+	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/netspace"
+	"github.com/xunara-net/xunara-server/plan"
+)
+
+// selfServiceRouter builds the hosted shape: a front door at app.xunara.test,
+// another tenant at acme.xunara.test, platform-managed organizations and a
+// plan catalog with a network pool behind them.
+func selfServiceRouter(t *testing.T, cfg *SelfServiceConfig, prepare ...func(*PlanRegistry)) (*Router, *PlanRegistry) {
+	t.Helper()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	registry, err := OpenOrgRegistry(ctx, OrgRegistryConfig{
+		Path:      dir + "/platform.db",
+		StateRoot: dir + "/orgs",
+		NewServer: func(org ManagedOrg, stateDir string) (*Server, error) {
+			return New(Config{ServerURL: org.ServerURL, StateDir: stateDir})
+		},
+	})
+	if err != nil {
+		t.Fatalf("OpenOrgRegistry: %v", err)
+	}
+	t.Cleanup(func() { registry.Close() })
+
+	pool, err := netspace.NewPool(netip.MustParsePrefix("100.100.0.0/16"), 24)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	plans, err := OpenPlanRegistry(ctx, PlanRegistryConfig{Path: dir + "/plans.db", Pool: pool})
+	if err != nil {
+		t.Fatalf("OpenPlanRegistry: %v", err)
+	}
+	t.Cleanup(func() { plans.Close() })
+
+	for _, prep := range prepare {
+		prep(plans)
+	}
+
+	// The sign-up desk is public by definition, so the front door runs in
+	// open registration mode (enableSelfServiceLocked refuses anything else).
+	front := newServerWithConfig(t, Config{
+		StateDir:     dir + "/portal",
+		ServerURL:    "https://app.xunara.test",
+		Registration: RegistrationOpen,
+	})
+	if cfg != nil {
+		cfg.Site = "portal"
+	}
+	router, err := NewRouter(RouterConfig{
+		ListenAddr: "127.0.0.1:0",
+		Orgs: []OrgSite{
+			{ID: "portal", Name: "Xunara Cloud", Domains: []string{"app.xunara.test"}, Server: front},
+			{ID: "acme", Name: "Acme", Domains: []string{"acme.xunara.test"}, Server: newTestServer(t)},
+		},
+		PlatformAdminToken: "self-service-platform-token",
+		Registry:           registry,
+		Plans:              plans,
+		SelfService:        cfg,
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	t.Cleanup(func() { router.Close() })
+	return router, plans
+}
+
+// postJSONAtHost posts a JSON body with an explicit Host header, standing in
+// for DNS pointing a name at the deployment.
+func postJSONAtHost(t *testing.T, handler http.Handler, host, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshalling the body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://"+host+path, bytes.NewReader(raw))
+	req.Host = host
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func TestSelfServiceSignupCreatesTenant(t *testing.T) {
+	router, plans := selfServiceRouter(t, &SelfServiceConfig{
+		DomainSuffix: "xunara.test",
+		Scheme:       "https",
+		CookieDomain: "xunara.test",
+	})
+	handler := router.Handler()
+
+	recorder := postJSONAtHost(t, handler, "app.xunara.test", selfServiceSignupPath, map[string]string{
+		"login":        "alice",
+		"display_name": "Alice",
+		"email":        "alice@example.com",
+		"password":     "correct horse battery staple",
+	})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("self-service signup = %d (%s), want 201", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Authenticated bool `json:"authenticated"`
+		Handoff       bool `json:"handoff"`
+		Organization  struct {
+			ID     string `json:"id"`
+			Domain string `json:"domain"`
+			URL    string `json:"url"`
+		} `json:"organization"`
+		User struct {
+			LoginName string `json:"login_name"`
+			Role      string `json:"role"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decoding the response: %v", err)
+	}
+	if !payload.Authenticated || !payload.Handoff {
+		t.Fatalf("payload = %+v, want an authenticated sign-up with a cookie hand-off", payload)
+	}
+	if payload.Organization.ID != "alice" || payload.Organization.Domain != "alice.xunara.test" ||
+		payload.Organization.URL != "https://alice.xunara.test" {
+		t.Fatalf("organization = %+v, want the tenant alice.xunara.test", payload.Organization)
+	}
+	if payload.User.LoginName != "alice" || payload.User.Role != string(identity.RoleOwner) {
+		t.Fatalf("user = %+v, want alice as the tenant owner", payload.User)
+	}
+
+	// The session is scoped to the shared parent domain, so the browser
+	// carries it to the tenant's own host.
+	var session *http.Cookie
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == sessionCookieName {
+			session = cookie
+		}
+	}
+	if session == nil {
+		t.Fatal("the sign-up returned no session cookie")
+	}
+	if session.Domain != "xunara.test" {
+		t.Fatalf("session cookie domain = %q, want xunara.test", session.Domain)
+	}
+
+	// Every new tenant is on a plan and owns a network block from the pool.
+	prefix, ok := plans.NetworkPrefix(context.Background(), "alice")
+	if !ok || !prefix.IsValid() {
+		t.Fatalf("the new tenant has no network block (%v, %v)", prefix, ok)
+	}
+	if !netip.MustParsePrefix("100.100.0.0/24").Contains(prefix.Addr()) {
+		t.Fatalf("network block %s is outside the pool", prefix)
+	}
+
+	// The tenant's own host serves its console: the session works there, and
+	// the account is the owner of that organization.
+	sessionReq := httptest.NewRequest(http.MethodGet, "http://alice.xunara.test/api/v1/auth/session", nil)
+	sessionReq.Host = "alice.xunara.test"
+	sessionReq.AddCookie(session)
+	sessionRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(sessionRecorder, sessionReq)
+	if sessionRecorder.Code != http.StatusOK {
+		t.Fatalf("session probe on the tenant host = %d, want 200", sessionRecorder.Code)
+	}
+	var sessionPayload struct {
+		Authenticated bool `json:"authenticated"`
+		User          struct {
+			LoginName string `json:"login_name"`
+			Role      string `json:"role"`
+		} `json:"user"`
+		Plan struct {
+			ID string `json:"id"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal(sessionRecorder.Body.Bytes(), &sessionPayload); err != nil {
+		t.Fatalf("decoding the session: %v", err)
+	}
+	if !sessionPayload.Authenticated || sessionPayload.User.Role != string(identity.RoleOwner) {
+		t.Fatalf("tenant session = %+v, want the owner signed in", sessionPayload)
+	}
+	if sessionPayload.Plan.ID == "" {
+		t.Fatalf("tenant session reports no plan: %+v", sessionPayload)
+	}
+
+	// The front door advertises the desk so the console posts here.
+	providersReq := httptest.NewRequest(http.MethodGet, "http://app.xunara.test/api/v1/auth/providers", nil)
+	providersReq.Host = "app.xunara.test"
+	providersRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(providersRecorder, providersReq)
+	var providers struct {
+		SelfService *SelfServiceInfo `json:"self_service"`
+	}
+	if err := json.Unmarshal(providersRecorder.Body.Bytes(), &providers); err != nil {
+		t.Fatalf("decoding the providers payload: %v", err)
+	}
+	if providers.SelfService == nil || providers.SelfService.Endpoint != selfServiceSignupPath {
+		t.Fatalf("providers = %+v, want the self-service endpoint", providers.SelfService)
+	}
+}
+
+// A second account with the same login name gets its own tenant with a
+// derived ID: the login name is tenant-scoped, the domain is not.
+func TestSelfServiceSignupDerivesUniqueOrganization(t *testing.T) {
+	router, _ := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "xunara.test"})
+	handler := router.Handler()
+
+	first := postJSONAtHost(t, handler, "app.xunara.test", selfServiceSignupPath, map[string]string{
+		"login": "bob", "password": "correct horse battery staple",
+	})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first signup = %d (%s), want 201", first.Code, first.Body.String())
+	}
+	second := postJSONAtHost(t, handler, "app.xunara.test", selfServiceSignupPath, map[string]string{
+		"login": "bob", "password": "correct horse battery staple",
+	})
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second signup = %d (%s), want 201", second.Code, second.Body.String())
+	}
+
+	var orgIDs []string
+	for _, body := range []*httptest.ResponseRecorder{first, second} {
+		var payload struct {
+			Organization struct {
+				ID string `json:"id"`
+			} `json:"organization"`
+		}
+		if err := json.Unmarshal(body.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decoding: %v", err)
+		}
+		orgIDs = append(orgIDs, payload.Organization.ID)
+	}
+	if orgIDs[0] == orgIDs[1] {
+		t.Fatalf("both sign-ups landed in tenant %q, want one tenant each", orgIDs[0])
+	}
+	if !strings.HasPrefix(orgIDs[1], "bob") {
+		t.Fatalf("second tenant = %q, want a derived ID that still reads as bob", orgIDs[1])
+	}
+}
+
+// The desk answers only on its own hosts: anywhere else the request belongs
+// to that organization, which has no such endpoint.
+func TestSelfServiceSignupIsScopedToTheFrontDoor(t *testing.T) {
+	router, _ := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "xunara.test"})
+	handler := router.Handler()
+
+	recorder := postJSONAtHost(t, handler, "acme.xunara.test", selfServiceSignupPath, map[string]string{
+		"login": "mallory", "password": "correct horse battery staple",
+	})
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("signup on a tenant host = %d (%s), want 404", recorder.Code, recorder.Body.String())
+	}
+}
+
+// A sign-up that fails leaves no tenant behind, and the plan's member quota
+// is the rule that can stop it.
+func TestSelfServiceSignupRollsBackOnQuota(t *testing.T) {
+	// New tenants start on a plan that allows no members, so not even the
+	// owner account can be created: the commercial rule stops the sign-up and
+	// the tenant must not survive it.
+	router, _ := selfServiceRouter(t,
+		&SelfServiceConfig{DomainSuffix: "xunara.test", Plan: "nobody"},
+		func(plans *PlanRegistry) {
+			if _, err := plans.UpsertPlan(context.Background(), plan.Plan{
+				ID: "nobody", Name: "Nobody", Currency: "CNY",
+				MaxDevices: plan.Unlimited, MaxUsers: 0, MaxRoutes: plan.Unlimited, MaxAuthKeys: plan.Unlimited,
+			}); err != nil {
+				t.Fatalf("UpsertPlan: %v", err)
+			}
+		})
+	handler := router.Handler()
+
+	recorder := postJSONAtHost(t, handler, "app.xunara.test", selfServiceSignupPath, map[string]string{
+		"login": "carol", "password": "correct horse battery staple",
+	})
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("signup on a plan without members = %d (%s), want 403", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "USER_LIMIT_REACHED") {
+		t.Fatalf("signup rejection = %s, want USER_LIMIT_REACHED", recorder.Body.String())
+	}
+
+	// The tenant must not survive its failed sign-up.
+	for _, org := range router.orgSnapshot() {
+		if strings.HasPrefix(org.site.ID, "carol") {
+			t.Fatalf("a rolled-back tenant is still served: %+v", org.site.ID)
+		}
+	}
+}
+
+func TestSelfServiceRejectsBadConfiguration(t *testing.T) {
+	cases := []struct {
+		name         string
+		cfg          *SelfServiceConfig
+		registration RegistrationMode
+	}{
+		{"no domain suffix", &SelfServiceConfig{Scheme: "https"}, RegistrationOpen},
+		{"unknown site", &SelfServiceConfig{Site: "nope", DomainSuffix: "xunara.test"}, RegistrationOpen},
+		{"cookie domain outside the front door", &SelfServiceConfig{DomainSuffix: "xunara.test", CookieDomain: "elsewhere.test"}, RegistrationOpen},
+		{"unknown plan", &SelfServiceConfig{DomainSuffix: "xunara.test", Plan: "platinum"}, RegistrationOpen},
+		// The desk hands out accounts to anyone, so a front door that is not
+		// open would contradict what it does.
+		{"invite-only front door", &SelfServiceConfig{DomainSuffix: "xunara.test"}, RegistrationInvite},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			registry, err := OpenOrgRegistry(ctx, OrgRegistryConfig{
+				Path:      dir + "/platform.db",
+				StateRoot: dir + "/orgs",
+				NewServer: func(org ManagedOrg, stateDir string) (*Server, error) {
+					return New(Config{ServerURL: org.ServerURL, StateDir: stateDir})
+				},
+			})
+			if err != nil {
+				t.Fatalf("OpenOrgRegistry: %v", err)
+			}
+			t.Cleanup(func() { registry.Close() })
+			plans, err := OpenPlanRegistry(ctx, PlanRegistryConfig{Path: dir + "/plans.db"})
+			if err != nil {
+				t.Fatalf("OpenPlanRegistry: %v", err)
+			}
+			t.Cleanup(func() { plans.Close() })
+
+			front := newServerWithConfig(t, Config{
+				StateDir:     dir + "/portal",
+				Registration: tc.registration,
+			})
+
+			_, err = NewRouter(RouterConfig{
+				ListenAddr: "127.0.0.1:0",
+				Orgs:       []OrgSite{{ID: "portal", Name: "Portal", Domains: []string{"app.xunara.test"}, Server: front}},
+				Registry:   registry,
+				Plans:      plans,
+				SelfService: func() *SelfServiceConfig {
+					cfg := *tc.cfg
+					if cfg.Site == "" {
+						cfg.Site = "portal"
+					}
+					return &cfg
+				}(),
+			})
+			if err == nil {
+				t.Fatal("NewRouter accepted a broken self-service configuration")
+			}
+		})
+	}
+}

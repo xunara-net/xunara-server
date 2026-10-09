@@ -22,6 +22,21 @@ import (
 // orgConfigFile is the JSON document accepted by -org-config.
 type orgConfigFile struct {
 	Organizations []orgConfig `json:"organizations"`
+	// SelfService, when present, turns the named organization's hosts into
+	// the deployment's sign-up desk: every account created there gets its own
+	// organization (self-service registration, spec section 54).
+	SelfService *orgSelfServiceConfig `json:"self_service"`
+}
+
+// orgSelfServiceConfig is the -org-config half of control.SelfServiceConfig.
+// It lives in the config file rather than on the command line because it
+// describes the tenant model, which only a multi-tenant deployment has.
+type orgSelfServiceConfig struct {
+	Site         string `json:"site"`
+	DomainSuffix string `json:"domain_suffix"`
+	Scheme       string `json:"scheme"`
+	CookieDomain string `json:"cookie_domain"`
+	Plan         string `json:"plan"`
 }
 
 // orgConfig describes one organization. Secrets are never read from the file:
@@ -54,6 +69,7 @@ type orgConfig struct {
 	OIDC                *orgOIDCConfig      `json:"oidc"`
 	Webhooks            []orgWebhookConfig  `json:"webhooks"`
 	AllowLocalLogin     bool                `json:"allow_local_login"`
+	Registration        string              `json:"registration"`
 }
 
 // orgDERPPolicy restricts the DERP regions this organization serves. Mode is
@@ -97,19 +113,37 @@ type orgOIDCConfig struct {
 // server per organization. Any partly built server is closed when a later one
 // fails, so a broken row cannot leak resources.
 func loadOrgSites(path string, logger *slog.Logger) ([]control.OrgSite, error) {
+	sites, _, err := loadOrgConfig(path, logger)
+	return sites, err
+}
+
+// loadOrgConfig parses the organization table and returns the deployment-wide
+// settings that sit next to it.
+func loadOrgConfig(path string, logger *slog.Logger) ([]control.OrgSite, *control.SelfServiceConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var doc orgConfigFile
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&doc); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	if len(doc.Organizations) == 0 {
-		return nil, fmt.Errorf("%s lists no organizations", path)
+		return nil, nil, fmt.Errorf("%s lists no organizations", path)
+	}
+
+	var selfService *control.SelfServiceConfig
+	if doc.SelfService != nil {
+		selfService = &control.SelfServiceConfig{
+			Site:         doc.SelfService.Site,
+			DomainSuffix: doc.SelfService.DomainSuffix,
+			Scheme:       doc.SelfService.Scheme,
+			CookieDomain: doc.SelfService.CookieDomain,
+			Plan:         doc.SelfService.Plan,
+		}
 	}
 
 	sites := make([]control.OrgSite, 0, len(doc.Organizations))
@@ -126,7 +160,7 @@ func loadOrgSites(path string, logger *slog.Logger) ([]control.OrgSite, error) {
 		// configuration. Refuse it.
 		if other, dup := stateDirs[org.StateDir]; dup {
 			closeAll()
-			return nil, fmt.Errorf("%s: organizations[%d] (%s): state_dir %q is already used by organization %q",
+			return nil, nil, fmt.Errorf("%s: organizations[%d] (%s): state_dir %q is already used by organization %q",
 				path, i, org.ID, org.StateDir, other)
 		}
 		stateDirs[org.StateDir] = org.ID
@@ -134,12 +168,12 @@ func loadOrgSites(path string, logger *slog.Logger) ([]control.OrgSite, error) {
 		cfg, err := org.controlConfig(logger)
 		if err != nil {
 			closeAll()
-			return nil, fmt.Errorf("%s: organizations[%d] (%s): %w", path, i, org.ID, err)
+			return nil, nil, fmt.Errorf("%s: organizations[%d] (%s): %w", path, i, org.ID, err)
 		}
 		server, err := control.New(cfg)
 		if err != nil {
 			closeAll()
-			return nil, fmt.Errorf("%s: organizations[%d] (%s): %w", path, i, org.ID, err)
+			return nil, nil, fmt.Errorf("%s: organizations[%d] (%s): %w", path, i, org.ID, err)
 		}
 		sites = append(sites, control.OrgSite{
 			ID:      org.ID,
@@ -148,7 +182,7 @@ func loadOrgSites(path string, logger *slog.Logger) ([]control.OrgSite, error) {
 			Server:  server,
 		})
 	}
-	return sites, nil
+	return sites, selfService, nil
 }
 
 // controlConfig turns one organization row into a [control.Config].
@@ -194,6 +228,11 @@ func (o orgConfig) controlConfig(logger *slog.Logger) (control.Config, error) {
 	}
 
 	fluxTTL, err := parseFluxTTL(o.FluxTTL)
+	if err != nil {
+		return control.Config{}, err
+	}
+
+	registration, err := control.ParseRegistrationMode(o.Registration)
 	if err != nil {
 		return control.Config{}, err
 	}
@@ -274,6 +313,7 @@ func (o orgConfig) controlConfig(logger *slog.Logger) (control.Config, error) {
 		OIDCProviders:       oidcProviders,
 		Webhooks:            webhooks,
 		AllowLocalLogin:     o.AllowLocalLogin,
+		Registration:        registration,
 		// Each organization is served from its own server_url, so passkey
 		// sign-in is derived per organization. A URL that cannot be a
 		// relying party leaves the feature off rather than failing the

@@ -3,11 +3,15 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xunara-net/xunara-server/control"
 )
 
 // writeOrgConfig writes a config file into a temp dir and returns its path.
@@ -273,5 +277,75 @@ func TestOrgConfigFlux(t *testing.T) {
 	badTTL.FluxTTL = "half an hour"
 	if _, err := badTTL.controlConfig(slog.Default()); err == nil || !strings.Contains(err.Error(), "flux_ttl") {
 		t.Errorf("bad flux_ttl error = %v, want it to name flux_ttl", err)
+	}
+}
+
+// TestLoadOrgConfigReadsSelfService checks the deployment-wide half of
+// -org-config: the sign-up desk and the per-organization registration mode.
+// The mode is observed through the providers endpoint rather than the struct,
+// because that is exactly what the console reads.
+func TestLoadOrgConfigReadsSelfService(t *testing.T) {
+	base := t.TempDir()
+	path := writeOrgConfig(t, `{
+		"organizations": [
+			{"id": "portal", "name": "Xunara Cloud", "domains": ["app.xunara.test"],
+			 "server_url": "https://app.xunara.test",
+			 "state_dir": "`+base+`/portal", "registration": "open"},
+			{"id": "acme", "name": "Acme", "domains": ["acme.xunara.test"],
+			 "server_url": "https://acme.xunara.test",
+			 "state_dir": "`+base+`/acme"}
+		],
+		"self_service": {
+			"site": "portal",
+			"domain_suffix": "xunara.test",
+			"scheme": "https",
+			"cookie_domain": "xunara.test",
+			"plan": "pro"
+		}
+	}`)
+
+	sites, selfService, err := loadOrgConfig(path, slog.Default())
+	if err != nil {
+		t.Fatalf("loadOrgConfig: %v", err)
+	}
+	defer func() {
+		for _, site := range sites {
+			_ = site.Server.Close()
+		}
+	}()
+
+	if selfService == nil {
+		t.Fatal("self_service was not parsed")
+	}
+	want := control.SelfServiceConfig{
+		Site:         "portal",
+		DomainSuffix: "xunara.test",
+		Scheme:       "https",
+		CookieDomain: "xunara.test",
+		Plan:         "pro",
+	}
+	if *selfService != want {
+		t.Errorf("self_service = %+v, want %+v", *selfService, want)
+	}
+
+	// The configured mode must reach the control plane; an unset row keeps
+	// the default (invite).
+	for _, tc := range []struct {
+		site int
+		want string
+	}{
+		{0, `"registration":"open"`},
+		{1, `"registration":"invite"`},
+	} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/providers", nil)
+		sites[tc.site].Server.Handler().ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s providers = %d", sites[tc.site].ID, recorder.Code)
+		}
+		if !strings.Contains(recorder.Body.String(), tc.want) {
+			t.Errorf("%s providers = %s, want it to contain %s",
+				sites[tc.site].ID, recorder.Body.String(), tc.want)
+		}
 	}
 }

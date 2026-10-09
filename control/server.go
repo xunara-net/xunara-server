@@ -133,6 +133,10 @@ type Config struct {
 	// providers are configured. It is enabled automatically when no external
 	// provider is configured at all.
 	AllowLocalLogin bool
+	// Registration decides how accounts come into existence (registration.go).
+	// Empty means [DefaultRegistrationMode]: self-service sign-up needs an
+	// invitation from an administrator.
+	Registration RegistrationMode
 	// PlanSource reports the commercial plan of a tenant, by tenant ID, when
 	// the deployment sells plans (spec section 54). Nil means "no plans":
 	// the server runs on plan.UnlimitedPlan and every quota gate is a no-op.
@@ -210,6 +214,11 @@ type Server struct {
 	// API renames organizations while requests read.
 	org atomic.Pointer[OrgIdentity]
 
+	// selfService marks this organization as the deployment's sign-up desk
+	// (selfservice.go): the console offers "create your own tailnet" only
+	// where that is what signing up does.
+	selfService atomic.Pointer[SelfServiceInfo]
+
 	// planSource reports the tenant's commercial plan, or nil when the
 	// deployment sells none. It is a function rather than a value because a
 	// platform operator changes a tenant's plan while the process serves.
@@ -230,6 +239,10 @@ type Server struct {
 	// first-run setup, registration).
 	localLogin bool
 	formKey    []byte
+	// registration is the normalized self-service registration policy; every
+	// sign-up entry point reads it so the HTML page and the JSON API cannot
+	// disagree.
+	registration RegistrationMode
 
 	// approveMu serialises device approvals so an approval is applied exactly
 	// once even under concurrent requests.
@@ -365,7 +378,18 @@ func New(cfg Config) (*Server, error) {
 	// authenticates anyone by itself: the password is checked against the
 	// local credential store, and a deployment without one has to be set up
 	// first (see initSetupToken).
+	registration, err := ParseRegistrationMode(string(cfg.Registration))
+	if err != nil {
+		return nil, err
+	}
+
 	localLogin := len(cfg.OIDCProviders) == 0 && len(cfg.Providers) == 0 || cfg.AllowLocalLogin
+	// A deployment that cannot sign anyone in cannot sign anyone up either:
+	// an account created here would have no way to authenticate. Closing
+	// registration is the honest answer, not a 500 on the sign-up page.
+	if !localLogin {
+		registration = RegistrationClosed
+	}
 	if localLogin {
 		local := identity.LocalLogin{}
 		providers.Register(local)
@@ -472,6 +496,7 @@ func New(cfg Config) (*Server, error) {
 		sessionTTL:        sessionTTL,
 		authTTL:           identity.DefaultAuthTransactionTTL,
 		localLogin:        localLogin,
+		registration:      registration,
 		formKey:           formKey,
 		resolvers:         resolvers,
 		dnsRoutes:         dnsRoutes,

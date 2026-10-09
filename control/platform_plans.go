@@ -149,9 +149,18 @@ func (r *Router) handlePlatformAllocateTenant(w http.ResponseWriter, req *http.R
 		r.writeOrgAPIError(w, err)
 		return
 	}
-	prefix, ok := registry.NetworkPrefix(req.Context(), orgID)
-	if ok {
-		if _, err := r.SetTenantNetwork(req.Context(), orgID, prefix); err != nil {
+	// Allocate() runs the automatic path: it hands the tenant a block from the
+	// pool (or clears a custom range when the deployment runs no pool). Going
+	// through SetTenantNetwork here would be wrong — that path is the
+	// operator's *custom* range and is refused for plans that forbid custom
+	// CIDRs, which is the shipped free plan.
+	if prefix, ok := registry.NetworkPrefix(req.Context(), orgID); ok {
+		org := r.orgByID(orgID)
+		if org == nil {
+			r.writeOrgAPIError(w, ErrOrgNotFound)
+			return
+		}
+		if err := org.site.Server.SetAddressPrefix(prefix); err != nil {
 			r.writeOrgAPIError(w, err)
 			return
 		}

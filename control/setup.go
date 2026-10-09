@@ -181,45 +181,23 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, ok := s.identity.GetUser(state.DefaultUserID)
-	if !ok {
+	// Setup claims the built-in account: the deployment is its owner
+	// (account.go). Reading the previous names first keeps the audit trail
+	// able to say what the placeholder used to be called.
+	var previousLogin, previousDisplay, previousEmail string
+	if current, ok := s.identity.GetUser(state.DefaultUserID); ok {
+		previousLogin, previousDisplay, previousEmail = current.LoginName, current.DisplayName, current.Email
+	}
+	user, err := s.claimLocalAccount(login, display, email, identity.RoleOwner, password)
+	switch {
+	case errors.Is(err, errLocalAccountMissing):
 		fail(http.StatusInternalServerError, "Setup failed", "The administrator account is missing.")
 		return
-	}
-	if other, taken := s.identity.GetUserByLoginName(login); taken && other.ID != user.ID {
+	case errors.Is(err, errLoginNameTaken):
 		fail(http.StatusConflict, "Setup rejected", "That login name is already taken.")
 		return
-	}
-
-	hash, err := identity.HashPassword(password)
-	if err != nil {
-		s.log.Error("hashing administrator password", "err", err)
-		fail(http.StatusInternalServerError, "Setup failed", "Please try again.")
-		return
-	}
-
-	previousLogin, previousDisplay, previousEmail := user.LoginName, user.DisplayName, user.Email
-	user.LoginName = login
-	if display != "" {
-		user.DisplayName = display
-	}
-	if email != "" {
-		user.Email = email
-	}
-	// The account must be an owner: setup is the act that creates the
-	// deployment's administrator, and the role is enforced here rather than
-	// inherited from whatever the row happened to hold.
-	user.Role = identity.RoleOwner
-	if err := s.identity.UpdateUser(user); err != nil {
-		s.log.Error("updating administrator", "err", err)
-		fail(http.StatusInternalServerError, "Setup failed", "Please try again.")
-		return
-	}
-	if err := s.identity.SetLocalCredential(&identity.LocalCredential{
-		UserID:       user.ID,
-		PasswordHash: hash,
-	}); err != nil {
-		s.log.Error("storing administrator password", "err", err)
+	case err != nil:
+		s.log.Error("setting up the administrator", "err", err)
 		fail(http.StatusInternalServerError, "Setup failed", "Please try again.")
 		return
 	}

@@ -37,6 +37,29 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, token string, expires t
 	})
 }
 
+// setSessionCookieFor is [Server.setSessionCookie] with an explicit cookie
+// domain. The platform's sign-up desk uses it to hand a session it just
+// created for a brand-new tenant to the browser: without the shared parent
+// domain the tenant's own host would never see the cookie and the new owner
+// would have to sign in again (selfservice.go).
+func (s *Server) setSessionCookieFor(w http.ResponseWriter, token string, expires time.Time, domain string) {
+	if domain == "" {
+		s.setSessionCookie(w, token, expires)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		Domain:   domain,
+		Expires:  expires,
+		MaxAge:   int(time.Until(expires).Seconds()),
+		HttpOnly: true,
+		Secure:   s.secureCookies,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 // clearSessionCookie removes the session cookie.
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{

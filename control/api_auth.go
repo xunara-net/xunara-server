@@ -107,8 +107,14 @@ func (s *Server) apiCapabilities() []string {
 	if len(s.providers.IDs()) > 0 {
 		caps = append(caps, "auth.oidc")
 	}
-	if s.localLogin {
+	// Which self-service path this deployment accepts is a capability, not a
+	// guess: a console that offers an invitation field on an open deployment
+	// (or hides the sign-up link on a closed one) is worse than useless.
+	switch s.registration {
+	case RegistrationInvite:
 		caps = append(caps, "auth.register.invite")
+	case RegistrationOpen:
+		caps = append(caps, "auth.register.open")
 	}
 	if s.tokens != nil {
 		caps = append(caps, "identity.id_token")
@@ -188,7 +194,7 @@ func (s *Server) writeAPIAnonymousSession(w http.ResponseWriter) {
 		"authenticated":  false,
 		"setup_required": s.setupRequired(),
 		"local_login":    s.localLogin,
-		"registration":   "invite",
+		"registration":   s.registration.String(),
 		"capabilities":   s.apiCapabilities(),
 	})
 }
@@ -225,13 +231,20 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 			"start_url": "/login?provider=" + url.QueryEscape(id),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"providers":      views,
 		"local_login":    s.localLogin,
 		"setup_required": s.setupRequired(),
 		"passkeys":       s.passkeys != nil,
-		"registration":   "invite",
-	})
+		"registration":   s.registration.String(),
+	}
+	// A deployment whose sign-up desk creates a tenant per account says so,
+	// so the console posts to the platform endpoint instead of the
+	// organization's own sign-up.
+	if info := s.selfServiceInfo(); info != nil {
+		payload["self_service"] = info
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // apiLoginRequest is the JSON body of POST /api/v1/auth/login.
@@ -422,7 +435,7 @@ func (s *Server) handleAPICapabilities(w http.ResponseWriter, r *http.Request) {
 		"capabilities":                  s.apiCapabilities(),
 		"local_login":                   s.localLogin,
 		"setup_required":                s.setupRequired(),
-		"registration":                  "invite",
+		"registration":                  s.registration.String(),
 		"min_client_capability_version": uint64(MinSupportedCapabilityVersion),
 		"server_capability_version":     uint64(tailcfg.CurrentCapabilityVersion),
 	})

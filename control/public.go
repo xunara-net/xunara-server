@@ -273,18 +273,19 @@ var (
 </div>
 </main>`+publicFoot)
 
-	// signupPageTemplate redeems an invitation. It is how someone without an
-	// administrative account gets one when the deployment has no external
-	// identity provider.
+	// signupPageTemplate creates an account. In the default (invite) mode it
+	// redeems an invitation, which is how someone without an administrative
+	// account gets one when the deployment has no external identity provider;
+	// in open mode the invitation field is not rendered at all.
 	signupPageTemplate = pageTemplate("signup", publicHead+`<main id="main" class="narrow">
 <div class="card">
 <h1>Create your account</h1>
-<p class="sub">Registration needs an invitation from an administrator. The invitation works once and carries the role it grants.</p>
+{{if .InviteRequired}}<p class="sub">Registration needs an invitation from an administrator. The invitation works once and carries the role it grants.</p>{{else}}<p class="sub">Create an account to get your own tailnet. You can invite your own devices right after signing in.</p>{{end}}
 <form method="post" action="/signup">
 <input type="hidden" name="_csrf" value="{{.FormToken}}">
-<label for="invite">Invitation code</label>
+{{if .InviteRequired}}<label for="invite">Invitation code</label>
 <input id="invite" name="invite" type="text" value="{{.Invite}}" autocomplete="off" required autofocus>
-<label for="login">Login name</label>
+{{end}}<label for="login">Login name</label>
 <input id="login" name="login" type="text" autocomplete="username" required>
 <label for="display_name">Display name</label>
 <input id="display_name" name="display_name" type="text" autocomplete="name">

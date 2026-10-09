@@ -19,7 +19,7 @@ xunara-web（用户控制台）   xunara-admin（平台后台）   CLI / SDK / �
 
 - **官方客户端兼容**：TS2021 / Noise / Map / DERP 协调，官方客户端可直接接入。
 - **多租户**：组织、成员、角色（owner / admin / member / viewer）、单租户部署兼容。
-- **用户与身份**：本地密码登录、邀请注册、OIDC/OAuth、Passkey、会话管理、
+- **用户与身份**：本地密码登录、邀请/开放注册、OIDC/OAuth、Passkey、会话管理、
   API Key、身份令牌。
 - **设备与网络**：设备注册与审批、Tailnet 网段分配、子网路由、Exit Node、
   MagicDNS、DERP 策略、共享与访问策略。
@@ -51,7 +51,32 @@ go build ./cmd/xunara-agent     # 节点 Agent
 首次启动会写出一次性初始化令牌（`<state-dir>/setup-token`），浏览器打开
 `/setup` 完成管理员初始化。
 
-多租户部署使用 `-org-config <file>` 描述组织与域名。
+注册策略由 `-registration` 决定：`closed`（只允许管理员建号）、`invite`（邀请码，
+默认）或 `open`（任何人可注册；单租户部署注册为该租户成员，受套餐成员配额约束）。
+
+多租户部署使用 `-org-config <file>` 描述组织与域名。在其中配置 `self_service`
+后，入口站开放自助开租户：访客注册即得到自己的 tailnet（ADR-0007）。
+
+```json
+{
+  "organizations": [
+    {"id": "portal", "name": "Xunara Cloud", "domains": ["app.example.com"],
+     "server_url": "https://app.example.com", "state_dir": "/var/lib/xunara/portal",
+     "registration": "open"}
+  ],
+  "self_service": {
+    "site": "portal",
+    "domain_suffix": "tailnet.example.com",
+    "scheme": "https",
+    "cookie_domain": "example.com",
+    "plan": "free"
+  }
+}
+```
+
+`-org-config` 需配合 `-platform-state-dir`（托管组织
+与地址池记录）与 `-plans`（每个新租户都要落在某个套餐上）。`domain_suffix`
+下需要 `*.tailnet.example.com` 泛解析。
 
 ## 测试
 

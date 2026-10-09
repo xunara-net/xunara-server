@@ -130,11 +130,16 @@ func (s *Server) assertAuthKeyQuota() error {
 
 // assertUserQuota reports whether the tenant may add one more member.
 func (s *Server) assertUserQuota() error {
+	return s.assertMemberQuota(len(s.identity.ListUsers()) + 1)
+}
+
+// assertMemberQuota reports whether the tenant's plan allows it to have n
+// members. Callers that add a member (an invitation, a first OIDC sign-in) use
+// [Server.assertUserQuota]; the tenant provisioner, which claims the built-in
+// account instead of adding one, asks about the count it will end up with.
+func (s *Server) assertMemberQuota(n int) error {
 	p := s.Plan()
-	if p.MaxUsers == plan.Unlimited {
-		return nil
-	}
-	if len(s.identity.ListUsers()) < p.MaxUsers {
+	if p.MaxUsers == plan.Unlimited || n <= p.MaxUsers {
 		return nil
 	}
 	return planGateError(MsgUserLimitReached)
