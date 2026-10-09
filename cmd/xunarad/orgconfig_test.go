@@ -299,6 +299,7 @@ func TestLoadOrgConfigReadsSelfService(t *testing.T) {
 			"site": "portal",
 			"domain_suffix": "xunara.test",
 			"scheme": "https",
+			"port": "9090",
 			"cookie_domain": "xunara.test",
 			"plan": "pro"
 		}
@@ -321,6 +322,7 @@ func TestLoadOrgConfigReadsSelfService(t *testing.T) {
 		Site:         "portal",
 		DomainSuffix: "xunara.test",
 		Scheme:       "https",
+		Port:         "9090",
 		CookieDomain: "xunara.test",
 		Plan:         "pro",
 	}

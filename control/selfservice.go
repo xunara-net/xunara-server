@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,6 +66,11 @@ type SelfServiceConfig struct {
 	// Scheme is the URL scheme of new tenants' server URLs. Empty means
 	// "https", which is what a hosted deployment serves.
 	Scheme string
+	// Port is the public port new tenants' server URLs carry. Empty means
+	// the scheme's default port; a deployment reachable only on a
+	// non-standard port (say 9090 behind one nginx) sets "9090", because the
+	// URL it hands a new owner must be the URL that answers.
+	Port string
 	// CookieDomain scopes the new session to a parent domain
 	// ("example.com" for "app.example.com" and "alice.example.com"), so the
 	// browser carries the session from the sign-up desk to the tenant's own
@@ -133,6 +140,14 @@ func (r *Router) enableSelfServiceLocked() error {
 	case "http", "https":
 	default:
 		return fmt.Errorf("control: self-service scheme %q must be http or https", cfg.Scheme)
+	}
+
+	cfg.Port = strings.TrimSpace(cfg.Port)
+	if cfg.Port != "" {
+		port, err := strconv.Atoi(cfg.Port)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("control: self-service port %q must be a number between 1 and 65535", cfg.Port)
+		}
 	}
 
 	// A cookie may only be widened to a domain the front door itself lives
@@ -236,7 +251,11 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		return
 	}
 	domain := orgID + "." + cfg.cfg.DomainSuffix
-	serverURL := cfg.cfg.Scheme + "://" + domain
+	host := domain
+	if cfg.cfg.Port != "" {
+		host = net.JoinHostPort(domain, cfg.cfg.Port)
+	}
+	serverURL := cfg.cfg.Scheme + "://" + host
 
 	site, err := r.CreateManagedOrg(ctx, ManagedOrg{
 		ID:        orgID,

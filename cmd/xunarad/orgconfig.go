@@ -35,6 +35,7 @@ type orgSelfServiceConfig struct {
 	Site         string `json:"site"`
 	DomainSuffix string `json:"domain_suffix"`
 	Scheme       string `json:"scheme"`
+	Port         string `json:"port"`
 	CookieDomain string `json:"cookie_domain"`
 	Plan         string `json:"plan"`
 }
@@ -141,6 +142,7 @@ func loadOrgConfig(path string, logger *slog.Logger) ([]control.OrgSite, *contro
 			Site:         doc.SelfService.Site,
 			DomainSuffix: doc.SelfService.DomainSuffix,
 			Scheme:       doc.SelfService.Scheme,
+			Port:         doc.SelfService.Port,
 			CookieDomain: doc.SelfService.CookieDomain,
 			Plan:         doc.SelfService.Plan,
 		}

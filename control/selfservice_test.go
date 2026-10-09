@@ -210,6 +210,41 @@ func TestSelfServiceSignupCreatesTenant(t *testing.T) {
 	}
 }
 
+// A deployment reachable only on a non-standard port hands new owners the
+// URL that actually answers: the port is part of the tenant URL, not a
+// silently dropped detail.
+func TestSelfServiceSignupCarriesThePublicPort(t *testing.T) {
+	router, _ := selfServiceRouter(t, &SelfServiceConfig{
+		DomainSuffix: "115.192.161.121.nip.io",
+		Scheme:       "http",
+		Port:         "9090",
+	})
+
+	recorder := postJSONAtHost(t, router.Handler(), "app.xunara.test", selfServiceSignupPath, map[string]string{
+		"login":    "carol",
+		"password": "correct horse battery staple",
+	})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("self-service signup = %d (%s), want 201", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Organization struct {
+			Domain string `json:"domain"`
+			URL    string `json:"url"`
+		} `json:"organization"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decoding the response: %v", err)
+	}
+	if payload.Organization.URL != "http://carol.115.192.161.121.nip.io:9090" {
+		t.Fatalf("tenant URL = %q, want it to carry the public port", payload.Organization.URL)
+	}
+	if payload.Organization.Domain != "carol.115.192.161.121.nip.io" {
+		t.Fatalf("tenant domain = %q, want the bare host without a port", payload.Organization.Domain)
+	}
+}
+
 // A second account with the same login name gets its own tenant with a
 // derived ID: the login name is tenant-scoped, the domain is not.
 func TestSelfServiceSignupDerivesUniqueOrganization(t *testing.T) {
@@ -309,6 +344,8 @@ func TestSelfServiceRejectsBadConfiguration(t *testing.T) {
 		{"unknown site", &SelfServiceConfig{Site: "nope", DomainSuffix: "xunara.test"}, RegistrationOpen},
 		{"cookie domain outside the front door", &SelfServiceConfig{DomainSuffix: "xunara.test", CookieDomain: "elsewhere.test"}, RegistrationOpen},
 		{"unknown plan", &SelfServiceConfig{DomainSuffix: "xunara.test", Plan: "platinum"}, RegistrationOpen},
+		{"bad port", &SelfServiceConfig{DomainSuffix: "xunara.test", Port: "http"}, RegistrationOpen},
+		{"port out of range", &SelfServiceConfig{DomainSuffix: "xunara.test", Port: "70000"}, RegistrationOpen},
 		// The desk hands out accounts to anyone, so a front door that is not
 		// open would contradict what it does.
 		{"invite-only front door", &SelfServiceConfig{DomainSuffix: "xunara.test"}, RegistrationInvite},

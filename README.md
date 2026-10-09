@@ -68,6 +68,7 @@ go build ./cmd/xunara-agent     # 节点 Agent
     "site": "portal",
     "domain_suffix": "tailnet.example.com",
     "scheme": "https",
+    "port": "9090",
     "cookie_domain": "example.com",
     "plan": "free"
   }
