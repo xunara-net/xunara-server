@@ -192,11 +192,13 @@ func parseNetworkPrefix(raw string) (netip.Prefix, error) {
 // the field names, so the map only adds what the catalog knows and the plan
 // does not: whether it is the default.
 func planView(p plan.Plan, isDefault bool) map[string]any {
+	// 编辑器需要完整读取配额再回写；零额度也必须显式导出，不能被当成缺失字段。
 	return map[string]any{
 		"id": p.ID, "name": p.Name, "price_cents": p.PriceCents, "currency": p.Currency,
 		"billing_cycle": p.BillingCycle,
 		"max_devices":   p.MaxDevices, "max_users": p.MaxUsers,
 		"max_routes": p.MaxRoutes, "max_auth_keys": p.MaxAuthKeys,
+		"max_relays":        p.MaxRelays,
 		"allow_custom_cidr": p.AllowCustomCIDR, "allow_exit_node": p.AllowExitNode,
 		"allow_subnet_router": p.AllowSubnetRouter, "allow_api": p.AllowAPI,
 		"allow_acl": p.AllowACL, "allow_grants": p.AllowGrants,
