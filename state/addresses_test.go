@@ -4,7 +4,10 @@ import (
 	"errors"
 	"net/netip"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"tailscale.com/types/key"
 )
 
 func TestAddressConfigurationSurvivesRestartAndSerializesAllocation(t *testing.T) {
@@ -29,6 +32,47 @@ func TestAddressConfigurationSurvivesRestartAndSerializesAllocation(t *testing.T
 	}
 	if actual, found := reopened.GetNodeByID(old.ID); !found || actual.IPv4 != old.IPv4 {
 		t.Fatal("prefix change silently renumbered an existing device")
+	}
+}
+
+func TestSingleHostPoolAllocationSerializesAcrossConnections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	first := openTestSQLite(t, path)
+	second := openTestSQLite(t, path)
+	if err := first.SetAddressPrefixes(netip.MustParsePrefix("192.168.50.20/32"), netip.Prefix{}); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		node Node
+		err  error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for _, store := range []*SQLiteStore{first, second} {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			node := Node{NodeKey: key.NewNode().Public(), MachineKey: key.NewMachine().Public()}
+			err := store.CreateNode(&node)
+			results <- result{node: node, err: err}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	succeeded := 0
+	for result := range results {
+		if result.err == nil {
+			succeeded++
+			if result.node.IPv4.String() != "192.168.50.20" {
+				t.Fatalf("single host allocated outside range: %s", result.node.IPv4)
+			}
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("successful single-host allocations = %d, want 1", succeeded)
 	}
 }
 

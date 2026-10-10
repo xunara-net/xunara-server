@@ -14,14 +14,6 @@ import (
 	"net/netip"
 )
 
-// Bounds on a tenant's custom tailnet range. The lower bound keeps one tenant
-// from claiming a huge slice of the address space; the upper bound keeps a
-// range from being too small for the smallest plan's device quota.
-const (
-	MinPrefixBits = 16
-	MaxPrefixBits = 28
-)
-
 // DefaultPool is the range a deployment hands tenant blocks out of, and
 // DefaultBlockBits is the size of one block (/24: 254 usable addresses, enough
 // for the largest built-in plan).
@@ -71,10 +63,6 @@ func ValidateTenantPrefix(p netip.Prefix, extra []netip.Prefix) (netip.Prefix, e
 		return netip.Prefix{}, errors.New("only IPv4 tailnet ranges can be customized")
 	}
 	masked := p.Masked()
-	if bits := masked.Bits(); bits < MinPrefixBits || bits > MaxPrefixBits {
-		return netip.Prefix{}, fmt.Errorf("network range must be between /%d and /%d, got /%d",
-			MinPrefixBits, MaxPrefixBits, bits)
-	}
 	if masked.Addr().IsUnspecified() {
 		return netip.Prefix{}, errors.New("network range must not be the unspecified address")
 	}
@@ -116,8 +104,7 @@ type Pool struct {
 	bits   int
 }
 
-// NewPool validates a pool definition: an IPv4 prefix that is inside no
-// reserved range, carved into blocks no smaller than [MinPrefixBits] bits.
+// NewPool validates an IPv4 pool and bounds the number of candidate blocks.
 func NewPool(prefix netip.Prefix, bits int) (Pool, error) {
 	if !prefix.IsValid() || prefix.Addr().Is6() {
 		return Pool{}, errors.New("netspace: pool must be an IPv4 range")
@@ -126,21 +113,15 @@ func NewPool(prefix netip.Prefix, bits int) (Pool, error) {
 	if bits < masked.Bits() {
 		return Pool{}, fmt.Errorf("netspace: block size /%d does not fit in pool %s", bits, masked)
 	}
-	if bits > MaxPrefixBits {
-		return Pool{}, fmt.Errorf("netspace: block size /%d is smaller than the minimum tenant range /%d", bits, MaxPrefixBits)
+	if bits > 32 {
+		return Pool{}, fmt.Errorf("netspace: IPv4 block size /%d exceeds /32", bits)
 	}
-	// The pool itself is not a tenant range, but it must not sit in a
-	// reserved range either, and it must be big enough to hold blocks.
-	if masked.Bits() < 8 {
-		return Pool{}, fmt.Errorf("netspace: pool %s is larger than a /8", masked)
+	if _, err := ValidateTenantPrefix(masked, nil); err != nil {
+		return Pool{}, fmt.Errorf("netspace: invalid pool: %w", err)
 	}
-	for _, reserved := range Reserved() {
-		if masked.Overlaps(reserved) {
-			return Pool{}, fmt.Errorf("netspace: pool %s is reserved (%s)", masked, reserved)
-		}
-	}
-	if blocks := 1 << (bits - masked.Bits()); blocks > 1<<16 {
-		return Pool{}, fmt.Errorf("netspace: pool %s holds %d blocks, which is too many to search", masked, blocks)
+	// 限制的是自动搜索成本，不是用户自定义 CIDR；移位前检查，兼容 32 位构建。
+	if bits-masked.Bits() > 16 {
+		return Pool{}, fmt.Errorf("netspace: pool %s holds too many blocks to search (maximum 65536)", masked)
 	}
 	return Pool{prefix: masked, bits: bits}, nil
 }

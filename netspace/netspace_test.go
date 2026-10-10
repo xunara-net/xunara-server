@@ -26,7 +26,14 @@ func TestValidateTenantPrefixAcceptsPrivateRanges(t *testing.T) {
 		{"172.16.50.0/24", "172.16.50.0/24"},
 		{"100.100.1.0/24", "100.100.1.0/24"}, // a free-plan block from the pool
 		{"100.64.0.0/16", "100.64.0.0/16"},
-		{"10.0.0.0/16", "10.0.0.0/16"}, // the largest allowed block
+		{"10.0.0.0/16", "10.0.0.0/16"},
+		{"10.42.50.5/8", "10.0.0.0/8"},
+		{"172.31.50.5/12", "172.16.0.0/12"},
+		{"192.168.50.5/29", "192.168.50.0/29"},
+		{"192.168.50.5/30", "192.168.50.4/30"},
+		{"192.168.50.5/31", "192.168.50.4/31"},
+		{"192.168.50.5/32", "192.168.50.5/32"},
+		{"2.0.0.0/7", "2.0.0.0/7"},
 		{"192.168.1.16/28", "192.168.1.16/28"},
 	} {
 		got, err := ValidateTenantPrefix(mustPrefix(t, tc.in), nil)
@@ -52,9 +59,7 @@ func TestValidateTenantPrefixRejectsReservedAndMalformed(t *testing.T) {
 		{"0.0.0.0/8", nil},
 		{"198.18.0.0/24", nil},
 		{"192.0.2.0/24", nil},
-		{"10.0.0.0/8", nil},     // larger than /16
-		{"192.168.1.0/30", nil}, // smaller than /28
-		{"fd00::/64", nil},      // IPv6 is not customizable
+		{"fd00::/64", nil}, // IPv6 is not customizable
 		{"100.127.0.0/24", extra},
 	} {
 		if _, err := ValidateTenantPrefix(mustPrefix(t, tc.in), tc.extra); err == nil {
@@ -130,9 +135,12 @@ func TestPoolRejectsBadDefinitions(t *testing.T) {
 	}{
 		{"127.0.0.0/16", 24},   // reserved pool
 		{"100.100.0.0/16", 12}, // block larger than the pool
-		{"100.100.0.0/16", 30}, // block smaller than a tenant range
-		{"fd00::/48", 64},      // IPv6
-		{"0.0.0.0/0", 24},      // larger than /8
+		{"100.100.0.0/16", 33}, // invalid IPv4 block length
+		{"100.100.0.0/16", -1},
+		{"10.0.0.0/8", 32}, // too many candidate blocks
+		{"2.0.0.0/7", 24},
+		{"fd00::/48", 64}, // IPv6
+		{"0.0.0.0/0", 24}, // larger than /8
 	} {
 		if _, err := NewPool(mustPrefix(t, tc.pool), tc.bits); err == nil {
 			t.Fatalf("NewPool(%s, /%d) accepted an invalid pool", tc.pool, tc.bits)
@@ -140,6 +148,38 @@ func TestPoolRejectsBadDefinitions(t *testing.T) {
 	}
 	if _, err := NewPool(mustPrefix(t, "100.100.0.0/16"), 24); err != nil {
 		t.Fatalf("NewPool rejected a valid pool: %v", err)
+	}
+}
+
+func TestPoolSupportsFlexibleIPv4Blocks(t *testing.T) {
+	for _, example := range []struct {
+		prefix string
+		bits   int
+		blocks int
+		last   string
+	}{
+		{"10.0.0.0/8", 24, 65536, "10.255.255.0/24"},
+		{"192.168.50.0/24", 31, 128, "192.168.50.254/31"},
+		{"192.168.50.0/24", 32, 256, "192.168.50.255/32"},
+		{"192.168.50.20/32", 32, 1, "192.168.50.20/32"},
+		{"2.0.0.0/7", 7, 1, "2.0.0.0/7"},
+	} {
+		t.Run(example.prefix+"-"+example.last, func(t *testing.T) {
+			pool, err := NewPool(mustPrefix(t, example.prefix), example.bits)
+			if err != nil || pool.Blocks() != example.blocks {
+				t.Fatalf("pool: %+v %v", pool, err)
+			}
+			last, found := pool.Block(example.blocks - 1)
+			if !found || last.String() != example.last {
+				t.Fatalf("last block = %s, found=%v", last, found)
+			}
+			if _, found := pool.Block(example.blocks); found {
+				t.Fatal("out-of-range block exists")
+			}
+			if _, err := pool.Allocate(nil, []netip.Prefix{pool.Prefix()}); !errors.Is(err, ErrNoBlock) {
+				t.Fatalf("exhausted pool: %v", err)
+			}
+		})
 	}
 }
 

@@ -5,8 +5,6 @@ import (
 	"net/netip"
 )
 
-var clientIPv4Range = netip.MustParsePrefix("100.64.0.0/10")
-
 var clientReservedIPv4 = []netip.Prefix{
 	netip.MustParsePrefix("100.100.0.0/24"),
 	netip.MustParsePrefix("100.100.100.0/24"),
@@ -29,34 +27,32 @@ func IsClientReservedIPv4(address netip.Addr) bool {
 	return false
 }
 
-// ValidateTailnetPrefix 区分设备地址与子网路由；RFC1918 不是官方节点 IP 池。
+// ValidateTailnetPrefix 只校验地址安全；非 CGNAT 的客户端兼容风险由管理入口提示。
 func ValidateTailnetPrefix(prefix netip.Prefix, reserved []netip.Prefix) (netip.Prefix, error) {
-	canonical, err := ValidateTenantPrefix(prefix, append(ClientReserved(), reserved...))
-	if err != nil {
-		return netip.Prefix{}, err
+	return ValidateTenantPrefix(prefix, append(ClientReserved(), reserved...))
+}
+
+// IsIPv4BoundaryAddress 让自动与手动分配使用相同边界；/31、/32 是主机池。
+func IsIPv4BoundaryAddress(address netip.Addr, prefix netip.Prefix) bool {
+	if !address.Is4() || !prefix.IsValid() || !prefix.Addr().Is4() || !prefix.Contains(address) || prefix.Bits() >= 31 {
+		return false
 	}
-	if canonical.Bits() < clientIPv4Range.Bits() || !clientIPv4Range.Contains(canonical.Addr()) {
-		return netip.Prefix{}, errors.New("official clients require a subnet of 100.64.0.0/10; use subnet routes for RFC1918 networks")
-	}
-	return canonical, nil
+	return address == prefix.Masked().Addr() || !prefix.Contains(address.Next())
 }
 
 func ValidateNodeIPv4(address netip.Addr, prefix netip.Prefix) error {
-	if !address.Is4() || !prefix.IsValid() || !prefix.Contains(address) {
+	if !address.Is4() || !prefix.IsValid() || !prefix.Addr().Is4() || !prefix.Contains(address) {
 		return errors.New("IPv4 address must belong to the current allocation range")
 	}
-	if !clientIPv4Range.Contains(address) {
-		return errors.New("IPv4 address is not compatible with official clients")
+	for _, reserved := range Reserved() {
+		if reserved.Contains(address) {
+			return errors.New("IPv4 address is reserved")
+		}
 	}
 	if IsClientReservedIPv4(address) {
 		return errors.New("IPv4 address is reserved by the control plane or official clients")
 	}
-	base := prefix.Masked().Addr().As4()
-	bytes := address.As4()
-	baseValue := uint32(base[0])<<24 | uint32(base[1])<<16 | uint32(base[2])<<8 | uint32(base[3])
-	value := uint32(bytes[0])<<24 | uint32(bytes[1])<<16 | uint32(bytes[2])<<8 | uint32(bytes[3])
-	broadcast := baseValue | uint32((uint64(1)<<(32-prefix.Bits()))-1)
-	if value == baseValue || value == broadcast {
+	if IsIPv4BoundaryAddress(address, prefix) {
 		return errors.New("network and broadcast addresses cannot be assigned to devices")
 	}
 	return nil

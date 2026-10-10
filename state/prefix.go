@@ -201,14 +201,19 @@ func nextNodeAddr(
 		if err != nil {
 			return netip.Addr{}, err
 		}
-		if offset < 0 || offset > math.MaxUint32 {
+		if offset < 1 || offset > math.MaxUint32 {
 			return netip.Addr{}, addrExhausted(family)
 		}
-		addr, ok := addrAtOffset(prefix, uint32(offset))
+		// /31、/32 使用全部地址；持久计数仍从 1 开始，不改已有迁移与计数语义。
+		addressOffset := offset
+		if prefix.Addr().Is4() && prefix.Bits() >= 31 {
+			addressOffset--
+		}
+		addr, ok := addrAtOffset(prefix, uint32(addressOffset))
 		if !ok {
 			return netip.Addr{}, addrExhausted(family)
 		}
-		if isShareMasqAddr(addr) || netspace.IsClientReservedIPv4(addr) {
+		if isShareMasqAddr(addr) || netspace.IsClientReservedIPv4(addr) || netspace.IsIPv4BoundaryAddress(addr, prefix) {
 			continue
 		}
 		taken, err := inUse(ctx, tx, addr)

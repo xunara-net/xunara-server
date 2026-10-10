@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 
 	"github.com/xunara-net/xunara-server/identity"
 	"github.com/xunara-net/xunara-server/plan"
@@ -31,6 +32,28 @@ func allocationRevision(t *testing.T, server *Server, cookie *http.Cookie) uint6
 }
 
 func TestAddressManagementPreviewSaveRestartAndDeviceChange(t *testing.T) {
+	for _, example := range []struct {
+		prefix  string
+		address string
+	}{
+		{"100.101.50.12/24", "100.101.50.20"},
+		{"192.168.50.12/24", "192.168.50.20"},
+		{"10.42.50.12/8", "10.42.50.20"},
+		{"172.31.50.12/12", "172.31.50.20"},
+		{"192.168.50.12/29", "192.168.50.13"},
+		{"192.168.50.0/30", "192.168.50.2"},
+		{"192.168.50.0/31", "192.168.50.1"},
+		{"8.8.4.12/24", "8.8.4.20"},
+	} {
+		t.Run(example.prefix, func(t *testing.T) {
+			testAddressManagementChange(t, example.prefix, example.address)
+		})
+	}
+}
+
+func testAddressManagementChange(t *testing.T, customPrefix, address string) {
+	t.Helper()
+	canonical := netip.MustParsePrefix(customPrefix).Masked()
 	server := planServer(t, proPlan(t))
 	cookie, token := seedUserSession(t, server, state.DefaultUserID)
 	headers := map[string]string{"X-CSRF-Token": csrfTokenFor(token)}
@@ -42,7 +65,7 @@ func TestAddressManagementPreviewSaveRestartAndDeviceChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	stream.initial(initial)
-	body := map[string]any{"revision": allocationRevision(t, server, cookie), "ipv4_cidr": "100.101.50.12/24"}
+	body := map[string]any{"revision": allocationRevision(t, server, cookie), "ipv4_cidr": customPrefix}
 	response := accountRequest(t, server, http.MethodPost, "/api/v2/network/addresses/validate", body, cookie, headers)
 	if response.Code != http.StatusOK {
 		t.Fatalf("preview: %d %s", response.Code, response.Body.String())
@@ -59,14 +82,13 @@ func TestAddressManagementPreviewSaveRestartAndDeviceChange(t *testing.T) {
 		t.Fatal("range edit silently renumbered old devices")
 	}
 	newNode := seedAPIMachine(t, server, "new", nil)
-	if !netip.MustParsePrefix("100.101.50.0/24").Contains(newNode.IPv4) {
+	if !canonical.Contains(newNode.IPv4) {
 		t.Fatal("new device used old pool")
 	}
 	response = accountRequest(t, server, http.MethodPut, "/api/v2/network/addresses", body, cookie, headers)
 	if response.Code != http.StatusConflict {
 		t.Fatal("stale range version accepted")
 	}
-	address := "100.101.50.20"
 	response = accountRequest(t, server, http.MethodPut, "/api/v2/machines/"+node.StableID+"/ipv4", map[string]string{"ipv4": address, "expected_ipv4": node.IPv4.String()}, cookie, headers)
 	if response.Code != http.StatusOK {
 		t.Fatalf("IP change: %d %s", response.Code, response.Body.String())
@@ -96,8 +118,26 @@ func TestAddressManagementPreviewSaveRestartAndDeviceChange(t *testing.T) {
 	t.Cleanup(func() { restarted.Close() })
 	configuration, err := restarted.actualAllocation(t.Context())
 	persisted, _ := restarted.store.GetNodeByID(node.ID)
-	if err != nil || configuration.SourceRevision != 1 || configuration.IPv4.String() != "100.101.50.0/24" || persisted.IPv4 != updated.IPv4 {
+	if err != nil || configuration.SourceRevision != 1 || configuration.IPv4 != canonical || persisted.IPv4 != updated.IPv4 {
 		t.Fatal("restart or heartbeat reverted committed addresses")
+	}
+}
+
+func TestAddressManagementSingleHostPoolAllowsManualAddressAndReportsExhaustion(t *testing.T) {
+	server := planServer(t, proPlan(t))
+	cookie, token := seedUserSession(t, server, state.DefaultUserID)
+	headers := map[string]string{"X-CSRF-Token": csrfTokenFor(token)}
+	existing := seedAPIMachine(t, server, "existing", nil)
+	body := map[string]any{"revision": allocationRevision(t, server, cookie), "ipv4_cidr": "192.168.50.20/32"}
+	if response := accountRequest(t, server, http.MethodPut, "/api/v2/network/addresses", body, cookie, headers); response.Code != http.StatusOK {
+		t.Fatalf("single host pool: %d %s", response.Code, response.Body.String())
+	}
+	if response := accountRequest(t, server, http.MethodPut, "/api/v2/machines/"+existing.StableID+"/ipv4", map[string]string{"ipv4": "192.168.50.20", "expected_ipv4": existing.IPv4.String()}, cookie, headers); response.Code != http.StatusOK {
+		t.Fatalf("single address change: %d %s", response.Code, response.Body.String())
+	}
+	unallocated := state.Node{NodeKey: key.NewNode().Public(), MachineKey: key.NewMachine().Public()}
+	if err := server.store.CreateNode(&unallocated); err == nil {
+		t.Fatal("occupied single-host pool was allocated again")
 	}
 }
 

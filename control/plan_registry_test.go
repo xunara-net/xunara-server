@@ -193,6 +193,66 @@ func TestPlanRegistryCustomNetworkRules(t *testing.T) {
 	}
 }
 
+func TestPlanRegistryFlexibleRangesRetainTenantIsolation(t *testing.T) {
+	for _, value := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.50.0/29", "192.168.50.0/31", "192.168.50.20/32", "8.8.4.0/24"} {
+		t.Run(value, func(t *testing.T) {
+			registry, path := newTestPlanRegistry(t, t.TempDir())
+			for _, orgID := range []string{"first", "second"} {
+				if _, err := registry.AssignPlan(t.Context(), orgID, plan.ProID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prefix := netip.MustParsePrefix(value)
+			if _, err := registry.SetNetwork(t.Context(), "first", prefix); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := registry.SetNetwork(t.Context(), "second", netip.PrefixFrom(prefix.Addr(), 32)); !errors.Is(err, ErrNetworkConflict) {
+				t.Fatalf("overlap accepted: %v", err)
+			}
+			if _, err := registry.SetNetwork(t.Context(), "first", netip.MustParsePrefix("100.101.50.0/24")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := registry.SetNetwork(t.Context(), "second", prefix); !errors.Is(err, ErrNetworkConflict) {
+				t.Fatalf("old lease reused: %v", err)
+			}
+			registry.Close()
+			reopened, err := OpenPlanRegistry(t.Context(), PlanRegistryConfig{Path: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { reopened.Close() })
+			if _, err := reopened.SetNetwork(t.Context(), "second", prefix); !errors.Is(err, ErrNetworkConflict) {
+				t.Fatalf("restart lost historical lease: %v", err)
+			}
+		})
+	}
+}
+
+func TestPlanRegistryAllocatesNonStandardSmallBlocks(t *testing.T) {
+	pool, err := netspace.NewPool(netip.MustParsePrefix("192.168.50.0/30"), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := OpenPlanRegistry(t.Context(), PlanRegistryConfig{
+		Path: filepath.Join(t.TempDir(), "plans.db"), Pool: pool,
+		Reserved: []netip.Prefix{netip.MustParsePrefix("192.168.50.0/32")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { registry.Close() })
+	for index, orgID := range []string{"first", "second", "third"} {
+		assignment, err := registry.Allocate(t.Context(), orgID)
+		block, _ := pool.Block(index + 1)
+		if err != nil || assignment.NetworkPrefix != block.String() {
+			t.Fatalf("allocation: %+v %v", assignment, err)
+		}
+	}
+	if _, err := registry.Allocate(t.Context(), "fourth"); !errors.Is(err, ErrNoNetworkBlock) {
+		t.Fatalf("non-standard pool exhaustion: %v", err)
+	}
+}
+
 func TestPlanRegistryDowngradeResetsCustomRange(t *testing.T) {
 	ctx := context.Background()
 	registry, _ := newTestPlanRegistry(t, t.TempDir())

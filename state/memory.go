@@ -402,8 +402,9 @@ func newStableID() string {
 
 // ipAllocator hands out sequential addresses from a prefix.
 type ipAllocator struct {
-	prefix netip.Prefix
-	last   netip.Addr
+	prefix  netip.Prefix
+	last    netip.Addr
+	started bool
 	// skip reports whether an address is already assigned to a node. It is
 	// consulted after a tenant's range changed, when the previous range may
 	// overlap the new one.
@@ -418,11 +419,15 @@ func newIPAllocator(p netip.Prefix) *ipAllocator {
 func (a *ipAllocator) next() (netip.Addr, bool) {
 	for {
 		next := a.last.Next()
+		if !a.started && a.prefix.Addr().Is4() && a.prefix.Bits() >= 31 {
+			next = a.prefix.Masked().Addr()
+		}
+		a.started = true
 		if !next.IsValid() || !a.prefix.Contains(next) {
 			return netip.Addr{}, false
 		}
 		a.last = next
-		if isShareMasqAddr(next) || netspace.IsClientReservedIPv4(next) {
+		if isShareMasqAddr(next) || netspace.IsClientReservedIPv4(next) || netspace.IsIPv4BoundaryAddress(next, a.prefix) {
 			continue
 		}
 		if a.skip != nil && a.skip(next) {

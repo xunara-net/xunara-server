@@ -120,22 +120,84 @@ func TestAddressPrefixRejectsWrongFamilies(t *testing.T) {
 }
 
 func TestAddressPrefixExhaustionIsReported(t *testing.T) {
-	// A /30 holds three addresses by the tailnet's rules (addresses are
-	// allocated per node, so there is no network or broadcast address): the
-	// fourth node must be refused instead of silently landing outside the
-	// tenant's range.
+	// 自动与手动分配一致：/30 不分配网络和广播地址，耗尽不回退默认范围。
 	tiny := netip.MustParsePrefix("192.168.77.0/30")
 	for name, s := range newTestStores(t) {
 		if err := s.SetAddressPrefixes(tiny, netip.Prefix{}); err != nil {
 			t.Fatalf("%s SetAddressPrefixes: %v", name, err)
 		}
-		for i := 0; i < 3; i++ {
+		for index := 0; index < 2; index++ {
 			addNode(t, s)
 		}
 		n := Node{NodeKey: key.NewNode().Public(), MachineKey: key.NewMachine().Public()}
 		if err := s.CreateNode(&n); err == nil {
-			t.Errorf("%s allocated a fourth address out of a /30 range", name)
+			t.Errorf("%s allocated a third address out of a /30 range", name)
 		}
+	}
+}
+
+func TestAddressAllocationUsesEntireSmallHostPools(t *testing.T) {
+	for _, example := range []struct {
+		prefix    string
+		addresses []string
+	}{
+		{"192.168.50.0/31", []string{"192.168.50.0", "192.168.50.1"}},
+		{"192.168.50.20/32", []string{"192.168.50.20"}},
+	} {
+		t.Run(example.prefix, func(t *testing.T) {
+			for name, store := range newTestStores(t) {
+				prefix := netip.MustParsePrefix(example.prefix)
+				if err := store.SetAddressPrefixes(prefix, netip.Prefix{}); err != nil {
+					t.Fatal(err)
+				}
+				for _, address := range example.addresses {
+					if node := addNode(t, store); node.IPv4 != netip.MustParseAddr(address) {
+						t.Fatalf("%s allocated %s, want %s", name, node.IPv4, address)
+					}
+				}
+				for attempt := 0; attempt < 2; attempt++ {
+					node := Node{NodeKey: key.NewNode().Public(), MachineKey: key.NewMachine().Public()}
+					if err := store.CreateNode(&node); err == nil {
+						t.Fatalf("%s allocated past small pool capacity", name)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSmallHostPoolAllocationSurvivesSQLiteRestart(t *testing.T) {
+	for _, prefix := range []string{"192.168.50.0/31", "192.168.50.20/32"} {
+		t.Run(prefix, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			store, err := OpenSQLite(t.Context(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { store.Close() })
+			rangePrefix := netip.MustParsePrefix(prefix)
+			if err := store.SetAddressPrefixes(rangePrefix, netip.Prefix{}); err != nil {
+				t.Fatal(err)
+			}
+			first := addNode(t, store)
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := OpenSQLite(t.Context(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { restarted.Close() })
+			if rangePrefix.Bits() == 31 {
+				if second := addNode(t, restarted); second.IPv4 != first.IPv4.Next() {
+					t.Fatalf("restart reused or skipped address: %s", second.IPv4)
+				}
+			}
+			node := Node{NodeKey: key.NewNode().Public(), MachineKey: key.NewMachine().Public()}
+			if err := restarted.CreateNode(&node); err == nil {
+				t.Fatal("restart lost small pool exhaustion")
+			}
+		})
 	}
 }
 

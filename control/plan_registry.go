@@ -163,12 +163,6 @@ func OpenPlanRegistry(ctx context.Context, cfg PlanRegistryConfig) (*PlanRegistr
 	if strings.TrimSpace(cfg.Path) == "" {
 		return nil, errors.New("control: plan registry needs a database path")
 	}
-	if !cfg.Pool.Zero() {
-		prefix := cfg.Pool.Prefix()
-		if !prefix.Addr().Is4() || prefix.Bits() < 10 || !netip.MustParsePrefix("100.64.0.0/10").Contains(prefix.Addr()) {
-			return nil, errors.New("control: official client address pools must be a subnet of 100.64.0.0/10")
-		}
-	}
 	if strings.ContainsAny(cfg.Path, "?#") {
 		return nil, fmt.Errorf("control: unsupported character in database path %q", cfg.Path)
 	}

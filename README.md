@@ -270,7 +270,10 @@ go test -race ./...
   新版 Relay 已实现实际热更/停用断连及服务自报回执，旧版执行状态仍为未知；
   详见 [ADR-0021](docs/adr/ADR-0021-relay-runtime-execution.md)。该切片追加 state v22。
 - **地址与外部中继**：用户按版本预览/确认自定义分配网段，显式修改单设备 IPv4，
-  已有 IP 不随网段保存重编号。CGNAT 子集保持官方兼容，Free 仍不能改网段。
+  已有 IP 不随网段保存重编号。自定义合法 IPv4 不限于 CGNAT 或 /16～/28，
+  /31、/32 支持小型主机池；非标准地址提示官方客户端兼容风险。默认 CGNAT、
+  Free 默认权限、保留地址与租户隔离不变；
+  [ADR-0023](docs/adr/ADR-0023-flexible-ipv4-allocation.md)。
   非托管地图支持手工配置、固定官方源导入草稿、发布及历史恢复，不覆盖默认地区。
   新增 state v23 与 plans v4，identity v13、官方协议、套餐额度及静态公共中继配置不变；
   [ADR-0022](docs/adr/ADR-0022-address-management-and-external-relays.md)。
