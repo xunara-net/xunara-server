@@ -56,6 +56,9 @@ var (
 	ErrRelayTokenExists        = errors.New("relay: relay token already exists")
 	ErrRelayAlreadyEnrolled    = errors.New("relay: relay identity already enrolled")
 	ErrRelayLimitReached       = errors.New("relay: enrollment quota reached")
+	ErrRelayConfigConflict     = errors.New("relay: configuration version changed")
+	ErrRelayConfigInvalid      = errors.New("relay: invalid configuration update")
+	ErrRelayConfigRevoked      = errors.New("relay: revoked service identity cannot be reactivated")
 )
 
 // RelayEnrollmentToken is a one-time credential an operator hands to a relay.
@@ -149,6 +152,20 @@ type RelayConfigUpdate struct {
 	ConfigVersion  uint64
 }
 
+// RelayConfiguration 只保留可恢复的期望配置，不含服务凭据、证书或心跳遥测。
+type RelayConfiguration struct {
+	ConfigVersion  uint64 `json:"config_version"`
+	DesiredState   string `json:"desired_state"`
+	BandwidthLimit int64  `json:"bandwidth_limit"`
+	RegionName     string `json:"region_name"`
+}
+
+func RelayConfigurationKind(id string) string { return "relay:" + id }
+
+func RelayConfigurationFor(relay Relay) RelayConfiguration {
+	return RelayConfiguration{relay.ConfigVersion, relay.DesiredState, relay.BandwidthLimit, relay.RegionName}
+}
+
 // RelayStore persists the relay platform's state.
 type RelayStore interface {
 	// CreateRelayEnrollmentToken stores a token whose secret is the given
@@ -180,8 +197,8 @@ type RelayStore interface {
 	ListRelays() []Relay
 	// UpdateRelayHeartbeat records a relay's status report.
 	UpdateRelayHeartbeat(id string, hb RelayHeartbeat) error
-	// UpdateRelayConfig applies an operator change and returns the relay's
-	// new state. It reports [ErrRelayNotFound] when the relay is unknown.
+	// UpdateRelayConfig 是底层存储入口，ConfigVersion 必须是期望的当前版本。
+	// HTTP 写入经 networkconfig 事务复查身份并绑定审计，不直接调用此方法。
 	UpdateRelayConfig(id string, update RelayConfigUpdate) (Relay, error)
 	// DeleteRelay removes a relay. It is a no-op when unknown.
 	DeleteRelay(id string) error

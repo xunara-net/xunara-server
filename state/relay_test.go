@@ -172,7 +172,7 @@ func TestRelayLifecycle(t *testing.T) {
 		limit := int64(10485760)
 		region := "Hong Kong 2"
 		updated, err := s.UpdateRelayConfig(id, RelayConfigUpdate{
-			DesiredState: RelayStateMaintenance, BandwidthLimit: &limit, RegionName: &region,
+			DesiredState: RelayStateMaintenance, BandwidthLimit: &limit, RegionName: &region, ConfigVersion: got.ConfigVersion,
 		})
 		if err != nil {
 			t.Fatalf("%s UpdateRelayConfig: %v", name, err)
@@ -184,7 +184,7 @@ func TestRelayLifecycle(t *testing.T) {
 			t.Fatalf("%s config version did not advance: %d -> %d", name, got.ConfigVersion, updated.ConfigVersion)
 		}
 		// A partial update keeps the other fields.
-		again, err := s.UpdateRelayConfig(id, RelayConfigUpdate{DesiredState: RelayStateOnline})
+		again, err := s.UpdateRelayConfig(id, RelayConfigUpdate{DesiredState: RelayStateOnline, ConfigVersion: updated.ConfigVersion})
 		if err != nil {
 			t.Fatalf("%s second UpdateRelayConfig: %v", name, err)
 		}
@@ -260,7 +260,7 @@ func TestRelayStateSurvivesSQLiteReopen(t *testing.T) {
 		t.Fatalf("CreateRelay: %v", err)
 	}
 	limit := int64(2048)
-	if _, err := store.UpdateRelayConfig(id, RelayConfigUpdate{DesiredState: RelayStateDisabled, BandwidthLimit: &limit}); err != nil {
+	if _, err := store.UpdateRelayConfig(id, RelayConfigUpdate{DesiredState: RelayStateDisabled, BandwidthLimit: &limit, ConfigVersion: 1}); err != nil {
 		t.Fatalf("UpdateRelayConfig: %v", err)
 	}
 	if err := store.Close(); err != nil {

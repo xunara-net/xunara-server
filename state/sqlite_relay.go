@@ -3,10 +3,13 @@ package state
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Relay platform persistence (relay.go holds the types and the contract).
@@ -247,13 +250,16 @@ func (s *SQLiteStore) RelayByToken(token string) (Relay, bool) {
 
 // RelayByID implements [RelayStore].
 func (s *SQLiteStore) RelayByID(id string) (Relay, bool) {
-	row := s.db.QueryRowContext(context.Background(),
-		`SELECT `+relayColumns+` FROM relays WHERE id = ?`, id)
-	relay, err := scanRelay(row)
-	if err != nil {
-		return Relay{}, false
+	relay, err := s.LookupRelay(context.Background(), id)
+	return relay, err == nil
+}
+
+func (s *SQLiteStore) LookupRelay(ctx context.Context, id string) (Relay, error) {
+	relay, err := scanRelay(s.db.QueryRowContext(ctx, `SELECT `+relayColumns+` FROM relays WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Relay{}, ErrRelayNotFound
 	}
-	return relay, true
+	return relay, err
 }
 
 // RelayByNodeKey implements [RelayStore].
@@ -323,43 +329,123 @@ func (s *SQLiteStore) UpdateRelayHeartbeat(id string, hb RelayHeartbeat) error {
 	return nil
 }
 
-// UpdateRelayConfig implements [RelayStore]. The read-modify-write runs under
-// the store mutex so two operators cannot apply half of each other's change.
+// UpdateRelayConfig 是底层兼容入口；HTTP 操作必须使用附带身份复查和审计的外层事务。
 func (s *SQLiteStore) UpdateRelayConfig(id string, update RelayConfigUpdate) (Relay, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx := context.Background()
-	relay, ok := s.relayByIDLocked(ctx, id)
-	if !ok {
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Relay{}, err
+	}
+	defer transaction.Rollback()
+	relay, err := UpdateRelayConfigTx(ctx, transaction, id, update, "system:store", time.Now().UTC())
+	if err != nil {
+		return Relay{}, err
+	}
+	return relay, transaction.Commit()
+}
+
+// UpdateRelayConfigTx 复用已有历史表，CAS、配置和历史必须属于调用方的同一个事务。
+func UpdateRelayConfigTx(ctx context.Context, transaction *sql.Tx, id string, update RelayConfigUpdate, actor string, now time.Time) (Relay, error) {
+	relay, err := scanRelay(transaction.QueryRowContext(ctx, `SELECT `+relayColumns+` FROM relays WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
 		return Relay{}, ErrRelayNotFound
 	}
+	if err != nil {
+		return Relay{}, err
+	}
+	if err := ValidateRelayConfigUpdate(relay, update); err != nil {
+		return Relay{}, err
+	}
+	if err := saveRelayConfigurationSnapshot(ctx, transaction, relay, "system:import", now, true); err != nil {
+		return Relay{}, err
+	}
 	relay = applyRelayConfig(relay, update)
-
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE relays SET desired_state = ?, config_version = ?, bandwidth_limit = ?, region_name = ?
-		WHERE id = ?`,
-		relay.DesiredState, int64(relay.ConfigVersion), relay.BandwidthLimit, relay.RegionName, id); err != nil {
-		return Relay{}, fmt.Errorf("state: updating relay %s: %w", id, err)
+	result, err := transaction.ExecContext(ctx, `UPDATE relays SET desired_state = ?, config_version = ?, bandwidth_limit = ?, region_name = ?
+		WHERE id = ? AND config_version = ?`, relay.DesiredState, relay.ConfigVersion, relay.BandwidthLimit, relay.RegionName, id, update.ConfigVersion)
+	if err != nil {
+		return Relay{}, err
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		if err != nil {
+			return Relay{}, err
+		}
+		return Relay{}, ErrRelayConfigConflict
+	}
+	if err := saveRelayConfigurationSnapshot(ctx, transaction, relay, actor, now, false); err != nil {
+		return Relay{}, err
 	}
 	return relay, nil
 }
 
-// DeleteRelay implements [RelayStore].
-func (s *SQLiteStore) DeleteRelay(id string) error {
-	if _, err := s.db.ExecContext(context.Background(), "DELETE FROM relays WHERE id = ?", id); err != nil {
-		return fmt.Errorf("state: deleting relay %s: %w", id, err)
+func saveRelayConfigurationSnapshot(ctx context.Context, transaction *sql.Tx, relay Relay, actor string, now time.Time, baseline bool) error {
+	content, err := json.Marshal(RelayConfigurationFor(relay))
+	if err != nil {
+		return err
+	}
+	query := "INSERT INTO network_document_history (kind, revision, content, actor, created) VALUES (?, ?, ?, ?, ?)"
+	if baseline {
+		query += " ON CONFLICT(kind, revision) DO NOTHING"
+	}
+	_, err = transaction.ExecContext(ctx, query, RelayConfigurationKind(relay.ID), relay.ConfigVersion, string(content), actor, now.UnixNano())
+	return err
+}
+
+// ValidateRelayConfigUpdate 的版本是前置条件，不允许操作方直接指定新版本或回退版本号。
+func ValidateRelayConfigUpdate(relay Relay, update RelayConfigUpdate) error {
+	if update.ConfigVersion == 0 || update.ConfigVersion != relay.ConfigVersion {
+		return ErrRelayConfigConflict
+	}
+	if relay.DesiredState == RelayStateRevoked && update.DesiredState != "" && update.DesiredState != RelayStateRevoked {
+		return ErrRelayConfigRevoked
+	}
+	if relay.ConfigVersion >= 1<<53-1 || (update.DesiredState != "" && !ValidRelayState(update.DesiredState)) ||
+		(update.BandwidthLimit != nil && (*update.BandwidthLimit < -1 || *update.BandwidthLimit > 1<<53-1)) ||
+		(update.RegionName != nil && (len(*update.RegionName) > 128 || !utf8.ValidString(*update.RegionName) || strings.ContainsFunc(*update.RegionName, unicode.IsControl))) {
+		return ErrRelayConfigInvalid
 	}
 	return nil
 }
 
-// relayByIDLocked reads one relay while the caller holds s.mu.
-func (s *SQLiteStore) relayByIDLocked(ctx context.Context, id string) (Relay, bool) {
-	relay, err := scanRelay(s.db.QueryRowContext(ctx, `SELECT `+relayColumns+` FROM relays WHERE id = ?`, id))
+// DeleteRelay implements [RelayStore].
+func (s *SQLiteStore) DeleteRelay(id string) error {
+	ctx := context.Background()
+	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Relay{}, false
+		return err
 	}
-	return relay, true
+	defer transaction.Rollback()
+	var expected uint64
+	err = transaction.QueryRowContext(ctx, "SELECT config_version FROM relays WHERE id = ?", id).Scan(&expected)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := DeleteRelayTx(ctx, transaction, id, expected); err != nil {
+		return err
+	}
+	return transaction.Commit()
+}
+
+// DeleteRelayTx 删除身份和对应历史，但不能用历史恢复凭据或复活已删除的服务。
+func DeleteRelayTx(ctx context.Context, transaction *sql.Tx, id string, expected uint64) error {
+	var current uint64
+	err := transaction.QueryRowContext(ctx, "SELECT config_version FROM relays WHERE id = ?", id).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrRelayNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if expected == 0 || current != expected {
+		return ErrRelayConfigConflict
+	}
+	if _, err := transaction.ExecContext(ctx, "DELETE FROM relays WHERE id = ? AND config_version = ?", id, expected); err != nil {
+		return err
+	}
+	_, err = transaction.ExecContext(ctx, "DELETE FROM network_document_history WHERE kind = ?", RelayConfigurationKind(id))
+	return err
 }
 
 // scanRelay reads one relay row. rows may be a *sql.Row or a *sql.Rows.
@@ -424,9 +510,6 @@ func applyRelayConfig(relay Relay, update RelayConfigUpdate) Relay {
 		relay.RegionName = *update.RegionName
 	}
 	relay.ConfigVersion++
-	if update.ConfigVersion > relay.ConfigVersion {
-		relay.ConfigVersion = update.ConfigVersion
-	}
 	return relay
 }
 

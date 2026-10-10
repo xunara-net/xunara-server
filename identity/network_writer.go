@@ -3,10 +3,10 @@ package identity
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"tailscale.com/tailcfg"
@@ -34,9 +34,15 @@ func CheckNetworkWriter(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, 
 		if err != nil {
 			return fmt.Errorf("identity: checking network service key: %w", err)
 		}
-		var scopes []string
-		if json.Unmarshal([]byte(rawScopes), &scopes) != nil || !slices.Contains(scopes, ScopeWrite) {
+		// 持久格式与 CreateAPIKey/scanAPIKey 一致，不能把逗号分隔范围误读成 JSON。
+		scopes := strings.Split(rawScopes, ",")
+		if !slices.Contains(scopes, ScopeWrite) {
 			return ErrNetworkWriterForbidden
+		}
+		for _, scope := range scopes {
+			if !slices.Contains(validScopes, scope) {
+				return ErrNetworkWriterForbidden
+			}
 		}
 	}
 	var role string

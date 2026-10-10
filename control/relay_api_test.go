@@ -163,7 +163,7 @@ func TestRelayEnrollHeartbeatAndSteering(t *testing.T) {
 	// An operator steers the relay: state, bandwidth and region name.
 	limit := int64(10485760)
 	resp = apiRequest(t, hs.Client(), http.MethodPatch, hs.URL+"/api/v2/relays/"+identity.RelayID, apiKey,
-		map[string]any{"desired_state": state.RelayStateMaintenance, "bandwidth_limit": limit, "region_name": "Hong Kong 2"})
+		map[string]any{"config_version": 1, "desired_state": state.RelayStateMaintenance, "bandwidth_limit": limit, "region_name": "Hong Kong 2"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PATCH relay status = %d, want 200", resp.StatusCode)
 	}
@@ -187,7 +187,7 @@ func TestRelayEnrollHeartbeatAndSteering(t *testing.T) {
 
 	// Revocation is terminal for the relay's credential.
 	apiRequest(t, hs.Client(), http.MethodPatch, hs.URL+"/api/v2/relays/"+identity.RelayID, apiKey,
-		map[string]any{"desired_state": state.RelayStateRevoked})
+		map[string]any{"config_version": 2, "desired_state": state.RelayStateRevoked})
 	resp = apiRequest(t, hs.Client(), http.MethodPost, hs.URL+relayHeartbeatPath, identity.RelayToken,
 		map[string]any{"healthy": true})
 	if resp.StatusCode != http.StatusForbidden {
@@ -195,7 +195,7 @@ func TestRelayEnrollHeartbeatAndSteering(t *testing.T) {
 	}
 
 	// Deleting the relay removes the credential entirely.
-	resp = apiRequest(t, hs.Client(), http.MethodDelete, hs.URL+"/api/v2/relays/"+identity.RelayID, apiKey, nil)
+	resp = apiRequest(t, hs.Client(), http.MethodDelete, hs.URL+"/api/v2/relays/"+identity.RelayID, apiKey, nil, map[string]string{"If-Match": "3"})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE relay status = %d, want 204", resp.StatusCode)
 	}
@@ -394,7 +394,7 @@ func TestRelayPlatformAPI(t *testing.T) {
 
 	resp = apiRequest(t, hs.Client(), http.MethodPatch,
 		hs.URL+"/api/platform/v1/organizations/acme/relays/"+identity.RelayID, "platform-token",
-		map[string]any{"desired_state": state.RelayStateDisabled})
+		map[string]any{"config_version": 1, "desired_state": state.RelayStateDisabled})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("platform relay patch = %d, want 200", resp.StatusCode)
 	}
@@ -405,7 +405,7 @@ func TestRelayPlatformAPI(t *testing.T) {
 	}
 
 	resp = apiRequest(t, hs.Client(), http.MethodDelete,
-		hs.URL+"/api/platform/v1/organizations/acme/relays/"+identity.RelayID, "platform-token", nil)
+		hs.URL+"/api/platform/v1/organizations/acme/relays/"+identity.RelayID, "platform-token", nil, map[string]string{"If-Match": "2"})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("platform relay delete = %d, want 204", resp.StatusCode)
 	}

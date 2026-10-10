@@ -300,6 +300,9 @@ func (m *memoryRelayStore) UpdateRelayConfig(id string, update RelayConfigUpdate
 	if !ok {
 		return Relay{}, ErrRelayNotFound
 	}
+	if err := ValidateRelayConfigUpdate(relay, update); err != nil {
+		return Relay{}, err
+	}
 	relay = applyRelayConfig(relay, update)
 	m.relays[id] = relay
 	return relay, nil

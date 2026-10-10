@@ -576,9 +576,9 @@ func (s *Server) handleAPIV2Relay(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireScope(w, r, identity.ScopeRead); !ok {
 		return
 	}
-	relay, ok := s.store.RelayByID(chi.URLParam(r, "id"))
-	if !ok {
-		writeAPIError(w, http.StatusNotFound, "relay not found")
+	relay, err := s.lookupManagedRelay(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeRelayManagementError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, relayViewFor(relay, time.Now().UTC()))
@@ -668,6 +668,8 @@ func (s *Server) handleAPIV2DeleteRelayEnrollToken(w http.ResponseWriter, r *htt
 // apiRelayConfigRequest is the body of PATCH /api/v2/relays/{id}. Pointer
 // fields distinguish "leave alone" from "set to zero".
 type apiRelayConfigRequest struct {
+	ConfigVersion  *uint64 `json:"config_version"`
+	RestoreFrom    *uint64 `json:"restore_from"`
 	DesiredState   string  `json:"desired_state"`
 	BandwidthLimit *int64  `json:"bandwidth_limit"`
 	RegionName     *string `json:"region_name"`
@@ -683,36 +685,21 @@ func (s *Server) handleAPIV2UpdateRelay(w http.ResponseWriter, r *http.Request) 
 	if !decodeAPIBody(w, r, &req) {
 		return
 	}
-	if req.DesiredState != "" && !state.ValidRelayState(req.DesiredState) {
-		writeAPIError(w, http.StatusBadRequest, "desired_state must be online, maintenance, disabled or revoked")
-		return
-	}
-	if req.BandwidthLimit != nil && *req.BandwidthLimit < -1 {
-		writeAPIError(w, http.StatusBadRequest, "bandwidth_limit must be -1, 0 or a positive byte rate")
-		return
-	}
-	if req.RegionName != nil && len(*req.RegionName) > maxRelayNameBytes {
-		writeAPIError(w, http.StatusBadRequest, "region_name is too long")
+	if !validRelayConfigRequest(w, req) {
 		return
 	}
 
 	id := chi.URLParam(r, "id")
-	relay, err := s.store.UpdateRelayConfig(id, state.RelayConfigUpdate{
-		DesiredState:   req.DesiredState,
-		BandwidthLimit: req.BandwidthLimit,
-		RegionName:     req.RegionName,
-	})
+	if s.networkConfig == nil {
+		s.writeNetworkError(w, errors.New("relay configuration requires a durable store"))
+		return
+	}
+	relay, err := s.networkConfig.SaveRelay(r.Context(), id, req.update(), req.RestoreFrom, networkWriter(principal))
 	if err != nil {
-		if errors.Is(err, state.ErrRelayNotFound) {
-			writeAPIError(w, http.StatusNotFound, "relay not found")
-			return
-		}
-		writeAPIError(w, http.StatusInternalServerError, "could not update the relay")
+		s.writeRelayManagementError(w, err)
 		return
 	}
 
-	s.audit(principal.actor(), identity.AuditRelayUpdated, "relay:"+id,
-		"desired state "+relay.DesiredState)
 	s.log.Info("relay updated", "relay", id, "state", relay.DesiredState, "actor", principal.actor())
 	s.refreshRelayMapAfterChange(r.Context())
 	writeJSON(w, http.StatusOK, relayViewFor(relay, time.Now().UTC()))
@@ -726,16 +713,18 @@ func (s *Server) handleAPIV2DeleteRelay(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	id := chi.URLParam(r, "id")
-	relay, exists := s.store.RelayByID(id)
-	if !exists {
-		writeAPIError(w, http.StatusNotFound, "relay not found")
+	expected, ok := relayExpectedVersion(w, r)
+	if !ok {
 		return
 	}
-	if err := s.store.DeleteRelay(id); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "could not delete the relay")
+	if s.networkConfig == nil {
+		s.writeNetworkError(w, errors.New("relay configuration requires a durable store"))
 		return
 	}
-	s.audit(principal.actor(), identity.AuditRelayDeleted, "relay:"+id, "deleted relay "+relay.Name)
+	if err := s.networkConfig.DeleteRelay(r.Context(), id, expected, networkWriter(principal)); err != nil {
+		s.writeRelayManagementError(w, err)
+		return
+	}
 	s.log.Info("relay deleted", "relay", id, "actor", principal.actor())
 	s.refreshRelayMapAfterChange(r.Context())
 	w.WriteHeader(http.StatusNoContent)

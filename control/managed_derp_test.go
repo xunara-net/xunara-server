@@ -55,11 +55,11 @@ func TestManagedRelayMapTracksHealthSteeringExpiryAndDeletion(t *testing.T) {
 	if !server.derpRegionKnown(40001) || server.derpRegionsServed() != 2 {
 		t.Fatal("placement and metadata did not use the served map")
 	}
-	response = apiRequest(t, host.Client(), http.MethodPatch, host.URL+"/api/v2/relays/"+credential.RelayID, operator, map[string]string{"desired_state": "disabled"})
+	response = apiRequest(t, host.Client(), http.MethodPatch, host.URL+"/api/v2/relays/"+credential.RelayID, operator, map[string]any{"config_version": 1, "desired_state": "disabled"})
 	if response.StatusCode != http.StatusOK || server.DERPMap().Regions[40001] != nil {
 		t.Fatal("disabled relay remained in the map")
 	}
-	response = apiRequest(t, host.Client(), http.MethodPatch, host.URL+"/api/v2/relays/"+credential.RelayID, operator, map[string]string{"desired_state": "online"})
+	response = apiRequest(t, host.Client(), http.MethodPatch, host.URL+"/api/v2/relays/"+credential.RelayID, operator, map[string]any{"config_version": 2, "desired_state": "online"})
 	if response.StatusCode != http.StatusOK || server.DERPMap().Regions[40001] == nil {
 		t.Fatal("re-enabled healthy relay was not served")
 	}
@@ -73,7 +73,7 @@ func TestManagedRelayMapTracksHealthSteeringExpiryAndDeletion(t *testing.T) {
 	if server.DERPMap().Regions[40001] != nil {
 		t.Fatal("stale relay remained in the map")
 	}
-	response = apiRequest(t, host.Client(), http.MethodDelete, host.URL+"/api/v2/relays/"+credential.RelayID, operator, nil)
+	response = apiRequest(t, host.Client(), http.MethodDelete, host.URL+"/api/v2/relays/"+credential.RelayID, operator, nil, map[string]string{"If-Match": "3"})
 	if response.StatusCode != http.StatusNoContent || len(server.DERPMap().Regions) != 1 {
 		t.Fatal("deletion changed static regions")
 	}
@@ -95,7 +95,7 @@ func TestManagedRelayMapIsTenantLocalAndRemovesLastRegionExplicitly(t *testing.T
 		t.Fatal(err)
 	}
 	session.initial(&tailcfg.MapResponse{DERPMap: server.DERPMap()})
-	response = apiRequest(t, host.Client(), http.MethodDelete, host.URL+"/api/v2/relays/"+credential.RelayID, operator, nil)
+	response = apiRequest(t, host.Client(), http.MethodDelete, host.URL+"/api/v2/relays/"+credential.RelayID, operator, nil, map[string]string{"If-Match": "1"})
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatal("relay deletion failed")
 	}

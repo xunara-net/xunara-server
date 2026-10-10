@@ -76,6 +76,7 @@ func (s *Server) apiV2Router() http.Handler {
 	r.Post("/relays/enroll-tokens", s.handleAPIV2CreateRelayEnrollToken)
 	r.Delete("/relays/enroll-tokens/{id}", s.handleAPIV2DeleteRelayEnrollToken)
 	r.Get("/relays/{id}", s.handleAPIV2Relay)
+	r.Get("/relays/{id}/history", s.handleAPIV2RelayHistory)
 	r.Patch("/relays/{id}", s.handleAPIV2UpdateRelay)
 	r.Delete("/relays/{id}", s.handleAPIV2DeleteRelay)
 	r.Get("/serve", s.handleAPIV2Serve)

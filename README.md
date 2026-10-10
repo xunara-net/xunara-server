@@ -263,7 +263,10 @@ go test -race ./...
   期望状态/限速/区域名下发、按套餐的中继配额、`/api/v2/relays/*` 与平台级中继管理。
   注册把额度检查、身份创建和令牌消费合并为同一事务，失败不消耗令牌；
   注册读取的存储故障返回可重试的 503，不伪装为无效凭据。
-  审计与其他并发边界见 [ADR-0013](docs/adr/ADR-0013-atomic-relay-enrollment.md)。
+  注册事务边界见 [ADR-0013](docs/adr/ADR-0013-atomic-relay-enrollment.md)。配置编辑/恢复与删除
+  现在要求版本前置条件，历史、审计和通知同事务提交；旧管理调用须升级，详见
+  [ADR-0020](docs/adr/ADR-0020-relay-configuration-history.md)。期望配置下发不等于中继已执行，
+  运行时应用及回执仍待交付，不改官方客户端协议或数据库版本。
 
 ## 仓库关系
 

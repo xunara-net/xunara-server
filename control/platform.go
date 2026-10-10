@@ -80,6 +80,8 @@ func (r *Router) mountPlatform(pr chi.Router) {
 	pr.Get("/v1/relays", r.handlePlatformRelays)
 	pr.Post("/v1/organizations/{orgID}/relays/enroll-tokens", r.handlePlatformCreateRelayEnrollToken)
 	pr.Patch("/v1/organizations/{orgID}/relays/{relayID}", r.handlePlatformUpdateRelay)
+	pr.Get("/v1/organizations/{orgID}/relays/{relayID}", r.handlePlatformRelay)
+	pr.Get("/v1/organizations/{orgID}/relays/{relayID}/history", r.handlePlatformRelayHistory)
 	pr.Delete("/v1/organizations/{orgID}/relays/{relayID}", r.handlePlatformDeleteRelay)
 
 	pr.Get("/v1/users", r.handlePlatformUsers)

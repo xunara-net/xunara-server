@@ -3,7 +3,8 @@
 本说明是产品 API 的实现边界；使用步骤见
 [用户手册](https://github.com/xunara-net/xunara-docs/blob/main/docs/user/network-console.md)。
 前端为独立 xunara-web，Core 不依赖 Vue、可视化布局或网页身份。决策见
-[ADR-0018](adr/ADR-0018-network-console.md) 与 [ADR-0019](adr/ADR-0019-managed-relay-map.md)。
+[ADR-0018](adr/ADR-0018-network-console.md)、[ADR-0019](adr/ADR-0019-managed-relay-map.md)
+与 [ADR-0020](adr/ADR-0020-relay-configuration-history.md)。
 
 ## 权限数据流
 
@@ -33,6 +34,8 @@
 | `/api/v2/dns/configuration` | GET / PUT MagicDNS、解析器、搜索域、split；`control/network_configuration.go` |
 | `/api/v2/dns/records`、`/api/v2/dns/records/{id}` | GET / POST / PUT / DELETE A / AAAA；`control/api_network_dns.go` |
 | `/api/v2/relays/enrolled`、`/api/v2/relays/enroll-tokens` | GET 本租户记录/额度、签发接入令牌；`control/relay_api.go` |
+| `/api/v2/relays/{id}`、`/api/v2/relays/{id}/history` | GET 当前配置 / 历史、PATCH 修改或恢复、DELETE 版本保护删除；`control/relay_configuration.go`、`networkconfig/relay.go` |
+| `/api/platform/v1/organizations/{orgID}/relays/{relayID}` 及 `/history` | 独立平台凭据；同一版本与历史事务；`control/platform_relays.go` |
 | `/api/v2/derp` | GET 客户端实际下发地图；`control/api_v2_derp.go` |
 
 配置发布要求当前 `revision` 和 `base_hash`，记录更新使用记录版本，删除要求
@@ -43,6 +46,30 @@
 服务密钥还要求 write Scope 与 API 授权。策略和 DNS 同事务复查持久凭据/角色，
 提交配置、历史、审计、配置通知；策略发布同时撤销旧 SSH check 批准。
 更新前端按钮状态不能代替后端校验，普通成员只读。不扩大 Human / Machine / Service 信任。
+
+## 中继配置与历史
+
+PATCH 正文要求 `config_version` 为读取的当前正整数版本，并提供要改的
+`desired_state`、`bandwidth_limit`、`region_name` 中至少一个。恢复只提交
+`config_version` 与 `restore_from`，不得混入配置字段；恢复生成新版本，不回退版本号。
+DELETE 要求 `If-Match: <当前版本>`，也接受完整双引号包裹的版本。不接受通配符。
+缺少版本返回 428 `RELAY_VERSION_REQUIRED`，过期返回 409 `RELAY_CONFIG_CHANGED`。
+
+只接受 online / maintenance / disabled / revoked，带宽为 -1、0 或可安全表示的
+正整数；地区名称最长 128 字节，不接受控制字符。旧客户端需刷新/升级，不提供
+读取当前版本后自动覆盖的兼容旁路。已撤销身份不能被修改或恢复为启用状态。
+
+历史首项为最新版本，最多返回 50 项；字段为 `config_version`、`desired_state`、
+`bandwidth_limit`、`region_name`、`actor`、`created`。首次编辑保存原始快照；其时间
+是快照采集时间，不伪造早期操作时间。更早但未被记录的旧部署变更不能追溯。
+删除中继会删除其恢复历史，但保留审计；历史不能重建服务凭据或恢复遥测。
+
+用户与平台写入均将配置、历史、审计和配置通知一起提交；用户事务再次验证持久
+凭据和角色。平台列表与历史读故障失败关闭。Cookie 写入仍需 CSRF，服务密钥仍
+需 API Entitlement 与 write 范围。没有新增迁移或套餐特判。
+
+保存是期望配置，不是执行回执。当前 Relay 的心跳回调只记录配置，远程运行时
+限速和断开既有连接仍未交付。地图/准入保护不应被描述为“节点已经停止服务”。
 
 ## DNS 与地图
 

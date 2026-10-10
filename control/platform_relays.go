@@ -22,11 +22,21 @@ type platformRelayView struct {
 }
 
 // handlePlatformRelays implements GET /api/platform/v1/relays.
-func (r *Router) handlePlatformRelays(w http.ResponseWriter, _ *http.Request) {
+func (r *Router) handlePlatformRelays(w http.ResponseWriter, req *http.Request) {
 	now := time.Now().UTC()
 	views := make([]platformRelayView, 0)
 	for _, org := range r.orgSnapshot() {
-		for _, relay := range org.site.Server.store.ListRelays() {
+		store, ok := org.site.Server.store.(*state.SQLiteStore)
+		if !ok {
+			org.site.Server.writeNetworkError(w, errors.New("relay management requires a durable store"))
+			return
+		}
+		relays, err := store.ListRelaysContext(req.Context())
+		if err != nil {
+			org.site.Server.writeRelayManagementError(w, err)
+			return
+		}
+		for _, relay := range relays {
 			views = append(views, platformRelayView{
 				OrganizationID:   org.site.ID,
 				OrganizationName: org.site.Name,
@@ -85,32 +95,22 @@ func (r *Router) handlePlatformUpdateRelay(w http.ResponseWriter, req *http.Requ
 	if !decodeAPIBody(w, req, &body) {
 		return
 	}
-	if body.DesiredState != "" && !state.ValidRelayState(body.DesiredState) {
-		http.Error(w, "desired_state must be online, maintenance, disabled or revoked", http.StatusBadRequest)
-		return
-	}
-	if body.BandwidthLimit != nil && *body.BandwidthLimit < -1 {
-		http.Error(w, "bandwidth_limit must be -1, 0 or a positive byte rate", http.StatusBadRequest)
+	if !validRelayConfigRequest(w, body) {
 		return
 	}
 
 	relayID := chi.URLParam(req, "relayID")
-	relay, err := server.store.UpdateRelayConfig(relayID, state.RelayConfigUpdate{
-		DesiredState:   body.DesiredState,
-		BandwidthLimit: body.BandwidthLimit,
-		RegionName:     body.RegionName,
-	})
-	if err != nil {
-		if errors.Is(err, state.ErrRelayNotFound) {
-			http.Error(w, "relay not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "could not update the relay", http.StatusInternalServerError)
+	if server.networkConfig == nil {
+		server.writeNetworkError(w, errors.New("relay configuration requires a durable store"))
 		return
 	}
-	actor := "platform:" + orgID
-	r.auditTenant(orgID, actor, "relay.updated", "relay:"+relayID, "desired state "+relay.DesiredState)
+	relay, err := server.networkConfig.SavePlatformRelay(req.Context(), relayID, body.update(), body.RestoreFrom, orgID)
+	if err != nil {
+		server.writeRelayManagementError(w, err)
+		return
+	}
 	r.log.Info("platform updated a relay", "organization", orgID, "relay", relayID, "state", relay.DesiredState)
+	server.refreshRelayMapAfterChange(req.Context())
 	writeJSON(w, http.StatusOK, platformRelayView{
 		OrganizationID: orgID, relayView: relayViewFor(relay, time.Now().UTC()),
 	})
@@ -126,17 +126,43 @@ func (r *Router) handlePlatformDeleteRelay(w http.ResponseWriter, req *http.Requ
 		return
 	}
 	relayID := chi.URLParam(req, "relayID")
-	relay, exists := server.store.RelayByID(relayID)
-	if !exists {
-		http.Error(w, "relay not found", http.StatusNotFound)
+	expected, ok := relayExpectedVersion(w, req)
+	if !ok {
 		return
 	}
-	if err := server.store.DeleteRelay(relayID); err != nil {
-		http.Error(w, "could not delete the relay", http.StatusInternalServerError)
+	if server.networkConfig == nil {
+		server.writeNetworkError(w, errors.New("relay configuration requires a durable store"))
 		return
 	}
-	actor := "platform:" + orgID
-	r.auditTenant(orgID, actor, "relay.deleted", "relay:"+relayID, "deleted relay "+relay.Name)
+	if err := server.networkConfig.DeletePlatformRelay(req.Context(), relayID, expected, orgID); err != nil {
+		server.writeRelayManagementError(w, err)
+		return
+	}
 	r.log.Info("platform deleted a relay", "organization", orgID, "relay", relayID)
+	server.refreshRelayMapAfterChange(req.Context())
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Router) handlePlatformRelay(w http.ResponseWriter, req *http.Request) {
+	orgID := chi.URLParam(req, "orgID")
+	server := r.serverFor(orgID)
+	if server == nil {
+		writeAPIError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+	relay, err := server.lookupManagedRelay(req.Context(), chi.URLParam(req, "relayID"))
+	if err != nil {
+		server.writeRelayManagementError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, platformRelayView{OrganizationID: orgID, relayView: relayViewFor(relay, time.Now().UTC())})
+}
+
+func (r *Router) handlePlatformRelayHistory(w http.ResponseWriter, req *http.Request) {
+	server := r.serverFor(chi.URLParam(req, "orgID"))
+	if server == nil {
+		writeAPIError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+	server.writeRelayHistory(w, req, chi.URLParam(req, "relayID"))
 }

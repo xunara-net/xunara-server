@@ -33,7 +33,7 @@ func seedAPIKey(t *testing.T, s *Server, scopes ...string) (identity.APIKey, str
 }
 
 // apiRequest performs a JSON API request with an optional bearer token.
-func apiRequest(t *testing.T, client *http.Client, method, rawURL, token string, body any) *http.Response {
+func apiRequest(t *testing.T, client *http.Client, method, rawURL, token string, body any, headers ...map[string]string) *http.Response {
 	t.Helper()
 
 	var reader io.Reader
@@ -50,6 +50,11 @@ func apiRequest(t *testing.T, client *http.Client, method, rawURL, token string,
 		t.Fatalf("building request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for _, values := range headers {
+		for name, value := range values {
+			req.Header.Set(name, value)
+		}
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
