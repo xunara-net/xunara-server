@@ -59,6 +59,8 @@ var (
 	ErrRelayConfigConflict     = errors.New("relay: configuration version changed")
 	ErrRelayConfigInvalid      = errors.New("relay: invalid configuration update")
 	ErrRelayConfigRevoked      = errors.New("relay: revoked service identity cannot be reactivated")
+	ErrRelayRevoked            = errors.New("relay: service identity is revoked")
+	ErrRelayExecutionInvalid   = errors.New("relay: invalid execution report")
 )
 
 // RelayEnrollmentToken is a one-time credential an operator hands to a relay.
@@ -119,12 +121,14 @@ type Relay struct {
 	BandwidthLimit int64
 
 	// Telemetry from the last heartbeat.
-	Healthy          bool
-	UptimeSeconds    int64
-	ConnectedClients int
-	BytesIn          int64
-	BytesOut         int64
-	LastSeen         time.Time
+	Healthy             bool
+	UptimeSeconds       int64
+	ConnectedClients    int
+	BytesIn             int64
+	BytesOut            int64
+	LastSeen            time.Time
+	Execution           RelayExecution
+	ExecutionReportedAt time.Time
 
 	Created   time.Time
 	CreatedBy string
@@ -140,6 +144,7 @@ type RelayHeartbeat struct {
 	BytesIn          int64
 	BytesOut         int64
 	LastSeen         time.Time
+	Execution        *RelayExecution
 }
 
 // RelayConfigUpdate is an operator's change to a relay. Nil fields keep the
@@ -197,6 +202,7 @@ type RelayStore interface {
 	ListRelays() []Relay
 	// UpdateRelayHeartbeat records a relay's status report.
 	UpdateRelayHeartbeat(id string, hb RelayHeartbeat) error
+	RecordRelayHeartbeat(ctx context.Context, token string, hb RelayHeartbeat) (Relay, error)
 	// UpdateRelayConfig 是底层存储入口，ConfigVersion 必须是期望的当前版本。
 	// HTTP 写入经 networkconfig 事务复查身份并绑定审计，不直接调用此方法。
 	UpdateRelayConfig(id string, update RelayConfigUpdate) (Relay, error)
@@ -206,6 +212,7 @@ type RelayStore interface {
 
 // prepareRelayForCreation 共享两种存储实现的创建校验，避免事务与底层写入产生两套默认值。
 func prepareRelayForCreation(relay Relay, token string) (Relay, error) {
+	relay.Execution, relay.ExecutionReportedAt = RelayExecution{}, time.Time{}
 	if relay.ID == "" {
 		return Relay{}, errors.New("state: relay id is required")
 	}

@@ -18,6 +18,29 @@ type RelayHistoryItem struct {
 	Created time.Time `json:"created"`
 }
 
+func (store *SQLiteStore) RecordRelayHeartbeat(ctx context.Context, token string, heartbeat state.RelayHeartbeat) (state.Relay, error) {
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return state.Relay{}, err
+	}
+	defer transaction.Rollback()
+	now := time.Now().UTC()
+	relay, changed, err := state.RecordRelayHeartbeatTx(ctx, transaction, token, heartbeat, now)
+	if err != nil {
+		return state.Relay{}, err
+	}
+	if changed {
+		detail := "execution report unavailable"
+		if !relay.ExecutionReportedAt.IsZero() {
+			detail = fmt.Sprintf("configuration %s; reported %s; state %s", relay.Execution.ConfigVersion, relay.Execution.Status, relay.Execution.State)
+		}
+		if err := commitChange(ctx, transaction, "relay:"+relay.ID, "relay.configuration_reported", "relay:"+relay.ID, detail, now); err != nil {
+			return state.Relay{}, err
+		}
+	}
+	return relay, transaction.Commit()
+}
+
 func (store *SQLiteStore) RelayHistory(ctx context.Context, id string) ([]RelayHistoryItem, error) {
 	documents, err := store.History(ctx, state.RelayConfigurationKind(id))
 	if err != nil {

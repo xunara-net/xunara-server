@@ -20,6 +20,8 @@ const relayColumns = `id, name, hostname, region_code, region_name, node_key, ve
 
 const relayEnrollmentColumns = `id, name, secret_hash, visibility, expiry, used_at, created, created_by`
 
+const relaySelectColumns = relayColumns + `, execution_report, execution_reported_at`
+
 // CreateRelayEnrollmentToken implements [RelayStore].
 func (s *SQLiteStore) CreateRelayEnrollmentToken(tok RelayEnrollmentToken, secret string) error {
 	if tok.ID == "" {
@@ -240,7 +242,7 @@ func (s *SQLiteStore) RelayByToken(token string) (Relay, bool) {
 		return Relay{}, false
 	}
 	row := s.db.QueryRowContext(context.Background(),
-		`SELECT `+relayColumns+` FROM relays WHERE token_hash = ?`, RelaySecretHash(token))
+		`SELECT `+relaySelectColumns+` FROM relays WHERE token_hash = ?`, RelaySecretHash(token))
 	relay, err := scanRelay(row)
 	if err != nil {
 		return Relay{}, false
@@ -255,7 +257,7 @@ func (s *SQLiteStore) RelayByID(id string) (Relay, bool) {
 }
 
 func (s *SQLiteStore) LookupRelay(ctx context.Context, id string) (Relay, error) {
-	relay, err := scanRelay(s.db.QueryRowContext(ctx, `SELECT `+relayColumns+` FROM relays WHERE id = ?`, id))
+	relay, err := scanRelay(s.db.QueryRowContext(ctx, `SELECT `+relaySelectColumns+` FROM relays WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Relay{}, ErrRelayNotFound
 	}
@@ -273,7 +275,7 @@ func (s *SQLiteStore) RelayByNodeKey(nodeKey string) (Relay, bool) {
 // relayByNodeKeyLocked reads a relay by node key. It takes no lock: callers
 // either hold s.mu or only read.
 func (s *SQLiteStore) relayByNodeKeyLocked(ctx context.Context, nodeKey string) (Relay, bool) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+relayColumns+` FROM relays WHERE node_key = ?`, nodeKey)
+	row := s.db.QueryRowContext(ctx, `SELECT `+relaySelectColumns+` FROM relays WHERE node_key = ?`, nodeKey)
 	relay, err := scanRelay(row)
 	if err != nil {
 		return Relay{}, false
@@ -289,7 +291,7 @@ func (s *SQLiteStore) ListRelays() []Relay {
 
 func (s *SQLiteStore) ListRelaysContext(ctx context.Context) ([]Relay, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+relayColumns+` FROM relays ORDER BY created ASC, id ASC`)
+		`SELECT `+relaySelectColumns+` FROM relays ORDER BY created ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -308,25 +310,71 @@ func (s *SQLiteStore) ListRelaysContext(ctx context.Context) ([]Relay, error) {
 
 // UpdateRelayHeartbeat implements [RelayStore].
 func (s *SQLiteStore) UpdateRelayHeartbeat(id string, hb RelayHeartbeat) error {
-	if hb.LastSeen.IsZero() {
-		hb.LastSeen = time.Now().UTC()
-	}
-	res, err := s.db.ExecContext(context.Background(), `
-		UPDATE relays SET
-			healthy = ?, uptime_seconds = ?, connected_clients = ?,
-			bytes_in = ?, bytes_out = ?, last_seen = ?,
-			version = CASE WHEN ? <> '' THEN ? ELSE version END
-		WHERE id = ?`,
-		boolToInt(hb.Healthy), hb.UptimeSeconds, hb.ConnectedClients,
-		hb.BytesIn, hb.BytesOut, hb.LastSeen.UTC().UnixNano(),
-		hb.Version, hb.Version, id)
+	ctx := context.Background()
+	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("state: recording relay heartbeat %s: %w", id, err)
+		return err
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
+	defer transaction.Rollback()
+	relay, err := scanRelay(transaction.QueryRowContext(ctx, `SELECT `+relaySelectColumns+` FROM relays WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrRelayNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if _, _, err := updateRelayHeartbeatTx(ctx, transaction, relay, hb, time.Now().UTC()); err != nil {
+		return err
+	}
+	return transaction.Commit()
+}
+
+func (store *SQLiteStore) RecordRelayHeartbeat(ctx context.Context, token string, heartbeat RelayHeartbeat) (Relay, error) {
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Relay{}, err
+	}
+	defer transaction.Rollback()
+	relay, _, err := RecordRelayHeartbeatTx(ctx, transaction, token, heartbeat, time.Now().UTC())
+	if err != nil {
+		return Relay{}, err
+	}
+	return relay, transaction.Commit()
+}
+
+// token hash、撤销复查、遥测和回执属于同一事务；存储故障不伪装成未知凭据。
+func RecordRelayHeartbeatTx(ctx context.Context, transaction *sql.Tx, token string, heartbeat RelayHeartbeat, now time.Time) (Relay, bool, error) {
+	if !ValidRelayToken(token) {
+		return Relay{}, false, ErrRelayNotFound
+	}
+	relay, err := scanRelay(transaction.QueryRowContext(ctx, `SELECT `+relaySelectColumns+` FROM relays WHERE token_hash = ?`, RelaySecretHash(token)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Relay{}, false, ErrRelayNotFound
+	}
+	if err != nil {
+		return Relay{}, false, err
+	}
+	return updateRelayHeartbeatTx(ctx, transaction, relay, heartbeat, now)
+}
+
+func updateRelayHeartbeatTx(ctx context.Context, transaction *sql.Tx, relay Relay, heartbeat RelayHeartbeat, now time.Time) (Relay, bool, error) {
+	updated, changed, err := applyRelayHeartbeat(relay, heartbeat, now)
+	if err != nil {
+		return Relay{}, false, err
+	}
+	report := ""
+	if !updated.ExecutionReportedAt.IsZero() {
+		raw, err := json.Marshal(updated.Execution)
+		if err != nil {
+			return Relay{}, false, err
+		}
+		report = string(raw)
+	}
+	_, err = transaction.ExecContext(ctx, `UPDATE relays SET healthy = ?, uptime_seconds = ?, connected_clients = ?,
+		bytes_in = ?, bytes_out = ?, last_seen = ?, version = ?, execution_report = ?, execution_reported_at = ? WHERE id = ?`,
+		boolToInt(updated.Healthy), updated.UptimeSeconds, updated.ConnectedClients, updated.BytesIn, updated.BytesOut,
+		updated.LastSeen.UnixNano(), updated.Version, report, nullableTimePtr(updated.ExecutionReportedAt), updated.ID)
+	return updated, changed, err
 }
 
 // UpdateRelayConfig 是底层兼容入口；HTTP 操作必须使用附带身份复查和审计的外层事务。
@@ -346,7 +394,7 @@ func (s *SQLiteStore) UpdateRelayConfig(id string, update RelayConfigUpdate) (Re
 
 // UpdateRelayConfigTx 复用已有历史表，CAS、配置和历史必须属于调用方的同一个事务。
 func UpdateRelayConfigTx(ctx context.Context, transaction *sql.Tx, id string, update RelayConfigUpdate, actor string, now time.Time) (Relay, error) {
-	relay, err := scanRelay(transaction.QueryRowContext(ctx, `SELECT `+relayColumns+` FROM relays WHERE id = ?`, id))
+	relay, err := scanRelay(transaction.QueryRowContext(ctx, `SELECT `+relaySelectColumns+` FROM relays WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Relay{}, ErrRelayNotFound
 	}
@@ -451,12 +499,14 @@ func DeleteRelayTx(ctx context.Context, transaction *sql.Tx, id string, expected
 // scanRelay reads one relay row. rows may be a *sql.Row or a *sql.Rows.
 func scanRelay(rows interface{ Scan(...any) error }) (Relay, error) {
 	var (
-		relay         Relay
-		version       sql.NullString
-		healthy       int
-		configVersion int64
-		lastSeen      sql.NullInt64
-		created       int64
+		relay               Relay
+		version             sql.NullString
+		healthy             int
+		configVersion       int64
+		lastSeen            sql.NullInt64
+		created             int64
+		executionReport     string
+		executionReportedAt sql.NullInt64
 	)
 	if err := rows.Scan(
 		&relay.ID, &relay.Name, &relay.HostName, &relay.RegionCode, &relay.RegionName,
@@ -465,6 +515,7 @@ func scanRelay(rows interface{ Scan(...any) error }) (Relay, error) {
 		&healthy, &relay.UptimeSeconds, &relay.ConnectedClients,
 		&relay.BytesIn, &relay.BytesOut, &lastSeen, &created, &relay.CreatedBy,
 		&relay.RegionID, &relay.CertName,
+		&executionReport, &executionReportedAt,
 	); err != nil {
 		return Relay{}, err
 	}
@@ -473,6 +524,12 @@ func scanRelay(rows interface{ Scan(...any) error }) (Relay, error) {
 	relay.ConfigVersion = uint64(configVersion)
 	relay.LastSeen = timeFromNanos(lastSeen)
 	relay.Created = time.Unix(0, created).UTC()
+	if executionReport != "" {
+		if err := json.Unmarshal([]byte(executionReport), &relay.Execution); err != nil {
+			return Relay{}, err
+		}
+	}
+	relay.ExecutionReportedAt = timeFromNanos(executionReportedAt)
 	return relay, nil
 }
 

@@ -87,12 +87,13 @@ type relayEnrollResponse struct {
 
 // relayHeartbeatRequest is the body of POST /api/relay/v1/heartbeat.
 type relayHeartbeatRequest struct {
-	Version          string `json:"version"`
-	Healthy          bool   `json:"healthy"`
-	UptimeSeconds    int64  `json:"uptime_seconds"`
-	ConnectedClients int    `json:"connected_clients"`
-	BytesIn          int64  `json:"bytes_in"`
-	BytesOut         int64  `json:"bytes_out"`
+	Version          string                `json:"version"`
+	Healthy          bool                  `json:"healthy"`
+	UptimeSeconds    int64                 `json:"uptime_seconds"`
+	ConnectedClients int                   `json:"connected_clients"`
+	BytesIn          int64                 `json:"bytes_in"`
+	BytesOut         int64                 `json:"bytes_out"`
+	Execution        *state.RelayExecution `json:"execution,omitempty"`
 }
 
 // relayRemoteConfig is the answer to a heartbeat: the desired state of the
@@ -101,6 +102,7 @@ type relayHeartbeatRequest struct {
 type relayRemoteConfig struct {
 	DesiredState   string `json:"desired_state"`
 	ConfigVersion  string `json:"config_version"`
+	ConfigRevision uint64 `json:"config_revision,omitempty"`
 	BandwidthLimit int64  `json:"bandwidth_limit"`
 	RegionName     string `json:"region_name,omitempty"`
 }
@@ -293,18 +295,6 @@ func (s *Server) handleRelayHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "relay token is missing or malformed")
 		return
 	}
-	relay, ok := s.store.RelayByToken(token)
-	if !ok {
-		writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "relay token is unknown")
-		return
-	}
-	// A revoked relay must stop serving; the data plane is already refusing
-	// clients, and the heartbeat is where it learns why.
-	if relay.DesiredState == state.RelayStateRevoked {
-		writeRelayError(w, http.StatusForbidden, "RELAY_REVOKED", "this relay has been revoked")
-		return
-	}
-
 	var status relayHeartbeatRequest
 	if !decodeRelayBody(w, r, &status) {
 		return
@@ -314,32 +304,44 @@ func (s *Server) handleRelayHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.UpdateRelayHeartbeat(relay.ID, state.RelayHeartbeat{
+	heartbeat := state.RelayHeartbeat{
 		Version:          status.Version,
 		Healthy:          status.Healthy,
 		UptimeSeconds:    status.UptimeSeconds,
 		ConnectedClients: status.ConnectedClients,
 		BytesIn:          status.BytesIn,
 		BytesOut:         status.BytesOut,
-	}); err != nil {
+		Execution:        status.Execution,
+	}
+	var relay state.Relay
+	var err error
+	if s.networkConfig != nil {
+		relay, err = s.networkConfig.RecordRelayHeartbeat(r.Context(), token, heartbeat)
+	} else {
+		relay, err = s.store.RecordRelayHeartbeat(r.Context(), token, heartbeat)
+	}
+	if err != nil {
 		if errors.Is(err, state.ErrRelayNotFound) {
 			writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "relay token is unknown")
 			return
 		}
-		s.log.Error("recording a relay heartbeat", "relay", relay.ID, "err", err)
-		writeRelayError(w, http.StatusInternalServerError, "RELAY_INTERNAL", "the control plane could not record the heartbeat")
-		return
-	}
-
-	relay, ok = s.store.RelayByID(relay.ID)
-	if !ok {
-		writeRelayError(w, http.StatusUnauthorized, "RELAY_TOKEN_INVALID", "relay token is unknown")
+		if errors.Is(err, state.ErrRelayRevoked) {
+			writeRelayError(w, http.StatusForbidden, "RELAY_REVOKED", "this relay has been revoked")
+			return
+		}
+		if errors.Is(err, state.ErrRelayExecutionInvalid) {
+			writeRelayError(w, http.StatusBadRequest, "RELAY_REQUEST_INVALID", "execution report is invalid")
+			return
+		}
+		s.log.Error("recording a relay heartbeat", "err", err)
+		writeRelayError(w, http.StatusServiceUnavailable, "RELAY_INTERNAL", "the control plane could not record the heartbeat")
 		return
 	}
 	s.refreshRelayMapAfterChange(r.Context())
 	writeJSON(w, http.StatusOK, relayRemoteConfig{
 		DesiredState:   relay.DesiredState,
 		ConfigVersion:  strconv.FormatUint(relay.ConfigVersion, 10),
+		ConfigRevision: relay.ConfigVersion,
 		BandwidthLimit: relay.BandwidthLimit,
 		RegionName:     relay.RegionName,
 	})
@@ -385,30 +387,32 @@ func validRelayPort(port int) bool { return port >= 0 && port <= 65535 }
 
 // relayView is the JSON shape of an enrolled relay.
 type relayView struct {
-	RegionID         int    `json:"regionId"`
-	CertName         string `json:"certName,omitempty"`
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Hostname         string `json:"hostname,omitempty"`
-	RegionCode       string `json:"regionCode,omitempty"`
-	RegionName       string `json:"regionName,omitempty"`
-	NodeKey          string `json:"nodeKey,omitempty"`
-	Version          string `json:"version,omitempty"`
-	DERPPort         int    `json:"derpPort,omitempty"`
-	STUNPort         int    `json:"stunPort,omitempty"`
-	Visibility       string `json:"visibility"`
-	DesiredState     string `json:"desiredState"`
-	ConfigVersion    uint64 `json:"configVersion"`
-	BandwidthLimit   int64  `json:"bandwidthLimit"`
-	Healthy          bool   `json:"healthy"`
-	Online           bool   `json:"online"`
-	UptimeSeconds    int64  `json:"uptimeSeconds,omitempty"`
-	ConnectedClients int    `json:"connectedClients,omitempty"`
-	BytesIn          int64  `json:"bytesIn,omitempty"`
-	BytesOut         int64  `json:"bytesOut,omitempty"`
-	CreatedAt        string `json:"createdAt,omitempty"`
-	LastSeen         string `json:"lastSeen,omitempty"`
-	CreatedBy        string `json:"createdBy,omitempty"`
+	RegionID            int                   `json:"regionId"`
+	CertName            string                `json:"certName,omitempty"`
+	ID                  string                `json:"id"`
+	Name                string                `json:"name"`
+	Hostname            string                `json:"hostname,omitempty"`
+	RegionCode          string                `json:"regionCode,omitempty"`
+	RegionName          string                `json:"regionName,omitempty"`
+	NodeKey             string                `json:"nodeKey,omitempty"`
+	Version             string                `json:"version,omitempty"`
+	DERPPort            int                   `json:"derpPort,omitempty"`
+	STUNPort            int                   `json:"stunPort,omitempty"`
+	Visibility          string                `json:"visibility"`
+	DesiredState        string                `json:"desiredState"`
+	ConfigVersion       uint64                `json:"configVersion"`
+	BandwidthLimit      int64                 `json:"bandwidthLimit"`
+	Healthy             bool                  `json:"healthy"`
+	Online              bool                  `json:"online"`
+	UptimeSeconds       int64                 `json:"uptimeSeconds,omitempty"`
+	ConnectedClients    int                   `json:"connectedClients,omitempty"`
+	BytesIn             int64                 `json:"bytesIn,omitempty"`
+	BytesOut            int64                 `json:"bytesOut,omitempty"`
+	CreatedAt           string                `json:"createdAt,omitempty"`
+	LastSeen            string                `json:"lastSeen,omitempty"`
+	CreatedBy           string                `json:"createdBy,omitempty"`
+	Execution           *state.RelayExecution `json:"execution,omitempty"`
+	ExecutionReportedAt string                `json:"executionReportedAt,omitempty"`
 }
 
 // relayViewFor renders one relay. The DERP node key is a public key: it is
@@ -429,6 +433,11 @@ func relayViewFor(relay state.Relay, now time.Time) relayView {
 	}
 	if !relay.Created.IsZero() {
 		view.CreatedAt = relay.Created.UTC().Format(time.RFC3339)
+	}
+	if !relay.ExecutionReportedAt.IsZero() {
+		execution := relay.Execution
+		view.Execution = &execution
+		view.ExecutionReportedAt = relay.ExecutionReportedAt.UTC().Format(time.RFC3339)
 	}
 	if !relay.LastSeen.IsZero() {
 		view.LastSeen = relay.LastSeen.UTC().Format(time.RFC3339)

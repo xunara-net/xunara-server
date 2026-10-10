@@ -495,6 +495,10 @@ func (s *MemoryStore) UpdateRelayHeartbeat(id string, hb RelayHeartbeat) error {
 	return s.relay.UpdateRelayHeartbeat(id, hb)
 }
 
+func (store *MemoryStore) RecordRelayHeartbeat(ctx context.Context, token string, heartbeat RelayHeartbeat) (Relay, error) {
+	return store.relay.RecordRelayHeartbeat(ctx, token, heartbeat)
+}
+
 // UpdateRelayConfig implements [RelayStore].
 func (s *MemoryStore) UpdateRelayConfig(id string, update RelayConfigUpdate) (Relay, error) {
 	return s.relay.UpdateRelayConfig(id, update)

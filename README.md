@@ -266,7 +266,9 @@ go test -race ./...
   注册事务边界见 [ADR-0013](docs/adr/ADR-0013-atomic-relay-enrollment.md)。配置编辑/恢复与删除
   现在要求版本前置条件，历史、审计和通知同事务提交；旧管理调用须升级，详见
   [ADR-0020](docs/adr/ADR-0020-relay-configuration-history.md)。期望配置下发不等于中继已执行，
-  运行时应用及回执仍待交付，不改官方客户端协议或数据库版本。
+  新版 Relay 已实现实际热更/停用断连及服务自报回执，旧版执行状态仍为未知；
+  详见 [ADR-0021](docs/adr/ADR-0021-relay-runtime-execution.md)。只追加 state v22，
+  identity v13、官方客户端协议、套餐及静态公共中继配置不变。
 
 ## 仓库关系
 

@@ -275,20 +275,30 @@ func (m *memoryRelayStore) UpdateRelayHeartbeat(id string, hb RelayHeartbeat) er
 	if !ok {
 		return ErrRelayNotFound
 	}
-	if hb.LastSeen.IsZero() {
-		hb.LastSeen = time.Now().UTC()
+	updated, _, err := applyRelayHeartbeat(relay, hb, time.Now().UTC())
+	if err != nil {
+		return err
 	}
-	relay.Healthy = hb.Healthy
-	relay.UptimeSeconds = hb.UptimeSeconds
-	relay.ConnectedClients = hb.ConnectedClients
-	relay.BytesIn = hb.BytesIn
-	relay.BytesOut = hb.BytesOut
-	relay.LastSeen = hb.LastSeen.UTC()
-	if hb.Version != "" {
-		relay.Version = hb.Version
-	}
-	m.relays[id] = relay
+	m.relays[id] = updated
 	return nil
+}
+
+func (store *memoryRelayStore) RecordRelayHeartbeat(ctx context.Context, token string, heartbeat RelayHeartbeat) (Relay, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Relay{}, err
+	}
+	id, found := store.relayToken[RelaySecretHash(token)]
+	if !ValidRelayToken(token) || !found {
+		return Relay{}, ErrRelayNotFound
+	}
+	relay, _, err := applyRelayHeartbeat(store.relays[id], heartbeat, time.Now().UTC())
+	if err != nil {
+		return Relay{}, err
+	}
+	store.relays[id] = relay
+	return relay, nil
 }
 
 // UpdateRelayConfig implements [RelayStore].

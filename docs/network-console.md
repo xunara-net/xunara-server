@@ -4,7 +4,7 @@
 [用户手册](https://github.com/xunara-net/xunara-docs/blob/main/docs/user/network-console.md)。
 前端为独立 xunara-web，Core 不依赖 Vue、可视化布局或网页身份。决策见
 [ADR-0018](adr/ADR-0018-network-console.md)、[ADR-0019](adr/ADR-0019-managed-relay-map.md)
-与 [ADR-0020](adr/ADR-0020-relay-configuration-history.md)。
+与 [ADR-0020](adr/ADR-0020-relay-configuration-history.md)、[ADR-0021](adr/ADR-0021-relay-runtime-execution.md)。
 
 ## 权限数据流
 
@@ -68,8 +68,12 @@ DELETE 要求 `If-Match: <当前版本>`，也接受完整双引号包裹的版�
 凭据和角色。平台列表与历史读故障失败关闭。Cookie 写入仍需 CSRF，服务密钥仍
 需 API Entitlement 与 write 范围。没有新增迁移或套餐特判。
 
-保存是期望配置，不是执行回执。当前 Relay 的心跳回调只记录配置，远程运行时
-限速和断开既有连接仍未交付。地图/准入保护不应被描述为“节点已经停止服务”。
+保存是期望配置，不是执行回执。新版 Relay 实际热更每连接限速、维护拒新、停用
+断连/恢复及终态撤销，再通过心跳自报执行结果。两个后台分开展示期望版本和报告，
+旧版无报告时为未知，失联报告为旧回执。身份撤销没有停机 ACK，不能用历史报告
+证明已经断开。具体可选字段及缓存语义以
+[Relay 契约](https://github.com/xunara-net/xunara-relay/blob/main/docs/relay-protocol.md#5-运行时执行与回执可选兼容扩展)为准。
+报告变化、遥测与服务审计同事务，存储故障返回 503 而不是无效服务凭据。
 
 ## DNS 与地图
 
@@ -85,7 +89,7 @@ DNS 只管理官方客户端实际支持的 A / AAAA 地址记录；设备自动
 
 ## 迁移与验收
 
-state 只追加 v20（配置/历史与记录版本）和 v21（中继地区/pin），identity 保持 v13。
+state 只追加 v20（配置/历史与记录版本）、v21（中继地区/pin）及 v22（执行回执与接收时间），identity 保持 v13。
 旧 DNS、设备、会话和中继凭据保留；旧二进制拒绝新 schema。回退必须在维护窗口
 同时恢复升级前完整一致性状态和旧产物，恢复业务后禁止用旧快照覆盖新写入。
 

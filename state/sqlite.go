@@ -346,6 +346,11 @@ ALTER TABLE relays ADD COLUMN region_id INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE relays ADD COLUMN cert_name TEXT NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_relays_region_id ON relays(region_id) WHERE region_id > 0;
 `,
+	// v22：旧记录执行状态未知，不能由期望版本自动补成“已执行”。
+	`
+ALTER TABLE relays ADD COLUMN execution_report TEXT NOT NULL DEFAULT '';
+ALTER TABLE relays ADD COLUMN execution_reported_at INTEGER;
+`,
 }
 
 // SQLiteStore is a durable [Store] backed by SQLite.
