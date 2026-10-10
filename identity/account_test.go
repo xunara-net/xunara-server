@@ -33,7 +33,8 @@ func seedAccount(t *testing.T, store *SQLiteStore, login string) (User, []byte, 
 	if err := store.SetLocalCredential(&LocalCredential{UserID: user.ID, PasswordHash: hash}); err != nil {
 		t.Fatal(err)
 	}
-	session, token, err := store.CreateLocalSession(t.Context(), user.ID, hash, time.Hour)
+	// 夹具只预置会话，不模拟一次密码认证或污染被测操作的审计数量。
+	session, token, err := store.CreateSession(NewSessionOptions{UserID: user.ID, AuthMethod: LocalProviderID, TTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,15 +131,15 @@ func TestAccountPasswordAtomicRevocation(t *testing.T) {
 	if _, _, err := store.CreateLocalSession(t.Context(), user.ID, originalHash, time.Hour); !errors.Is(err, ErrCredentialChanged) {
 		t.Fatalf("stale password login: %v", err)
 	}
-	if _, _, err := store.CreateLocalSession(t.Context(), user.ID, replacement, time.Hour); err != nil {
-		t.Fatalf("replacement password login: %v", err)
-	}
 	events := store.ListAudit(0)
 	if len(events) != 1 || events[0].Action != AuditPasswordChanged || events[0].Actor != "user:1" || events[0].Target != "user:1" {
 		t.Fatalf("password audit: %+v", events)
 	}
 	if strings.Contains(events[0].Detail, string(originalHash)) || strings.Contains(events[0].Detail, string(replacement)) {
 		t.Fatal("audit leaked credential hashes")
+	}
+	if _, _, err := store.CreateLocalSession(t.Context(), user.ID, replacement, time.Hour); err != nil {
+		t.Fatalf("replacement password login: %v", err)
 	}
 }
 
@@ -225,7 +226,7 @@ func TestAccountTransactionRollback(t *testing.T) {
 func TestAccountConcurrentPasswordChanges(t *testing.T) {
 	store, peer := openAccountStores(t)
 	user, hash, firstSession, _ := seedAccount(t, store, "alice")
-	secondSession, _, err := peer.CreateLocalSession(t.Context(), user.ID, hash, time.Hour)
+	secondSession, _, err := peer.CreateSession(NewSessionOptions{UserID: user.ID, AuthMethod: LocalProviderID, TTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

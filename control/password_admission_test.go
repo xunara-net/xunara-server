@@ -25,6 +25,11 @@ func TestPasswordAdmissionFailsClosedOnStorageFailure(t *testing.T) {
 		{"user read", "", "ALTER TABLE users RENAME TO unavailable_password_users", "ALTER TABLE unavailable_password_users RENAME TO users"},
 		{"credential read and setup count", "", "ALTER TABLE local_credentials RENAME TO unavailable_password_credentials", "ALTER TABLE unavailable_password_credentials RENAME TO local_credentials"},
 		{"session insert", "", "CREATE TRIGGER unavailable_password_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'private password admission diagnostic'); END", "DROP TRIGGER unavailable_password_session"},
+		{"session ignored", "", "CREATE TRIGGER unavailable_password_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(IGNORE); END", "DROP TRIGGER unavailable_password_session"},
+		{"login audit", "", "CREATE TRIGGER unavailable_password_audit BEFORE INSERT ON audit_events WHEN NEW.action = 'login.succeeded' BEGIN SELECT RAISE(ABORT, 'private password admission diagnostic'); END", "DROP TRIGGER unavailable_password_audit"},
+		{"session audit", "", "CREATE TRIGGER unavailable_password_audit BEFORE INSERT ON audit_events WHEN NEW.action = 'session.created' BEGIN SELECT RAISE(ABORT, 'private password admission diagnostic'); END", "DROP TRIGGER unavailable_password_audit"},
+		{"login audit ignored", "", "CREATE TRIGGER unavailable_password_audit BEFORE INSERT ON audit_events WHEN NEW.action = 'login.succeeded' BEGIN SELECT RAISE(IGNORE); END", "DROP TRIGGER unavailable_password_audit"},
+		{"session audit ignored", "", "CREATE TRIGGER unavailable_password_audit BEFORE INSERT ON audit_events WHEN NEW.action = 'session.created' BEGIN SELECT RAISE(IGNORE); END", "DROP TRIGGER unavailable_password_audit"},
 	} {
 		t.Run(fault.name, func(t *testing.T) {
 			server := newTestServer(t)
@@ -79,6 +84,10 @@ func TestPasswordAdmissionFailsClosedOnStorageFailure(t *testing.T) {
 			if err != nil || len(sessions) != 1 || sessions[0].ID != oldSession.ID || !sessions[0].RevokedAt.IsZero() {
 				t.Fatal("password storage failure created or revoked a session")
 			}
+			var successEvents int
+			if err := database.QueryRow("SELECT COUNT(*) FROM audit_events WHERE action IN (?, ?)", identity.AuditLoginSucceeded, identity.AuditSessionCreated).Scan(&successEvents); err != nil || successEvents != 0 {
+				t.Fatal("failed password login left a success audit")
+			}
 			probe := getRequest(t, client, host.URL+"/api/v1/auth/session", oldCookie)
 			if probe.StatusCode != http.StatusOK || !strings.Contains(bodyString(t, probe), `"authenticated":true`) {
 				t.Fatal("original login was lost after storage recovery")
@@ -123,6 +132,51 @@ func TestPasswordAdmissionSharesBudgetAcrossJSONAndHTML(t *testing.T) {
 		}
 		if response.Header.Get("Set-Cookie") != "" {
 			t.Fatal("rejected password attempt returned a cookie")
+		}
+	}
+}
+
+func TestPasswordLoginAuditsExactlyOnceAcrossAdapters(t *testing.T) {
+	server := newTestServer(t)
+	host := newTestHTTPServer(t, server)
+	client := noRedirectClient()
+	credentials := apiLoginRequest{Login: state.DefaultUserProfile(state.DefaultUserID).LoginName, Password: testLocalPassword}
+	for index, endpoint := range []string{"/api/v1/auth/login", "/login"} {
+		var response *http.Response
+		if endpoint == "/login" {
+			response = postForm(t, client, host.URL+endpoint, url.Values{
+				"_csrf": {server.newFormToken(formPurposeLogin)}, "login": {credentials.Login}, "password": {credentials.Password}, "return_to": {"/console/"},
+			}, nil)
+			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/console/" {
+				t.Fatal("audited legacy password login changed its redirect contract")
+			}
+		} else {
+			response = postJSON(t, client, host.URL+endpoint, credentials, nil)
+			if response.StatusCode != http.StatusOK {
+				t.Fatal("audited JSON password login did not succeed")
+			}
+		}
+		cookie := cookieNamed(t, response, sessionCookieName)
+		session, err := server.identity.GetSessionByToken(cookie.Value)
+		if err != nil {
+			t.Fatal("login cookie has no persistent session")
+		}
+		events := server.identity.ListAudit(0)
+		counts := make(map[string]int)
+		for _, event := range events {
+			counts[event.Action]++
+			for _, private := range []string{credentials.Password, cookie.Value, identity.HashSecret(cookie.Value)} {
+				if strings.Contains(event.Detail, private) {
+					t.Fatal("login audit exposed a credential")
+				}
+			}
+		}
+		if counts[identity.AuditLoginSucceeded] != index+1 || counts[identity.AuditSessionCreated] != index+1 {
+			t.Fatal("login adapter omitted or duplicated its mandatory audit")
+		}
+		var sessionEvents int
+		if err := server.store.(*state.SQLiteStore).DB().QueryRow("SELECT COUNT(*) FROM audit_events WHERE action = ? AND target = ? AND ts = ?", identity.AuditSessionCreated, "session:"+session.ID, session.CreatedAt.UnixNano()).Scan(&sessionEvents); err != nil || sessionEvents != 1 {
+			t.Fatal("session audit is not tied to the actual persistent login")
 		}
 	}
 }

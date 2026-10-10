@@ -55,12 +55,21 @@ func (s *SQLiteStore) createSession(ctx context.Context, exec interface {
 		RotatedFrom: opts.RotatedFrom,
 	}
 
-	if _, err := exec.ExecContext(ctx,
+	result, err := exec.ExecContext(ctx,
 		`INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '', ?)`,
 		session.ID, HashSecret(token), int64(session.UserID), session.AuthMethod,
 		session.CreatedAt.UnixNano(), session.ExpiresAt.UnixNano(), session.LastSeenAt.UnixNano(),
-		session.RotatedFrom); err != nil {
+		session.RotatedFrom)
+	if err != nil {
 		return Session{}, fmt.Errorf("identity: creating session: %w", err)
+	}
+	// 被触发器忽略的插入不是持久会话，不能返回看似有效的凭据。
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return Session{}, fmt.Errorf("identity: checking session insertion: %w", err)
+	}
+	if affected != 1 {
+		return Session{}, errors.New("identity: session did not persist exactly one row")
 	}
 	return session, nil
 }

@@ -203,8 +203,11 @@ JSON 与兼容 HTML 密码登录共用同一限流、身份查询、密码验证
 限流、密码登录的初始化状态、账户/凭据读取或会话存储故障均中止认证，返回脱敏
 503 与重试提示，不改变 Cookie 或引导重新初始化；未知账户、无本地密码和错误
 密码仍统一 401。登录预算与 bcrypt 成本保持，见
-[ADR-0016](docs/adr/ADR-0016-password-login-consolidation.md)。成功登录审计的原子性
-和其他历史调用仍需继续复核，不把本切片写成全部认证流程已完成。
+[ADR-0016](docs/adr/ADR-0016-password-login-consolidation.md)。密码登录会话与两项
+成功审计现已在同一身份事务提交，失败保留旧 Cookie；移除控制层重复日志，
+见 [密码登录审计](docs/password-login-audit.md)与
+[ADR-0026](docs/adr/ADR-0026-atomic-password-login-audit.md)。其他认证方法与完整
+登录记录仍需独立闭环，不把本切片写成全部认证流程已完成。
 
 ### 通行密钥
 

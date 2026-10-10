@@ -87,8 +87,5 @@ func (server *Server) signInWithPassword(ctx context.Context, address, login, pa
 	if err != nil {
 		return passwordSignInResult{}, err
 	}
-	actor := fmt.Sprintf("user:%d", user.ID)
-	server.audit(actor, identity.AuditLoginSucceeded, "provider:"+identity.LocalProviderID, "authenticated "+user.LoginName)
-	server.audit(actor, identity.AuditSessionCreated, "session:"+session.ID, "auth method "+identity.LocalProviderID)
 	return passwordSignInResult{user: user, session: session, token: token}, nil
 }

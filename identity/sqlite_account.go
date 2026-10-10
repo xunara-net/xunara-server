@@ -83,6 +83,15 @@ func (store *SQLiteStore) CreateLocalSession(ctx context.Context, userID tailcfg
 	if err != nil {
 		return Session{}, "", err
 	}
+	// 成功认证、会话和必需审计只有一个提交点；日志失败不能留下可用登录。
+	// 不记录登录名或任何凭据值，事件仅绑定人类用户、提供方与会话标识。
+	actor := fmt.Sprintf("user:%d", userID)
+	if err := insertIdentityAudit(ctx, tx, actor, AuditLoginSucceeded, "provider:"+LocalProviderID, "password authenticated", session.CreatedAt); err != nil {
+		return Session{}, "", err
+	}
+	if err := insertIdentityAudit(ctx, tx, actor, AuditSessionCreated, "session:"+session.ID, "auth method "+LocalProviderID, session.CreatedAt); err != nil {
+		return Session{}, "", err
+	}
 	if err := tx.Commit(); err != nil {
 		return Session{}, "", fmt.Errorf("identity: committing password session: %w", err)
 	}
