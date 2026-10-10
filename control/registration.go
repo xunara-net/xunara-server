@@ -14,7 +14,8 @@ type RegistrationMode string
 
 const (
 	// RegistrationClosed accepts no self-service sign-up at all. Accounts
-	// come from an identity provider or from an administrator.
+	// are provisioned explicitly by an administrator; existing external
+	// identity bindings may still sign in.
 	RegistrationClosed RegistrationMode = "closed"
 	// RegistrationInvite requires a single-use invitation token. It is the
 	// default because an invitation is the only self-service path that

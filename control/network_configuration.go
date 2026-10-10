@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ type dnsSettings struct {
 }
 
 type dnsRuntimeConfig struct {
+	Domain    string
 	Revision  uint64
 	Settings  dnsSettings
 	Resolvers []*dnstype.Resolver
@@ -32,10 +34,14 @@ type dnsRuntimeConfig struct {
 }
 
 func (server *Server) validateDNSSettings(settings dnsSettings) (*dnsRuntimeConfig, error) {
+	return validateDNSSettingsForDomain(settings, server.networkDomain())
+}
+
+func validateDNSSettingsForDomain(settings dnsSettings, domain string) (*dnsRuntimeConfig, error) {
 	if len(settings.Nameservers) > 8 || len(settings.SearchDomains) > 16 || len(settings.SplitDNS) > 32 {
 		return nil, errors.New("too many DNS servers, search domains or split DNS entries")
 	}
-	if settings.MagicDNS && server.cfg.Domain == "" {
+	if settings.MagicDNS && domain == "" {
 		return nil, errors.New("the deployment has not configured a network domain")
 	}
 	settings.Nameservers = slices.Clone(settings.Nameservers)
@@ -46,7 +52,7 @@ func (server *Server) validateDNSSettings(settings dnsSettings) (*dnsRuntimeConf
 		if err != nil {
 			return nil, err
 		}
-		if name == strings.Trim(server.cfg.Domain, ".") || strings.HasSuffix(name, "."+strings.Trim(server.cfg.Domain, ".")) {
+		if domain != "" && (name == domain || strings.HasSuffix(name, "."+domain)) {
 			return nil, errors.New("split DNS cannot replace the managed network domain")
 		}
 		if _, exists := routes[name]; exists || len(entries) == 0 || len(entries) > 8 {
@@ -91,7 +97,14 @@ func (server *Server) validateDNSSettings(settings dnsSettings) (*dnsRuntimeConf
 	if settings.SearchDomains == nil {
 		settings.SearchDomains = []string{}
 	}
-	return &dnsRuntimeConfig{Settings: settings, Resolvers: resolvers, Routes: parsedRoutes}, nil
+	return &dnsRuntimeConfig{Domain: domain, Settings: settings, Resolvers: resolvers, Routes: parsedRoutes}, nil
+}
+
+func (server *Server) networkDomain() string {
+	if runtime := server.dnsConfig.Load(); runtime != nil {
+		return runtime.Domain
+	}
+	return server.cfg.Domain
 }
 
 func validateManagedResolver(value string) error {
@@ -129,6 +142,10 @@ func uniqueStrings(values []string) []string {
 
 // loadDNSConfiguration 只替换完整快照；配置故障不能把客户端 DNS 清空或伪装默认值。
 func (server *Server) loadDNSConfiguration(ctx context.Context) error {
+	domain, _, err := server.networkConfig.DNSDomain(ctx)
+	if err != nil {
+		return err
+	}
 	document, found, err := server.networkConfig.Get(ctx, networkconfig.DNS)
 	if err != nil {
 		return err
@@ -141,19 +158,20 @@ func (server *Server) loadDNSConfiguration(ctx context.Context) error {
 			return nil
 		}
 		server.dnsConfig.Store(&dnsRuntimeConfig{
-			Settings:  dnsSettings{MagicDNS: server.cfg.Domain != "", Nameservers: stringsOrEmpty(server.cfg.Nameservers), SearchDomains: []string{}, SplitDNS: server.cfg.DNSRoutes},
+			Domain:    domain,
+			Settings:  dnsSettings{MagicDNS: domain != "", Nameservers: stringsOrEmpty(server.cfg.Nameservers), SearchDomains: []string{}, SplitDNS: server.cfg.DNSRoutes},
 			Resolvers: server.resolvers, Routes: server.dnsRoutes,
 		})
 		return nil
 	}
-	if current := server.dnsConfig.Load(); current != nil && current.Revision == document.Revision {
+	if current := server.dnsConfig.Load(); current != nil && current.Revision == document.Revision && current.Domain == domain {
 		return nil
 	}
 	var settings dnsSettings
 	if err := json.Unmarshal([]byte(document.Content), &settings); err != nil {
 		return err
 	}
-	runtime, err := server.validateDNSSettings(settings)
+	runtime, err := validateDNSSettingsForDomain(settings, domain)
 	if err != nil {
 		return err
 	}
@@ -224,7 +242,8 @@ func (server *Server) handleAPIV2DNSConfiguration(writer http.ResponseWriter, re
 	}
 	writer.Header().Set("Cache-Control", "no-store")
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"domain": server.cfg.Domain, "revision": runtime.Revision, "settings": settings,
+		"domain": runtime.Domain, "revision": runtime.Revision, "settings": settings,
+		"suggested_domain": server.suggestedDNSDomain(), "can_initialize": runtime.Domain == "",
 		"base_hash":  dnsSettingsHash(runtime.Settings),
 		"can_edit":   server.Plan().AllowCustomDNS,
 		"csrf_token": csrfTokenFor(server.accountSessionToken(request)),
@@ -234,10 +253,6 @@ func (server *Server) handleAPIV2DNSConfiguration(writer http.ResponseWriter, re
 func (server *Server) handleAPIV2SaveDNSConfiguration(writer http.ResponseWriter, request *http.Request) {
 	principal, ok := server.requireNetworkWriter(writer, request)
 	if !ok {
-		return
-	}
-	if !server.Plan().AllowCustomDNS {
-		writeAPIError(writer, http.StatusForbidden, "PLAN_FEATURE_DISABLED: custom DNS is not included in this plan")
 		return
 	}
 	var body struct {
@@ -252,15 +267,21 @@ func (server *Server) handleAPIV2SaveDNSConfiguration(writer http.ResponseWriter
 		writeAPIError(writer, http.StatusBadRequest, "CONFIG_INVALID: expected revision is required")
 		return
 	}
-	runtime, err := server.validateDNSSettings(body.Settings)
-	if err != nil {
-		writeAPIError(writer, http.StatusBadRequest, "CONFIG_INVALID: "+err.Error())
-		return
-	}
 	server.networkMu.Lock()
 	defer server.networkMu.Unlock()
 	if err := server.loadDNSConfiguration(request.Context()); err != nil {
 		server.writeNetworkError(writer, err)
+		return
+	}
+	current := server.dnsConfig.Load()
+	// 基础设备名称解析不收费；非套餐 DNS 修改必须仅改变 MagicDNS 开关。
+	if !server.Plan().AllowCustomDNS && !sameAdvancedDNS(current.Settings, body.Settings) {
+		writeAPIError(writer, http.StatusForbidden, "PLAN_FEATURE_DISABLED: custom DNS is not included in this plan")
+		return
+	}
+	runtime, err := server.validateDNSSettings(body.Settings)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "CONFIG_INVALID: "+err.Error())
 		return
 	}
 	content, _ := json.Marshal(runtime.Settings)
@@ -278,6 +299,73 @@ func (server *Server) handleAPIV2SaveDNSConfiguration(writer http.ResponseWriter
 	server.dnsConfig.Store(runtime)
 	server.notifyWatchers()
 	writeJSON(writer, http.StatusOK, map[string]any{"revision": document.Revision, "settings": runtime.Settings, "base_hash": dnsSettingsHash(runtime.Settings)})
+}
+
+func sameAdvancedDNS(current, requested dnsSettings) bool {
+	current.MagicDNS, requested.MagicDNS = false, false
+	return dnsSettingsHash(current) == dnsSettingsHash(requested)
+}
+
+func (server *Server) suggestedDNSDomain() string {
+	// 使用公开 Noise 身份的摘要隔离租户，既不泄露私钥，也不依赖可变站点 URL。
+	return "net-" + contentHash(server.noiseKey.Public().String())[:16] + ".xunara.internal"
+}
+
+func (server *Server) handleAPIV2InitializeDNS(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := server.requireNetworkWriter(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		Revision *uint64 `json:"revision"`
+		BaseHash string  `json:"base_hash"`
+	}
+	if !decodeAPIBody(writer, request, &body) {
+		return
+	}
+	if body.Revision == nil {
+		writeAPIError(writer, http.StatusBadRequest, "CONFIG_INVALID: expected revision is required")
+		return
+	}
+	server.networkMu.Lock()
+	defer server.networkMu.Unlock()
+	if err := server.loadDNSConfiguration(request.Context()); err != nil {
+		server.writeNetworkError(writer, err)
+		return
+	}
+	current := server.dnsConfig.Load()
+	if current.Domain != "" || current.Revision != *body.Revision || dnsSettingsHash(current.Settings) != body.BaseHash {
+		server.writeNetworkError(writer, networkconfig.ErrConflict)
+		return
+	}
+	settings := current.Settings
+	settings.MagicDNS = true
+	domain := server.suggestedDNSDomain()
+	runtime, err := validateDNSSettingsForDomain(settings, domain)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "CONFIG_INVALID: "+err.Error())
+		return
+	}
+	content, _ := json.Marshal(runtime.Settings)
+	initial, _ := json.Marshal(current.Settings)
+	document, err := server.networkConfig.SaveChecked(request.Context(), networkconfig.DNS, string(content), string(initial), current.Revision, networkWriter(principal), func(ctx context.Context, transaction *sql.Tx) error {
+		_, bound, err := state.ReadDNSDomain(ctx, transaction)
+		if err != nil {
+			return err
+		}
+		if bound {
+			return networkconfig.ErrConflict
+		}
+		return state.ConfigureDNSDomainTx(ctx, transaction, domain)
+	})
+	if err != nil {
+		server.writeNetworkError(writer, err)
+		return
+	}
+	runtime.Revision = document.Revision
+	server.dnsConfig.Store(runtime)
+	server.notifyWatchers()
+	writeJSON(writer, http.StatusOK, map[string]any{"domain": domain, "revision": runtime.Revision, "settings": runtime.Settings, "base_hash": dnsSettingsHash(runtime.Settings)})
 }
 
 func dnsSettingsHash(settings dnsSettings) string {

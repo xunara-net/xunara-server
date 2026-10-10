@@ -68,6 +68,7 @@ func (s *Server) apiV2Router() http.Handler {
 	r.Post("/policy/matrix", s.handleAPIV2PolicyMatrix)
 	r.Get("/dns/configuration", s.handleAPIV2DNSConfiguration)
 	r.Put("/dns/configuration", s.handleAPIV2SaveDNSConfiguration)
+	r.Post("/dns/initialize", s.handleAPIV2InitializeDNS)
 	r.Get("/dns/records", s.handleAPIV2DNSRecords)
 	r.Post("/dns/records", s.handleAPIV2SaveDNSRecord)
 	r.Put("/dns/records/{id}", s.handleAPIV2SaveDNSRecord)
@@ -275,7 +276,7 @@ func (s *Server) handleAPIV2Meta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":               Version,
 		"serverUrl":             s.cfg.ServerURL,
-		"domain":                s.cfg.Domain,
+		"domain":                s.networkDomain(),
 		"capabilityVersion":     uint64(tailcfg.CurrentCapabilityVersion),
 		"minCapabilityVersion":  uint64(MinSupportedCapabilityVersion),
 		"maxPageSize":           apiV2MaxPageSize,

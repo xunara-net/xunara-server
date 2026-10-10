@@ -138,6 +138,8 @@ func (ns *noiseServer) serveStreamingMap(ctx context.Context, w http.ResponseWri
 			selfNode := msg.Node
 			changed := sess.diff(msg, peers)
 			if sess.syncDNS(msg, s.dnsConfigFor(self)) {
+				// 首次启用会改变网络后缀；上游约定非空 Domain 才更新客户端缓存。
+				msg.Domain = s.networkDomain()
 				changed = true
 			}
 			if sess.syncDERP(msg, s.DERPMap()) {
@@ -245,7 +247,7 @@ func (s *Server) mapperConfig() mapper.Config {
 // build folded in. A nil addition is a purely local netmap.
 func (s *Server) mapperConfigFor(shares *shareNetmap) mapper.Config {
 	cfg := mapper.Config{
-		Domain:         s.cfg.Domain,
+		Domain:         s.networkDomain(),
 		Resolvers:      s.resolvers,
 		Routes:         s.dnsRoutes,
 		CertDomainsFor: s.certDomainsFor,
@@ -259,6 +261,7 @@ func (s *Server) mapperConfigFor(shares *shareNetmap) mapper.Config {
 		UnsignedPeers:  s.unsignedPeers(s.store.ListNodes()),
 	}
 	if runtime := s.dnsConfig.Load(); runtime != nil {
+		cfg.Domain = runtime.Domain
 		cfg.Resolvers = runtime.Resolvers
 		cfg.Routes = runtime.Routes
 		cfg.SearchDomains = runtime.Settings.SearchDomains

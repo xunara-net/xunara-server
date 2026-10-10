@@ -13,7 +13,7 @@ func TestAPIExternalLoginStart(t *testing.T) {
 		id: "fake", beginURL: "https://idp.example/authorize",
 		result: identity.IdentityResult{ProviderID: "fake", Subject: "subject-api", DisplayName: "API applicant"},
 	}
-	server := newServerWithConfig(t, Config{Providers: []identity.IdentityProvider{provider}})
+	server := newServerWithConfig(t, Config{Providers: []identity.IdentityProvider{provider}, Registration: RegistrationOpen})
 	host := newTestHTTPServer(t, server)
 	client := noRedirectClient()
 	var payload struct {

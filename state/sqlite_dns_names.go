@@ -72,8 +72,14 @@ func dnsFacts(ctx context.Context, query dnsQuery, hasAssignedNames bool) ([]Nod
 }
 
 func dnsDomainTx(ctx context.Context, transaction *sql.Tx) (string, bool, error) {
+	return ReadDNSDomain(ctx, transaction)
+}
+
+func ReadDNSDomain(ctx context.Context, query interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (string, bool, error) {
 	var domain string
-	err := transaction.QueryRowContext(ctx, "SELECT domain FROM dns_namespace WHERE id = 1").Scan(&domain)
+	err := query.QueryRowContext(ctx, "SELECT domain FROM dns_namespace WHERE id = 1").Scan(&domain)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -95,15 +101,23 @@ func dnsNameOwnersTx(ctx context.Context, transaction *sql.Tx, domain string, ex
 }
 
 func (store *SQLiteStore) ConfigureDNSDomain(ctx context.Context, domain string) error {
-	domain, err := NormalizeDNSDomain(domain)
-	if err != nil {
-		return err
-	}
 	transaction, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer transaction.Rollback()
+	if err := ConfigureDNSDomainTx(ctx, transaction, domain); err != nil {
+		return err
+	}
+	return transaction.Commit()
+}
+
+// 平台首次初始化与配置发布共用事务，不得先绑定域名再尝试写配置或审计。
+func ConfigureDNSDomainTx(ctx context.Context, transaction *sql.Tx, domain string) error {
+	domain, err := NormalizeDNSDomain(domain)
+	if err != nil {
+		return err
+	}
 	previous, bound, err := dnsDomainTx(ctx, transaction)
 	if err != nil {
 		return err
@@ -131,7 +145,7 @@ func (store *SQLiteStore) ConfigureDNSDomain(ctx context.Context, domain string)
 			return err
 		}
 	}
-	return transaction.Commit()
+	return nil
 }
 
 // CheckDNSRecordNameTx 与记录写入共用事务，保护设备和服务的名称归属。
@@ -197,6 +211,9 @@ func CheckDNSNamespace(ctx context.Context, path, domain string) error {
 		previous, bound, err := dnsDomainTx(ctx, transaction)
 		if err != nil {
 			return err
+		}
+		if domain == "" && bound {
+			domain = previous
 		}
 		if bound && previous != domain {
 			return ErrDNSDomainChange

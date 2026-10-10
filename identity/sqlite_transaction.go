@@ -8,10 +8,14 @@ import (
 )
 
 const authTransactionColumns = "id, provider_id, state, nonce, pkce_verifier, pkce_challenge, pkce_method, " +
-	"redirect_uri, return_to, requested_action, machine_login_id, browser_session_hash, created_at, expires_at, consumed_at"
+	"redirect_uri, return_to, requested_action, machine_login_id, browser_session_hash, created_at, expires_at, consumed_at, account_user_id, account_session_id, invite_token_hash"
 
 // CreateAuthTransaction implements [AuthTransactionStore].
 func (s *SQLiteStore) CreateAuthTransaction(opts NewAuthTransactionOptions) (AuthTransaction, string, error) {
+	return s.CreateAccountAuthTransaction(context.Background(), opts)
+}
+
+func (s *SQLiteStore) CreateAccountAuthTransaction(ctx context.Context, opts NewAuthTransactionOptions) (AuthTransaction, string, error) {
 	if opts.ProviderID == "" {
 		return AuthTransaction{}, "", fmt.Errorf("identity: auth transaction needs a provider")
 	}
@@ -55,18 +59,36 @@ func (s *SQLiteStore) CreateAuthTransaction(opts NewAuthTransactionOptions) (Aut
 		ReturnTo:           opts.ReturnTo,
 		RequestedAction:    opts.RequestedAction,
 		MachineLoginID:     opts.MachineLoginID,
+		AccountUserID:      opts.AccountUserID,
+		AccountSessionID:   opts.AccountSessionID,
+		InviteTokenHash:    opts.InviteTokenHash,
 		BrowserSessionHash: HashSecret(browserSecret),
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(ttl),
 	}
 
-	if _, err := s.db.ExecContext(context.Background(),
+	databaseTx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AuthTransaction{}, "", err
+	}
+	defer databaseTx.Rollback()
+	if opts.RequestedAction == AuthActionLink {
+		if err := lockAccountSession(ctx, databaseTx, opts.AccountUserID, opts.AccountSessionID, now); err != nil {
+			return AuthTransaction{}, "", err
+		}
+	} else if opts.AccountUserID != 0 || opts.AccountSessionID != "" {
+		return AuthTransaction{}, "", ErrCredentialChanged
+	}
+	if err := requireIdentityWrite(databaseTx.ExecContext(ctx,
 		`INSERT INTO auth_transactions (`+authTransactionColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
 		tx.ID, tx.ProviderID, tx.State, tx.Nonce, tx.PKCEVerifier, tx.PKCEChallenge, tx.PKCEMethod,
 		tx.RedirectURI, tx.ReturnTo, tx.RequestedAction, tx.MachineLoginID, tx.BrowserSessionHash,
-		tx.CreatedAt.UnixNano(), tx.ExpiresAt.UnixNano()); err != nil {
+		tx.CreatedAt.UnixNano(), tx.ExpiresAt.UnixNano(), int64(tx.AccountUserID), tx.AccountSessionID, tx.InviteTokenHash)); err != nil {
 		return AuthTransaction{}, "", fmt.Errorf("identity: creating auth transaction: %w", err)
+	}
+	if err := databaseTx.Commit(); err != nil {
+		return AuthTransaction{}, "", err
 	}
 	return tx, browserSecret, nil
 }
@@ -140,7 +162,7 @@ func scanAuthTransaction(sc rowScanner) (AuthTransaction, error) {
 	)
 	if err := sc.Scan(&tx.ID, &tx.ProviderID, &tx.State, &tx.Nonce, &tx.PKCEVerifier, &tx.PKCEChallenge,
 		&tx.PKCEMethod, &tx.RedirectURI, &tx.ReturnTo, &tx.RequestedAction, &tx.MachineLoginID,
-		&tx.BrowserSessionHash, &createdAt, &expiresAt, &consumedAt); err != nil {
+		&tx.BrowserSessionHash, &createdAt, &expiresAt, &consumedAt, &tx.AccountUserID, &tx.AccountSessionID, &tx.InviteTokenHash); err != nil {
 		return AuthTransaction{}, err
 	}
 	tx.CreatedAt = time.Unix(0, createdAt).UTC()

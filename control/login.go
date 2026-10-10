@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -98,7 +99,9 @@ func (s *Server) startExternalLogin(w http.ResponseWriter, r *http.Request, prov
 		return
 	}
 
-	authReq, err := provider.Begin(r.Context(), &tx)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	authReq, err := provider.Begin(ctx, &tx)
 	if err != nil {
 		s.audit("system", identity.AuditLoginFailed, "provider:"+providerID, loginFailureReason(err))
 		s.log.Warn("starting login", "provider", providerID, "reason", loginFailureReason(err))
@@ -238,6 +241,14 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query()
+	if tx.RequestedAction == identity.AuthActionLink {
+		// OAuth browser binding 还不够：切换账户、退出或吊销原会话都应中止绑定。
+		current, _, err := s.resolveCookieSession(r)
+		if err != nil || current.ID != tx.AccountSessionID || current.UserID != tx.AccountUserID {
+			s.renderError(w, r, http.StatusForbidden, "Binding rejected", "Sign in with the account that started this binding and try again.")
+			return
+		}
+	}
 	s.finishLogin(w, r, tx, provider, &identity.CallbackRequest{
 		Code:             query.Get("code"),
 		State:            query.Get("state"),
@@ -250,7 +261,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 // finishLogin validates the provider answer, then creates the user (or finds
 // it) and a browser session.
 func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity.AuthTransaction, provider identity.IdentityProvider, cb *identity.CallbackRequest) {
-	ctx := r.Context()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
 
 	result, err := provider.Callback(ctx, &tx, cb)
 	if err != nil {
@@ -261,46 +273,41 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 		return
 	}
 
-	// Redeem the transaction exactly once, after the provider has confirmed
-	// the identity: replayed callbacks and reused codes stop here.
-	if _, err := s.identity.ConsumeAuthTransaction(tx.ID); err != nil {
-		s.audit("system", identity.AuditLoginFailed, "provider:"+provider.ID(), loginFailureReason(err))
-		s.renderError(w, r, http.StatusForbidden, "Sign-in failed",
-			"This sign-in was already completed. Start again from your device.")
+	if result == nil || result.ProviderID != provider.ID() {
+		s.renderError(w, r, http.StatusForbidden, "Sign-in failed", "The provider did not confirm this identity.")
 		return
 	}
-
-	user, err := s.userForIdentity(result)
-	if err != nil {
-		s.log.Error("resolving user", "provider", provider.ID(), "err", err)
-		s.audit("system", identity.AuditLoginFailed, "provider:"+provider.ID(), "user resolution failed")
-		// A quota refusal is the tenant's business, not an internal failure:
-		// the person signing in must see why the account was not created.
-		var he HTTPError
-		if errors.As(err, &he) {
-			s.renderError(w, r, he.Code, "Sign-in failed", s.translateMessage(r, he.Msg))
-			return
-		}
-		s.renderError(w, r, http.StatusInternalServerError, "Sign-in failed", "Please try again.")
-		return
+	base := result.Email
+	if base == "" {
+		base = result.ProviderID + "_" + result.Subject
 	}
-
-	session, token, err := s.identity.CreateSession(identity.NewSessionOptions{
-		UserID:     user.ID,
-		AuthMethod: provider.ID(),
-		TTL:        s.sessionTTL,
+	completed, err := s.identity.CompleteExternalAuthentication(ctx, tx.ID, *result, identity.ExternalAuthenticationOptions{
+		AllowCreate: s.registration == RegistrationOpen && s.selfServiceInfo() == nil,
+		MaxUsers:    s.Plan().MaxUsers, LoginName: sanitizeLoginName(base), SessionTTL: s.sessionTTL,
 	})
 	if err != nil {
-		s.log.Error("creating session", "user", int(user.ID), "err", err)
-		s.renderError(w, r, http.StatusInternalServerError, "Sign-in failed", "Please try again.")
+		status, message := http.StatusServiceUnavailable, "Your sign-in or binding could not be committed. Please try again."
+		switch {
+		case errors.Is(err, identity.ErrExternalRegistrationClosed):
+			status, message = http.StatusForbidden, "This identity has no account here. Ask the owner for an invitation or bind it from your existing account."
+			if s.selfServiceInfo() != nil {
+				message = s.translateMessage(r, msgTenantSignupRequired)
+			}
+		case errors.Is(err, identity.ErrMemberLimitReached):
+			status, message = http.StatusForbidden, s.translateMessage(r, MsgUserLimitReached)
+		case errors.Is(err, identity.ErrExternalIdentityExists):
+			status, message = http.StatusConflict, "This external identity already belongs to another account. Accounts are never merged by email."
+		case errors.Is(err, identity.ErrInviteUsed), errors.Is(err, identity.ErrInviteExpired), errors.Is(err, identity.ErrInviteNotFound):
+			status, message = http.StatusForbidden, "This invitation has expired, was revoked or has already been used. Ask the owner for a new code."
+		case errors.Is(err, identity.ErrSessionRevoked), errors.Is(err, identity.ErrCredentialChanged), errors.Is(err, identity.ErrTransactionConsumed):
+			status, message = http.StatusForbidden, "This authorization or initiating session is no longer valid. Start again."
+		}
+		s.renderError(w, r, status, "Authorization failed", message)
 		return
 	}
-
-	actor := fmt.Sprintf("user:%d", user.ID)
-	s.audit(actor, identity.AuditLoginSucceeded, "provider:"+provider.ID(), "authenticated "+user.LoginName)
-	s.audit(actor, identity.AuditSessionCreated, "session:"+session.ID, "auth method "+provider.ID())
-
-	s.setSessionCookie(w, token, session.ExpiresAt)
+	if !completed.Linked {
+		s.setSessionCookie(w, completed.Token, completed.Session.ExpiresAt)
+	}
 	s.clearAuthCookie(w)
 
 	http.Redirect(w, r, safeReturnTo(tx.ReturnTo), http.StatusFound)
@@ -335,105 +342,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	s.clearSessionCookie(w)
 	http.Redirect(w, r, "/", http.StatusFound)
-}
-
-// userForIdentity maps an authenticated external identity to a user,
-// creating one on first login.
-//
-// Email is an attribute and never a key: an account is only linked to an
-// existing user when (provider, subject) matches (AGENTS.md section 6).
-func (s *Server) userForIdentity(result *identity.IdentityResult) (identity.User, error) {
-	if result == nil || result.ProviderID == "" || result.Subject == "" {
-		return identity.User{}, fmt.Errorf("control: incomplete identity result")
-	}
-
-	if link, ok := s.identity.GetExternalIdentity(result.ProviderID, result.Subject); ok {
-		user, ok := s.identity.GetUser(link.UserID)
-		if !ok {
-			return identity.User{}, fmt.Errorf("control: external identity (%s, %s) points at missing user %d",
-				result.ProviderID, result.Subject, link.UserID)
-		}
-		if link.Email != result.Email || link.DisplayName != result.DisplayName {
-			link.Email, link.DisplayName = result.Email, result.DisplayName
-			if err := s.identity.LinkExternalIdentity(&link); err != nil {
-				return identity.User{}, err
-			}
-		}
-		if result.Email != "" && user.Email != result.Email {
-			user.Email = result.Email
-			if err := s.identity.UpdateUser(user); err != nil {
-				return identity.User{}, err
-			}
-		}
-		return user, nil
-	}
-	// 自助入口不是共享网络：第三方确认身份也不能在入口隐式创建成员。
-	// 只有显式绑定的身份可继续登录；未知身份须走独立租户开通流程。
-	if s.selfServiceInfo() != nil {
-		return identity.User{}, NewHTTPError(http.StatusForbidden, msgTenantSignupRequired, nil)
-	}
-
-	// A new sign-in may provision a member, so the plan's member quota applies
-	// here exactly as it does to invitations: a tenant must not be able to
-	// grow past its plan through the identity provider.
-	if err := s.assertUserQuota(); err != nil {
-		return identity.User{}, err
-	}
-
-	user := identity.User{
-		LoginName:   s.uniqueLoginName(result),
-		DisplayName: result.DisplayName,
-		Email:       result.Email,
-	}
-	if user.DisplayName == "" {
-		user.DisplayName = user.LoginName
-	}
-	if err := s.identity.CreateUser(&user); err != nil {
-		return identity.User{}, err
-	}
-
-	link := identity.ExternalIdentity{
-		ProviderID:  result.ProviderID,
-		Subject:     result.Subject,
-		UserID:      user.ID,
-		Email:       result.Email,
-		DisplayName: result.DisplayName,
-	}
-	if err := s.identity.LinkExternalIdentity(&link); err != nil {
-		// Do not leave a user nobody can ever log in as.
-		if delErr := s.identity.DeleteUser(user.ID); delErr != nil {
-			s.log.Error("rolling back user after link failure", "user", int(user.ID), "err", delErr)
-		}
-		return identity.User{}, err
-	}
-
-	s.audit("system", identity.AuditUserCreated, fmt.Sprintf("user:%d", user.ID),
-		"created on first login via "+result.ProviderID)
-	return user, nil
-}
-
-// uniqueLoginName derives a login name from the identity result and makes it
-// unique.
-func (s *Server) uniqueLoginName(result *identity.IdentityResult) string {
-	base := result.Email
-	if base == "" {
-		base = result.ProviderID + "_" + result.Subject
-	}
-	base = sanitizeLoginName(base)
-	if base == "" {
-		base = "user"
-	}
-	if _, taken := s.identity.GetUserByLoginName(base); !taken {
-		return base
-	}
-	for i := 2; i < 1000; i++ {
-		candidate := fmt.Sprintf("%s-%d", base, i)
-		if _, taken := s.identity.GetUserByLoginName(candidate); !taken {
-			return candidate
-		}
-	}
-	// Practically unreachable; fall back to something unique.
-	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
 }
 
 // sanitizeLoginName keeps login names to characters that are safe in HTML,

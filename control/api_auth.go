@@ -36,6 +36,7 @@ func (s *Server) apiAuthRouter() http.Handler {
 	r.Get("/session", s.handleAPIAuthSession)
 	r.Get("/providers", s.handleAPIAuthProviders)
 	r.Get("/start", s.handleAPIAuthStart)
+	r.Post("/invite/start", s.handleAPIExternalInviteStart)
 	r.Post("/login", s.handleAPIAuthLogin)
 	r.Post("/signup", s.handleAPIAuthSignup)
 	r.With(deprecatedAccountEndpoint).Post("/logout", s.handleAPIAuthLogout)
@@ -107,8 +108,11 @@ func (s *Server) apiCapabilities() []string {
 	if s.passkeys != nil {
 		caps = append(caps, "auth.passkey")
 	}
-	if len(s.providers.IDs()) > 0 {
-		caps = append(caps, "auth.oidc")
+	for _, providerID := range s.providers.IDs() {
+		if providerID != identity.LocalProviderID {
+			caps = append(caps, "auth.oidc", "account.identity_binding")
+			break
+		}
 	}
 	// Which self-service path this deployment accepts is a capability, not a
 	// guess: a console that offers an invitation field on an open deployment
@@ -203,11 +207,12 @@ func (s *Server) writeAPIAnonymousSession(w http.ResponseWriter, r *http.Request
 		s.clearSessionCookie(w)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"authenticated":  false,
-		"setup_required": required,
-		"local_login":    s.localLogin,
-		"registration":   s.registration.String(),
-		"capabilities":   s.apiCapabilities(),
+		"authenticated":      false,
+		"setup_required":     required,
+		"local_login":        s.localLogin,
+		"registration":       s.registration.String(),
+		"registration_token": s.newFormToken(formPurposeSignup),
+		"capabilities":       s.apiCapabilities(),
 	})
 }
 
@@ -258,11 +263,12 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	payload := map[string]any{
-		"providers":      views,
-		"local_login":    s.localLogin,
-		"setup_required": required,
-		"passkeys":       s.passkeys != nil,
-		"registration":   s.registration.String(),
+		"providers":          views,
+		"local_login":        s.localLogin,
+		"setup_required":     required,
+		"passkeys":           s.passkeys != nil,
+		"registration":       s.registration.String(),
+		"registration_token": s.newFormToken(formPurposeSignup),
 	}
 	// A deployment whose sign-up desk creates a tenant per account says so,
 	// so the console posts to the platform endpoint instead of the

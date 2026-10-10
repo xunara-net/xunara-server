@@ -302,6 +302,12 @@ WHERE EXISTS (SELECT 1 FROM local_credentials)
 	OR EXISTS (SELECT 1 FROM audit_events WHERE action = 'admin.bootstrap'
 		OR (action = 'user.registered' AND target = 'user:1'));
 `,
+	// v14：账户绑定与邀请引用不改变已有登录事务的默认用途。
+	`
+ALTER TABLE auth_transactions ADD COLUMN account_user_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE auth_transactions ADD COLUMN account_session_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE auth_transactions ADD COLUMN invite_token_hash TEXT NOT NULL DEFAULT '';
+`,
 }
 
 // SQLiteStore is a durable [Store] sharing the control plane's database.

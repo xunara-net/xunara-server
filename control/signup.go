@@ -45,7 +45,7 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.renderPublicPage(w, r, signupPageTemplate, map[string]any{
 		"Title":          "Create your account",
-		"Invite":         strings.TrimSpace(r.URL.Query().Get("invite")),
+		"Invite":         "",
 		"InviteRequired": s.registration.RequiresInvite(),
 		"FormToken":      s.newFormToken(formPurposeSignup),
 		"Setup":          false,

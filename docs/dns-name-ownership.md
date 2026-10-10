@@ -14,6 +14,11 @@
 [SQLite 事务](../state/sqlite_dns_names.go)为准。决策见
 [ADR-0024](adr/ADR-0024-dns-name-ownership.md)。
 
+后续 [ADR-0027](adr/ADR-0027-account-onboarding-and-magicdns.md) 增加显式首次启用：
+未配置部署域名时可以恢复已持久绑定的命名空间，未初始化网络不会自动启用。
+管理员在 Web 确认首次初始化；关闭 MagicDNS 使用配置开关。明确配置不同域名仍拒绝。
+基础功能、免费额度与升级说明见 [MagicDNS 入门](account-onboarding-and-magicdns.md)。
+
 ## 升级前只读预检
 
 前置：在 `xunara-server` 源码根目录，Go 版本满足 `go.mod`；具有目标状态目录

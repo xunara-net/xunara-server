@@ -81,8 +81,8 @@ func (s *Server) apiMachineView(n state.Node) apiMachine {
 		view.OSVersion = n.Hostinfo.OSVersion
 		view.ClientVersion = n.Hostinfo.IPNVersion
 	}
-	if s.cfg.Domain != "" {
-		view.DNSName = strings.TrimSuffix(n.FQDN(s.cfg.Domain), ".")
+	if s.networkDomain() != "" {
+		view.DNSName = strings.TrimSuffix(n.FQDN(s.networkDomain()), ".")
 	}
 	if !n.Expiry.IsZero() {
 		expires := n.Expiry
@@ -148,7 +148,7 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":        Version,
 		"serverUrl":      s.cfg.ServerURL,
-		"domain":         s.cfg.Domain,
+		"domain":         s.networkDomain(),
 		"machines":       map[string]int{"total": len(nodes), "online": online},
 		"users":          len(s.identity.ListUsers()),
 		"pendingDevices": len(s.identity.ListPendingDeviceAuthorizations(time.Now())),

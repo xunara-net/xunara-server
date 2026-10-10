@@ -179,7 +179,7 @@ func (s *Server) consoleSession(w http.ResponseWriter, r *http.Request, nav stri
 		"Version":   Version,
 		"CSRF":      csrfTokenFor(token),
 		"ServerURL": s.cfg.ServerURL,
-		"Domain":    s.cfg.Domain,
+		"Domain":    s.networkDomain(),
 	}, true
 }
 

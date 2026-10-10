@@ -192,7 +192,7 @@ func (g *grpcPlatformServer) GetMeta(ctx context.Context, _ *xunarav2.GetMetaReq
 	return &xunarav2.Meta{
 		Version:               Version,
 		ServerUrl:             s.cfg.ServerURL,
-		Domain:                s.cfg.Domain,
+		Domain:                s.networkDomain(),
 		CapabilityVersion:     uint64(tailcfg.CurrentCapabilityVersion),
 		MinCapabilityVersion:  uint64(MinSupportedCapabilityVersion),
 		MaxPageSize:           uint32(apiV2MaxPageSize),
@@ -231,7 +231,7 @@ func (g *grpcPlatformServer) GetOrganizationIdentity(ctx context.Context, _ *xun
 		Name:           org.Name,
 		Domains:        domains,
 		Managed:        org.Managed,
-		MagicDnsDomain: s.cfg.Domain,
+		MagicDnsDomain: s.networkDomain(),
 		ServerUrl:      s.cfg.ServerURL,
 	}, nil
 }

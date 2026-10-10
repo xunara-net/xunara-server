@@ -73,7 +73,7 @@ func (s *Server) certDomainsFor(node state.Node) []string {
 		return nil
 	}
 	var out []string
-	if domain := strings.Trim(s.cfg.Domain, "."); domain != "" {
+	if domain := strings.Trim(s.networkDomain(), "."); domain != "" {
 		out = append(out, strings.TrimSuffix(node.FQDN(domain), "."))
 	}
 	out = append(out, s.certDomains...)
@@ -282,7 +282,7 @@ const maxDNSRecordValueLength = 4096
 // checkRecordNameInDomain reports whether name lives under the tailnet's
 // MagicDNS domain.
 func (s *Server) checkRecordNameInDomain(name string) error {
-	domain := strings.Trim(s.cfg.Domain, ".")
+	domain := strings.Trim(s.networkDomain(), ".")
 	if domain == "" {
 		return fmt.Errorf("control: this tailnet has no MagicDNS domain configured")
 	}

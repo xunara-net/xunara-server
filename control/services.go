@@ -438,7 +438,7 @@ func (s *Server) serviceView(svc state.Service, node state.Node) serviceView {
 		Created:           svc.Created,
 		Updated:           svc.Updated,
 	}
-	if domain := strings.Trim(s.cfg.Domain, "."); domain != "" {
+	if domain := strings.Trim(s.networkDomain(), "."); domain != "" {
 		view.DNSName = svc.Name + "." + domain
 	}
 	if svc.Health {
@@ -468,7 +468,7 @@ func servicesAuditDetail(services []state.Service) string {
 // Discovery through DNS is what makes a service usable by an official client,
 // which resolves the name and connects under the existing ACL rules.
 func (s *Server) serviceDNSRecordsFor(self state.Node) []state.DNSRecord {
-	domain := strings.Trim(s.cfg.Domain, ".")
+	domain := strings.Trim(s.networkDomain(), ".")
 	if domain == "" {
 		return nil
 	}

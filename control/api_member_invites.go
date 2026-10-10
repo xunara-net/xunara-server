@@ -20,7 +20,7 @@ type memberInviteRequest struct {
 }
 
 func (server *Server) memberInvitationsEnabled(ctx context.Context) (bool, error) {
-	if !server.localLogin || server.registration != RegistrationInvite || server.selfServiceInfo() != nil {
+	if server.registration != RegistrationInvite || server.selfServiceInfo() != nil {
 		return false, nil
 	}
 	required, err := server.localSetupRequired(ctx)

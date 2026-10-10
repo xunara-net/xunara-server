@@ -167,7 +167,7 @@ func (s *Server) idTokenClaims(node state.Node, audience string, now time.Time) 
 		return idTokenClaims{}, err
 	}
 
-	domain := strings.Trim(s.cfg.Domain, ".")
+	domain := strings.Trim(s.networkDomain(), ".")
 	name := node.FQDN(domain)
 	claims := idTokenClaims{
 		Claims: jwt.Claims{

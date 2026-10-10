@@ -55,7 +55,7 @@ type Config struct {
 	// DBPath is the SQLite database file. It defaults to <StateDir>/state.db.
 	DBPath string
 	// Domain is the tailnet's MagicDNS domain, without a trailing dot. Empty
-	// disables MagicDNS.
+	// resumes a persisted namespace, or leaves a new network uninitialized.
 	Domain string
 	// Nameservers are the tailnet's global DNS resolvers, in preference order.
 	// Entries are IP addresses or "IP:port" pairs; an empty port uses 53.
@@ -381,6 +381,9 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	cfg.Domain, err = state.NormalizeDNSDomain(cfg.Domain)
+	if err == nil && cfg.Domain == "" {
+		cfg.Domain, _, err = state.ReadDNSDomain(context.Background(), store.DB())
+	}
 	if err == nil {
 		err = store.ConfigureDNSDomain(context.Background(), cfg.Domain)
 	}
@@ -409,12 +412,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	localLogin := len(cfg.OIDCProviders) == 0 && len(cfg.Providers) == 0 || cfg.AllowLocalLogin
-	// A deployment that cannot sign anyone in cannot sign anyone up either:
-	// an account created here would have no way to authenticate. Closing
-	// registration is the honest answer, not a 500 on the sign-up page.
-	if !localLogin {
-		registration = RegistrationClosed
-	}
+	// OIDC-only 网络也支持邀请注册；密码入口仍由 localLogin 单独决定。
 	if localLogin {
 		local := identity.LocalLogin{}
 		providers.Register(local)

@@ -31,7 +31,7 @@ func (s *Server) sharedServiceDNSRecordsFor(self state.Node) []state.DNSRecord {
 	if orgID == "" {
 		return nil
 	}
-	domain := strings.Trim(s.cfg.Domain, ".")
+	domain := strings.Trim(s.networkDomain(), ".")
 	if domain == "" {
 		return nil
 	}

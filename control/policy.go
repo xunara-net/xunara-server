@@ -33,7 +33,7 @@ func contentHash(content string) string {
 }
 
 func (server *Server) policyOptions() policy.Options {
-	return policy.Options{Domain: server.cfg.Domain, LoginName: server.userLoginName, ServerURL: server.cfg.ServerURL}
+	return policy.Options{Domain: server.networkDomain(), LoginName: server.userLoginName, ServerURL: server.cfg.ServerURL}
 }
 
 func (server *Server) loadPolicy() error {

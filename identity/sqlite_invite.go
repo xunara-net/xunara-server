@@ -165,8 +165,14 @@ func lookupUsableInvite(ctx context.Context, query interface {
 	if token == "" {
 		return RegistrationInvite{}, ErrInviteNotFound
 	}
+	return lookupUsableInviteHash(ctx, query, HashSecret(token), now)
+}
+
+func lookupUsableInviteHash(ctx context.Context, query interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, hash string, now time.Time) (RegistrationInvite, error) {
 	row := query.QueryRowContext(ctx,
-		"SELECT "+inviteColumns+" FROM registration_invites WHERE token_hash = ?", HashSecret(token))
+		"SELECT "+inviteColumns+" FROM registration_invites WHERE token_hash = ?", hash)
 	invite, err := scanInvite(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RegistrationInvite{}, ErrInviteNotFound

@@ -11,6 +11,7 @@ import (
 	"tailscale.com/tailcfg"
 
 	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 const (
@@ -41,6 +42,10 @@ type Writer struct {
 type SQLiteStore struct{ db *sql.DB }
 
 func NewSQLiteStore(db *sql.DB) *SQLiteStore { return &SQLiteStore{db: db} }
+
+func (store *SQLiteStore) DNSDomain(ctx context.Context) (string, bool, error) {
+	return state.ReadDNSDomain(ctx, store.db)
+}
 
 func scanDocument(row interface{ Scan(...any) error }) (Document, error) {
 	var document Document
@@ -154,11 +159,16 @@ func (writer Writer) Actor() string {
 }
 
 func commitChange(ctx context.Context, tx *sql.Tx, actor, action, target, detail string, now time.Time) error {
-	if _, err := tx.ExecContext(ctx, "INSERT INTO audit_events (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
-		now.UnixNano(), actor, action, target, detail); err != nil {
+	result, err := tx.ExecContext(ctx, "INSERT INTO audit_events (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
+		now.UnixNano(), actor, action, target, detail)
+	if err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO counters (name, value) VALUES ('config_revision', 1)
+	count, err := result.RowsAffected()
+	if err != nil || count != 1 {
+		return errors.New("network configuration required audit did not persist")
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO counters (name, value) VALUES ('config_revision', 1)
 		ON CONFLICT(name) DO UPDATE SET value = value + 1`)
 	return err
 }

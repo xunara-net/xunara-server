@@ -109,7 +109,7 @@ func (ns *noiseServer) handleWhoami(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"node_id":      int64(node.ID),
 		"stable_id":    node.StableID,
-		"name":         node.FQDN(strings.Trim(ns.server.cfg.Domain, ".")),
+		"name":         node.FQDN(strings.Trim(ns.server.networkDomain(), ".")),
 		"addresses":    addresses,
 		"machine_key":  ns.machineKey.ShortString(),
 		"node_key":     node.NodeKey.ShortString(),

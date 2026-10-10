@@ -138,12 +138,20 @@ go run ./cmd/xunarad \
 管理邀请。未实现的 viewer 角色不在 Web 角色下拉框提供。
 
 数据流、测试范围及未闭环并发路径见 [ADR-0014](docs/adr/ADR-0014-browser-auth-and-member-invitations.md)。
-此处不代表邮箱验证/找回、2FA 或第三方首次建号事务已经全部完成。
+第三方邀请加入、账户绑定/解绑与原子认证已补齐，未知身份也遵守 invite/closed 准入；
+详见 [MagicDNS 与账户入门](docs/account-onboarding-and-magicdns.md)。
+此处不代表邮箱验证/找回、2FA 或邮件投递已经完成。
 自助开通入口拒绝未知第三方身份直接加入入口网络，不按邮箱认领 owner；已有显式
 绑定仍可登录。第三方自动创建独立租户尚未完成，见
 [ADR-0015](docs/adr/ADR-0015-self-service-external-admission.md)。
 
 ## 账户自助管理
+
+「DNS」支持网络管理员显式首次启用基础 MagicDNS，不再被空部署域名永久卡住。
+免费套餐也可开关；系统分配内部域名，不更改已有 IP 或设备身份。
+「安全中心」支持当前账户的 OIDC 绑定/解绑；没有真实提供方配置时明确提示。
+首次域名不可直接更名；关闭 MagicDNS 用开关，不通过清空已绑定域名实现。
+初始化、升级和提供方配置说明见 [用户操作与兼容边界](docs/account-onboarding-and-magicdns.md)。
 
 用户控制台的个人设置使用独立账户接口（[ADR-0009](docs/adr/ADR-0009-account-self-service.md)）：
 

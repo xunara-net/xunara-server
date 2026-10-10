@@ -3,6 +3,8 @@ package identity
 import (
 	"errors"
 	"time"
+
+	"tailscale.com/tailcfg"
 )
 
 // Errors returned by the transaction store. They are deliberately distinct so
@@ -54,6 +56,11 @@ type AuthTransaction struct {
 	RequestedAction string
 	MachineLoginID  string
 
+	// 只引用发起绑定的人类身份，不能将认证事务当成会话或设备审批。
+	AccountUserID    tailcfg.UserID
+	AccountSessionID string
+	InviteTokenHash  string
+
 	// BrowserSessionHash is the SHA-256 of the secret in the browser's
 	// transaction cookie. The raw secret never reaches the database.
 	BrowserSessionHash string
@@ -67,11 +74,14 @@ type AuthTransaction struct {
 type NewAuthTransactionOptions struct {
 	// ProviderID, RedirectURI, ReturnTo, RequestedAction and MachineLoginID
 	// are copied into the transaction.
-	ProviderID      string
-	RedirectURI     string
-	ReturnTo        string
-	RequestedAction string
-	MachineLoginID  string
+	ProviderID       string
+	RedirectURI      string
+	ReturnTo         string
+	RequestedAction  string
+	MachineLoginID   string
+	AccountUserID    tailcfg.UserID
+	AccountSessionID string
+	InviteTokenHash  string
 
 	// TTL bounds the browser round trip. Zero means [DefaultAuthTransactionTTL].
 	TTL time.Duration

@@ -342,7 +342,7 @@ func TestOIDCBrowserLoginFlow(t *testing.T) {
 			DisplayName: "Alice",
 		},
 	}
-	s := newServerWithConfig(t, Config{Providers: []identity.IdentityProvider{provider}})
+	s := newServerWithConfig(t, Config{Providers: []identity.IdentityProvider{provider}, Registration: RegistrationOpen})
 	hs := newTestHTTPServer(t, s)
 	client := noRedirectClient()
 
@@ -397,7 +397,7 @@ func TestOIDCBrowserLoginFlow(t *testing.T) {
 
 func TestLoginSecondIdentityGetsItsOwnUser(t *testing.T) {
 	provider := &fakeProvider{id: "fake", beginURL: "https://idp.example/authorize"}
-	s := newServerWithConfig(t, Config{Providers: []identity.IdentityProvider{provider}})
+	s := newServerWithConfig(t, Config{Providers: []identity.IdentityProvider{provider}, Registration: RegistrationOpen})
 	hs := newTestHTTPServer(t, s)
 	client := noRedirectClient()
 

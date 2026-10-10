@@ -78,7 +78,7 @@ func (s *Server) handleAPIV2Organization(w http.ResponseWriter, r *http.Request)
 		Name:           org.Name,
 		Domains:        domains,
 		Managed:        org.Managed,
-		MagicDNSDomain: s.cfg.Domain,
+		MagicDNSDomain: s.networkDomain(),
 		ServerURL:      s.cfg.ServerURL,
 	})
 }

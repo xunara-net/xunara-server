@@ -48,7 +48,7 @@ func (server *Server) handleAPIV2SaveDNSRecord(writer http.ResponseWriter, reque
 	name, nameErr := state.NormalizeDNSRecordName(body.Name)
 	kind, typeErr := state.NormalizeDNSRecordType(body.Type)
 	address, addressErr := netip.ParseAddr(strings.TrimSpace(body.Value))
-	domain := strings.Trim(server.cfg.Domain, ".")
+	domain := strings.Trim(server.networkDomain(), ".")
 	if nameErr != nil || typeErr != nil || addressErr != nil || domain == "" || !strings.HasSuffix(name, "."+domain) ||
 		kind != "A" && kind != "AAAA" || kind == "A" && !address.Is4() || kind == "AAAA" && (!address.Is6() || address.Is4In6()) ||
 		address.IsUnspecified() || address.IsMulticast() || address.Zone() != "" || isACMEChallengeName(name) {

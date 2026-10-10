@@ -12,8 +12,7 @@ import (
 )
 
 func TestAPIMachineMetadataIsReadOnlyAndMinimal(t *testing.T) {
-	server := newTestServer(t)
-	server.cfg.Domain = "devices.example.test"
+	server := newServerWithConfig(t, Config{Domain: "devices.example.test"})
 	expires := time.Now().UTC().Add(time.Hour)
 	node := state.Node{ID: 9, Hostname: "Laptop", Tags: []string{"tag:server"}, Expiry: expires,
 		Hostinfo: &tailcfg.Hostinfo{OS: "linux", OSVersion: "6.12", IPNVersion: "1.104.0",
@@ -39,7 +38,6 @@ func TestAPIMachineMetadataIsReadOnlyAndMinimal(t *testing.T) {
 
 func TestAPIMachineMissingMetadataIsNotInvented(t *testing.T) {
 	server := newTestServer(t)
-	server.cfg.Domain = ""
 	view := server.apiMachineView(state.Node{ID: 9})
 	if view.OS != "" || view.ClientVersion != "" || view.DNSName != "" || view.Expires != nil || view.Tags == nil {
 		t.Fatalf("missing metadata = %+v", view)

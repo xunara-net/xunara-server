@@ -48,6 +48,7 @@ def main():
     parser.add_argument('--relay-binary', required=True, type=Path)
     parser.add_argument('--tailscale', default='/usr/bin/tailscale')
     parser.add_argument('--tailscaled', default='/usr/sbin/tailscaled')
+    parser.add_argument('--initialize-domain', action='store_true', help='Enable MagicDNS through the user API rather than a deployment domain flag')
     args = parser.parse_args()
     server_binary, relay_binary = str(args.server_binary.resolve()), str(args.relay_binary.resolve())
     client_version = subprocess.check_output([args.tailscale, 'version']).decode().splitlines()[0]
@@ -88,8 +89,10 @@ def main():
             wait_ready(lambda: relay_map.exists() and relay.poll() is None)
             server_command = [server_binary, '-listen', urllib.parse.urlsplit(origin).netloc,
                 '-grpc-listen', '127.0.0.1:0', '-server-url', origin, '-state-dir', str(state),
-                '-domain', domain, '-plans', 'builtin', '-network-pool', '100.100.0.0/16',
+                '-plans', 'builtin', '-network-pool', '100.100.0.0/16',
                 '-derp-map', str(relay_map), '-log-level', 'error']
+            if not args.initialize_domain:
+                server_command += ['-domain', domain]
             environment = dict(os.environ, XUNARA_PLATFORM_ADMIN_TOKEN=platform_token)
             daemon = launch(server_command, environment)
             wait_ready(lambda: call('/health').get('status') == 'pass')
@@ -103,8 +106,14 @@ def main():
             with opener.open(request, timeout=10) as response:
                 if response.status != 200:
                     raise RuntimeError('isolated owner setup failed')
-            call('/api/platform/v1/organizations/default/plan', {'plan_id': 'pro'}, 'PATCH', True)
             csrf = call('/api/v2/network/addresses')['csrf_token']
+            if args.initialize_domain:
+                configuration = call('/api/v2/dns/configuration')
+                initialized = call('/api/v2/dns/initialize', {'revision': configuration['revision'], 'base_hash': configuration['base_hash']}, 'POST')
+                domain = initialized['domain']
+                if not initialized['settings']['magic_dns'] or not domain.endswith('.xunara.internal'):
+                    raise RuntimeError('MagicDNS initialization was not confirmed')
+            call('/api/platform/v1/organizations/default/plan', {'plan_id': 'pro'}, 'PATCH', True)
             for name, address in [('official-client', '100.64.0.99'), ('database', '100.64.0.98')]:
                 call('/api/v2/dns/records', {'name': name + '.' + domain, 'type': 'A', 'value': address}, 'POST')
             auth_key = call('/api/v1/auth-keys', {'ttl': '1h', 'reusable': True}, 'POST')['key']
@@ -188,6 +197,7 @@ def main():
             if sorted(machine['dnsName'].rstrip('.') for machine in machines) != expected_names:
                 raise RuntimeError('restart lost persisted allocated DNS names')
             print(json.dumps({'passed': True, 'client_version': client_version,
+                'namespace_initialized_via_api': args.initialize_domain,
                 'mode': 'isolated Linux userspace-networking; no host DNS changes', 'production_writes': False,
                 'same_hostname_registration': True, 'custom_record_preserved': True,
                 'live_rename_alias': True, 'internal_A_and_PTR_queries': True, 'alias_API_protection': True,
