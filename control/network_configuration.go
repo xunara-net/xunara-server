@@ -157,9 +157,14 @@ func (server *Server) loadDNSConfiguration(ctx context.Context) error {
 			}
 			return nil
 		}
+		splitDNS := server.cfg.DNSRoutes
+		// 默认设置与 API 的空对象保持一致，避免 Free 开关被误判成高级 DNS 修改。
+		if splitDNS == nil {
+			splitDNS = map[string][]string{}
+		}
 		server.dnsConfig.Store(&dnsRuntimeConfig{
 			Domain:    domain,
-			Settings:  dnsSettings{MagicDNS: domain != "", Nameservers: stringsOrEmpty(server.cfg.Nameservers), SearchDomains: []string{}, SplitDNS: server.cfg.DNSRoutes},
+			Settings:  dnsSettings{MagicDNS: domain != "", Nameservers: stringsOrEmpty(server.cfg.Nameservers), SearchDomains: []string{}, SplitDNS: splitDNS},
 			Resolvers: server.resolvers, Routes: server.dnsRoutes,
 		})
 		return nil

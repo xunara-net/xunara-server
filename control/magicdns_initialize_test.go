@@ -72,6 +72,34 @@ func TestMagicDNSInitializeFreeAndRestart(t *testing.T) {
 	}
 }
 
+func TestMagicDNSFreeToggleWithDeploymentDomain(t *testing.T) {
+	for _, scenario := range []string{"nil split DNS", "empty split DNS"} {
+		t.Run(scenario, func(t *testing.T) {
+			free, _ := plan.DefaultCatalog().Get(plan.FreeID)
+			configuration := Config{Domain: "existing.xunara.test", PlanSource: func(string) plan.Plan { return free }}
+			if scenario == "empty split DNS" {
+				configuration.DNSRoutes = map[string][]string{}
+			}
+			server := newServerWithConfig(t, configuration)
+			cookie, token := seedUserSession(t, server, state.DefaultUserID)
+			headers := map[string]string{"X-CSRF-Token": csrfTokenFor(token)}
+			for _, enabled := range []bool{false, true} {
+				payload := decodeAPI(t, accountRequest(t, server, http.MethodGet, "/api/v2/dns/configuration", nil, cookie, nil).Result())
+				settings := payload["settings"].(map[string]any)
+				settings["magic_dns"] = enabled
+				body := map[string]any{"revision": payload["revision"], "base_hash": payload["base_hash"], "settings": settings}
+				response := accountRequest(t, server, http.MethodPut, "/api/v2/dns/configuration", body, cookie, headers)
+				if response.Code != http.StatusOK {
+					t.Fatalf("Free deployment DNS toggle: %d %s", response.Code, response.Body.String())
+				}
+				if server.networkDomain() != "existing.xunara.test" || server.dnsConfig.Load().Settings.MagicDNS != enabled {
+					t.Fatal("toggle changed existing namespace or did not commit")
+				}
+			}
+		})
+	}
+}
+
 func TestMagicDNSInitializeGuardsAndRollback(t *testing.T) {
 	for _, scenario := range []string{"member", "csrf", "conflict", "audit failure", "audit ignore"} {
 		t.Run(scenario, func(t *testing.T) {
