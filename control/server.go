@@ -380,6 +380,14 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg.Domain, err = state.NormalizeDNSDomain(cfg.Domain)
+	if err == nil {
+		err = store.ConfigureDNSDomain(context.Background(), cfg.Domain)
+	}
+	if err != nil {
+		store.Close()
+		return nil, fmt.Errorf("control: preparing DNS namespace: %w", err)
+	}
 
 	identityStore, err := newIdentityStore(store)
 	if err != nil {

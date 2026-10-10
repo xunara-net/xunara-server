@@ -26,6 +26,9 @@ func (s *SQLiteStore) ReplaceNodeServices(id NodeID, services []Service) error {
 	if exists == 0 {
 		return errUnknownNode(id)
 	}
+	if err := checkServiceDNSNamesTx(ctx, tx, id, services); err != nil {
+		return err
+	}
 
 	// Remember creation times so a purely cosmetic republish does not reset
 	// them; published names are unique, so the map is unambiguous.

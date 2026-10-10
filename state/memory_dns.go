@@ -10,14 +10,34 @@ func (s *MemoryStore) UpsertDNSRecord(r *DNSRecord) error {
 	if r == nil || r.Name == "" {
 		return errDNSRecordNameRequired
 	}
+	original := r
+	record := *r
+	var err error
+	record.Name, err = NormalizeDNSRecordName(record.Name)
+	if err != nil {
+		return err
+	}
+	record.Type, err = NormalizeDNSRecordType(record.Type)
+	if err != nil {
+		return err
+	}
+	r = &record
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	owners, err := s.dnsNameOwnersLocked(0, 0)
+	if err != nil {
+		return err
+	}
+	if err := checkRecordDNSName(r.Name, s.dnsDomain, owners); err != nil {
+		return err
+	}
 
 	for id, existing := range s.dns {
 		if existing.Name == r.Name && existing.Type == r.Type && existing.Value == r.Value {
 			r.ID = id
 			r.Created = existing.Created
+			*original = record
 			return nil
 		}
 	}
@@ -29,6 +49,7 @@ func (s *MemoryStore) UpsertDNSRecord(r *DNSRecord) error {
 	}
 
 	s.dns[r.ID] = *r
+	*original = record
 	return nil
 }
 

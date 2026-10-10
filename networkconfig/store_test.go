@@ -23,6 +23,9 @@ func configurationFixture(t *testing.T) (*state.SQLiteStore, *identity.SQLiteSto
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { core.Close() })
+	if err := core.ConfigureDNSDomain(t.Context(), "xunara.test"); err != nil {
+		t.Fatal(err)
+	}
 	identities, err := identity.NewSQLiteStore(t.Context(), core.DB())
 	if err != nil {
 		t.Fatal(err)

@@ -3,6 +3,7 @@ package state
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -13,6 +14,10 @@ func (s *MemoryStore) ReplaceNodeServices(id NodeID, services []Service) error {
 
 	if _, ok := s.byID[id]; !ok {
 		return errUnknownNode(id)
+	}
+	owners, err := s.dnsNameOwnersLocked(0, id)
+	if err != nil {
+		return err
 	}
 
 	now := time.Now().UTC()
@@ -27,6 +32,11 @@ func (s *MemoryStore) ReplaceNodeServices(id NodeID, services []Service) error {
 	// so a conflict cannot leave the node with half a set.
 	next := make(map[string]Service, len(services))
 	for _, svc := range services {
+		name := strings.ToLower(svc.Name)
+		if _, taken := owners[name]; taken {
+			return errServiceNameTaken(svc.Name)
+		}
+		owners[name] = "pending-service"
 		if _, duplicate := next[svc.Name]; duplicate {
 			return errServiceNameTaken(svc.Name)
 		}

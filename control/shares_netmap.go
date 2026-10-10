@@ -170,6 +170,7 @@ func (s *Server) addForeignNode(sn *shareNetmap, self state.Node, remoteOrg stri
 		StableID:  shareStableID(remoteOrg, node.StableID),
 		UserID:    ownerSynthetic,
 		Hostname:  shareHostname(node.Hostname, remoteOrg),
+		DNSName:   shareHostname(strings.TrimSuffix(node.FQDN(""), "."), remoteOrg),
 		IPv4:      masqV4,
 		IPv6:      masqV6,
 		Endpoints: slices.Clone(node.Endpoints),

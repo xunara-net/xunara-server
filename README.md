@@ -278,6 +278,12 @@ go test -race ./...
   新增 state v23 与 plans v4，identity v13、官方协议、套餐额度及静态公共中继配置不变；
   [ADR-0022](docs/adr/ADR-0022-address-management-and-external-relays.md)。
 
+- DNS 名称：注册、更名、轮换和原生心跳共用事务型归属，新同名设备使用稳定别名；
+  设备、服务与自定义记录不能互相覆盖。追加 state v24，旧无冲突名称与 IP 不变；
+  升级前运行只读 `xunara dns check`，旧碰撞必须人工审查。见
+  [DNS 名称管理与官方客户端隔离验收](docs/dns-name-ownership.md)及
+  [ADR-0024](docs/adr/ADR-0024-dns-name-ownership.md)。
+
 ## 仓库关系
 
 | 仓库 | 职责 |

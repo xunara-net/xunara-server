@@ -59,7 +59,7 @@ func (s *Server) sharedServiceDNSRecordsFor(self state.Node) []state.DNSRecord {
 			continue
 		}
 		// The foreign machine's own MagicDNS name outranks its services.
-		taken[strings.ToLower(node.FQDN(domain))] = true
+		taken[strings.ToLower(strings.TrimSuffix(node.FQDN(domain), "."))] = true
 		for _, svc := range source.ShareServices(node.ID) {
 			if !svc.Shared || svc.EffectiveHealth() == state.ServiceHealthUnhealthy {
 				continue
@@ -90,7 +90,7 @@ func (s *Server) sharedServiceDNSRecordsFor(self state.Node) []state.DNSRecord {
 func (s *Server) localDNSNames(domain string) map[string]bool {
 	taken := make(map[string]bool)
 	for _, node := range s.store.ListNodes() {
-		taken[strings.ToLower(node.FQDN(domain))] = true
+		taken[strings.ToLower(strings.TrimSuffix(node.FQDN(domain), "."))] = true
 	}
 	for _, record := range s.store.ListDNSRecords() {
 		if isACMEChallengeName(record.Name) {

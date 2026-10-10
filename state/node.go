@@ -8,7 +8,6 @@
 package state
 
 import (
-	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -17,7 +16,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
-	"tailscale.com/util/dnsname"
 )
 
 // NodeID is the server-local, stable identifier of a node. It is distinct from
@@ -76,6 +74,9 @@ type Node struct {
 
 	// Hostname is the machine's self-reported hostname.
 	Hostname string
+
+	// DNSName 是控制面分配的持久 DNS label，与机器自报的 Hostname 分开。
+	DNSName string
 
 	// IPv4 and IPv6 are the tailnet addresses assigned to this node.
 	IPv4 netip.Addr
@@ -255,12 +256,9 @@ func normalizeRoutes(routes []netip.Prefix) []netip.Prefix {
 // the operating system calls the machine, which is not necessarily a legal
 // DNS label (and can be long, or non-ASCII).
 func (n Node) FQDN(baseDomain string) string {
-	name := dnsname.SanitizeHostname(n.Hostname)
+	name := n.DNSName
 	if name == "" {
-		name = fmt.Sprintf("node-%d", n.ID)
-	}
-	if len(name) > maxDNSLabelLength {
-		name = strings.Trim(name[:maxDNSLabelLength], "-")
+		name = defaultDNSLabel(n)
 	}
 
 	base := strings.Trim(baseDomain, ".")

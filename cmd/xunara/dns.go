@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -16,7 +18,7 @@ import (
 // clients publish through /machine/set-dns.
 func runDNS(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "xunara: dns requires a subcommand: list or delete")
+		fmt.Fprintln(os.Stderr, "xunara: dns requires a subcommand: list, delete or check")
 		os.Exit(2)
 	}
 
@@ -25,10 +27,25 @@ func runDNS(args []string) {
 		runDNSList(args[1:])
 	case "delete":
 		runDNSDelete(args[1:])
+	case "check":
+		runDNSCheck(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "xunara: unknown dns subcommand %q\n", args[0])
 		os.Exit(2)
 	}
+}
+
+func runDNSCheck(args []string) {
+	flags := flag.NewFlagSet("dns check", flag.ExitOnError)
+	stateDir := flags.String("state-dir", "data", "control server state directory")
+	domain := flags.String("domain", "", "configured MagicDNS domain; empty means disabled")
+	flags.Parse(args)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := state.CheckDNSNamespace(ctx, filepath.Join(*stateDir, "state.db"), *domain); err != nil {
+		fatal("checking DNS name ownership", err)
+	}
+	fmt.Println("DNS name ownership check passed (read-only; no migrations applied)")
 }
 
 func runDNSList(args []string) {

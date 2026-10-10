@@ -71,15 +71,14 @@ func (store *SQLiteStore) PutRecord(ctx context.Context, record Record, expected
 	if record.Protected() {
 		return Record{}, ErrRecordProtected
 	}
-	if err := checkDeviceRecordName(ctx, tx, record.Name, domain); err != nil {
+	if err := state.CheckDNSRecordNameTx(ctx, tx, record.Name, domain); err != nil {
+		if errors.Is(err, state.ErrDNSDeviceName) {
+			return Record{}, ErrRecordProtected
+		}
+		if errors.Is(err, state.ErrDNSNameConflict) {
+			return Record{}, ErrConflict
+		}
 		return Record{}, err
-	}
-	var serviceCount int
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM node_services WHERE name || '.' || ? = ?", domain, record.Name).Scan(&serviceCount); err != nil {
-		return Record{}, err
-	}
-	if serviceCount != 0 {
-		return Record{}, ErrConflict
 	}
 	if record.ID != 0 {
 		previous, err := scanRecord(tx.QueryRowContext(ctx, "SELECT "+recordColumns+" FROM dns_records WHERE id = ?", record.ID))
@@ -135,25 +134,6 @@ func (store *SQLiteStore) PutRecord(ctx context.Context, record Record, expected
 		return Record{}, err
 	}
 	return record, tx.Commit()
-}
-
-// 在同一个写事务内检查设备名，不能将读取故障当成“没有重名设备”。
-func checkDeviceRecordName(ctx context.Context, tx *sql.Tx, name, domain string) error {
-	rows, err := tx.QueryContext(ctx, "SELECT id, hostname FROM nodes")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var node state.Node
-		if err := rows.Scan(&node.ID, &node.Hostname); err != nil {
-			return err
-		}
-		if name == strings.TrimSuffix(node.FQDN(domain), ".") {
-			return ErrRecordProtected
-		}
-	}
-	return rows.Err()
 }
 
 func (store *SQLiteStore) DeleteRecord(ctx context.Context, recordID, expected uint64, writer Writer) error {

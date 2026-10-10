@@ -74,6 +74,7 @@ Commands:
   routes unapprove     Withdraw approval for subnet routes
   dns list             List MagicDNS records published through set-dns
   dns delete           Delete a MagicDNS record by ID (or -all)
+  dns check            Check DNS name ownership without applying migrations
   policy check         Validate an ACL policy document and run its tests
   user list            List users in the trust plane
   user update          Change a user's login name, display name or email

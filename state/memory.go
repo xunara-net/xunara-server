@@ -42,6 +42,7 @@ type MemoryStore struct {
 
 	dns       map[uint64]DNSRecord
 	nextDNSID uint64
+	dnsDomain string
 
 	deviceAttrs map[NodeID]map[string]any
 
@@ -194,9 +195,19 @@ func (s *MemoryStore) CreateNode(n *Node) error {
 	if _, ok := s.byNode[n.NodeKey]; ok {
 		return ErrNodeKeyExists
 	}
+	original := n
+	candidate := *n
+	n = &candidate
 
 	n.ID = s.nextID
-	s.nextID++
+	owners, err := s.dnsNameOwnersLocked(0, 0)
+	if err != nil {
+		return err
+	}
+	n.DNSName, err = allocateDNSLabel(*n, s.dnsDomain, owners)
+	if err != nil {
+		return err
+	}
 
 	if n.StableID == "" {
 		n.StableID = newStableID()
@@ -223,31 +234,55 @@ func (s *MemoryStore) CreateNode(n *Node) error {
 	s.byNode[n.NodeKey] = n.ID
 	s.byStab[n.StableID] = n.ID
 	s.byMach[n.MachineKey] = append(s.byMach[n.MachineKey], n.ID)
+	s.nextID++
+	*original = candidate
 	return nil
 }
 
 func (s *MemoryStore) UpdateNode(n Node) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.UpdateNodeWithDNS(&n)
+}
 
-	old, ok := s.byID[n.ID]
+func (store *MemoryStore) UpdateNodeWithDNS(node *Node) error {
+	if node == nil {
+		return fmt.Errorf("state: nil node")
+	}
+	updatedNode := *node
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	old, ok := store.byID[updatedNode.ID]
 	if !ok {
-		return fmt.Errorf("state: node %d not found", n.ID)
+		return fmt.Errorf("state: node %d not found", updatedNode.ID)
 	}
-	if old.NodeKey != n.NodeKey {
-		delete(s.byNode, old.NodeKey)
-		s.byNode[n.NodeKey] = n.ID
+	owners, err := store.dnsNameOwnersLocked(updatedNode.ID, 0)
+	if err != nil {
+		return err
 	}
-	if old.StableID != n.StableID {
-		delete(s.byStab, old.StableID)
-		s.byStab[n.StableID] = n.ID
+	updatedNode.DNSName = old.DNSName
+	if updatedNode.DNSName == "" || defaultDNSLabel(old) != defaultDNSLabel(updatedNode) {
+		updatedNode.DNSName, err = allocateDNSLabel(updatedNode, store.dnsDomain, owners)
+		if err != nil {
+			return err
+		}
+	} else if _, taken := owners[updatedNode.DNSName]; taken {
+		return ErrDNSNameConflict
 	}
-	if old.MachineKey != n.MachineKey {
-		s.byMach[old.MachineKey] = removeID(s.byMach[old.MachineKey], n.ID)
-		s.byMach[n.MachineKey] = append(s.byMach[n.MachineKey], n.ID)
+	if old.NodeKey != updatedNode.NodeKey {
+		delete(store.byNode, old.NodeKey)
+		store.byNode[updatedNode.NodeKey] = updatedNode.ID
 	}
-	n.IPv4, n.IPv6 = old.IPv4, old.IPv6
-	s.byID[n.ID] = n
+	if old.StableID != updatedNode.StableID {
+		delete(store.byStab, old.StableID)
+		store.byStab[updatedNode.StableID] = updatedNode.ID
+	}
+	if old.MachineKey != updatedNode.MachineKey {
+		store.byMach[old.MachineKey] = removeID(store.byMach[old.MachineKey], updatedNode.ID)
+		store.byMach[updatedNode.MachineKey] = append(store.byMach[updatedNode.MachineKey], updatedNode.ID)
+	}
+	updatedNode.IPv4, updatedNode.IPv6 = old.IPv4, old.IPv6
+	store.byID[updatedNode.ID] = updatedNode
+	*node = updatedNode
 	return nil
 }
 

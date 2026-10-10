@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -196,6 +197,10 @@ func (ns *noiseServer) handleSetDNS(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if err := ns.server.store.UpsertDNSRecord(record); err != nil {
+		if errors.Is(err, state.ErrDNSDeviceName) || errors.Is(err, state.ErrDNSNameConflict) {
+			httpError(w, NewHTTPError(http.StatusConflict, "DNS name is managed by a device or service", nil))
+			return
+		}
 		httpError(w, err)
 		return
 	}

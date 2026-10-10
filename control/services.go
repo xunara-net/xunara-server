@@ -160,17 +160,13 @@ func (s *Server) handleAgentServices(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if err := s.checkServiceNameConflicts(node, services); err != nil {
-		httpError(w, NewHTTPError(http.StatusConflict, err.Error(), nil))
-		return
-	}
 	if err := s.checkServiceBudget(node, services); err != nil {
 		httpError(w, NewHTTPError(http.StatusTooManyRequests, err.Error(), nil))
 		return
 	}
 
 	if err := s.store.ReplaceNodeServices(node.ID, services); err != nil {
-		if errors.Is(err, state.ErrServiceNameTaken) {
+		if errors.Is(err, state.ErrServiceNameTaken) || errors.Is(err, state.ErrDNSNameConflict) {
 			// Another node claimed the name between the conflict check and the
 			// write, or the store holds a name this instance did not see.
 			httpError(w, NewHTTPError(http.StatusConflict, "a service name is already in use", nil))
@@ -404,42 +400,6 @@ func sanitizeServiceName(name string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
-}
-
-// checkServiceNameConflicts rejects names that would collide with an existing
-// MagicDNS name: a node's own FQDN or any record already published. Names of
-// other nodes' services are checked again by the store when it writes, because
-// that check has to be atomic with the replacement.
-func (s *Server) checkServiceNameConflicts(node state.Node, services []state.Service) error {
-	domain := strings.Trim(s.cfg.Domain, ".")
-	if domain == "" {
-		// Without a MagicDNS domain there are no names to collide with, and
-		// the store still guarantees uniqueness among services.
-		return nil
-	}
-
-	for _, n := range s.store.ListNodes() {
-		// The publishing node is included: a service named after its own
-		// hostname would shadow (or duplicate) the node's MagicDNS name, and
-		// the node can pick another name at no cost.
-		fqdn := strings.TrimSuffix(n.FQDN(domain), ".")
-		for _, svc := range services {
-			if svc.Name == strings.SplitN(fqdn, ".", 2)[0] {
-				return fmt.Errorf("service name %q is already the hostname of node %s", svc.Name, n.StableID)
-			}
-		}
-	}
-
-	records := s.store.ListDNSRecords()
-	for _, svc := range services {
-		want := svc.Name + "." + domain
-		for _, rec := range records {
-			if strings.EqualFold(strings.TrimSuffix(rec.Name, "."), want) {
-				return fmt.Errorf("service name %q is already a DNS record", svc.Name)
-			}
-		}
-	}
-	return nil
 }
 
 // checkServiceBudget bounds the organization's registry. The node's own

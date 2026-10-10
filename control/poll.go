@@ -426,6 +426,7 @@ func (ns *noiseServer) getAndValidateNode(req tailcfg.MapRequest) (state.Node, e
 // netmap watchers when something actually changed, and returns the updated
 // node.
 func (s *Server) recordMapRequest(node state.Node, req tailcfg.MapRequest) state.Node {
+	previous := node
 	changed := false
 
 	if req.Version != 0 && req.Version != node.CapVer {
@@ -485,9 +486,9 @@ func (s *Server) recordMapRequest(node state.Node, req tailcfg.MapRequest) state
 	if !changed {
 		return node
 	}
-	if err := s.store.UpdateNode(node); err != nil {
+	if err := s.store.UpdateNodeWithDNS(&node); err != nil {
 		s.log.Warn("updating node from map request", "node_id", int(node.ID), "err", err)
-		return node
+		return previous
 	}
 	s.notifyNodePeers(node)
 	return node

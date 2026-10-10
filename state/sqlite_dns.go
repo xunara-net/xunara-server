@@ -18,6 +18,18 @@ func (s *SQLiteStore) UpsertDNSRecord(r *DNSRecord) error {
 	if r == nil || r.Name == "" {
 		return errDNSRecordNameRequired
 	}
+	original := r
+	record := *r
+	var err error
+	record.Name, err = NormalizeDNSRecordName(record.Name)
+	if err != nil {
+		return err
+	}
+	record.Type, err = NormalizeDNSRecordType(record.Type)
+	if err != nil {
+		return err
+	}
+	r = &record
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -28,6 +40,13 @@ func (s *SQLiteStore) UpsertDNSRecord(r *DNSRecord) error {
 		return fmt.Errorf("state: beginning DNS record upsert: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	domain, _, err := dnsDomainTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := CheckDNSRecordNameTx(ctx, tx, r.Name, domain); err != nil {
+		return err
+	}
 
 	var (
 		existingID      int64
@@ -40,7 +59,11 @@ func (s *SQLiteStore) UpsertDNSRecord(r *DNSRecord) error {
 	case err == nil:
 		r.ID = uint64(existingID)
 		r.Created = time.Unix(0, existingCreated).UTC()
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		*original = record
+		return nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("state: looking up DNS record: %w", err)
 	}
@@ -61,7 +84,11 @@ func (s *SQLiteStore) UpsertDNSRecord(r *DNSRecord) error {
 		return fmt.Errorf("state: inserting DNS record: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	*original = record
+	return nil
 }
 
 // ListDNSRecords implements [DNSRecordStore].

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 
@@ -46,6 +47,10 @@ type Store interface {
 	// UpdateNode replaces runtime node facts, keeping independently managed addresses.
 	// It fails if the node is unknown.
 	UpdateNode(n Node) error
+	// UpdateNodeWithDNS 同一事务更新事实并返回实际分配名；失败不改写输入。
+	UpdateNodeWithDNS(node *Node) error
+	// ConfigureDNSDomain 补录旧名称并绑定租户域名，禁止实例之间的命名空间漂移。
+	ConfigureDNSDomain(ctx context.Context, domain string) error
 	// DeleteNode removes a node. It is a no-op if the node is unknown.
 	DeleteNode(id NodeID) error
 

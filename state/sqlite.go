@@ -362,6 +362,15 @@ CREATE TABLE address_configuration (
 INSERT INTO address_configuration (id, ipv4, ipv6) VALUES (1, '100.64.0.0/10', 'fd7a:115c:a1e0::/48');
 CREATE UNIQUE INDEX idx_nodes_ipv4_unique ON nodes(ipv4) WHERE ipv4 IS NOT NULL AND ipv4 <> '';
 `,
+	// v24：设备的分配名称独立于自报主机名；旧名称在域名绑定事务中校验后补录。
+	`
+ALTER TABLE nodes ADD COLUMN dns_name TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX idx_nodes_dns_name_unique ON nodes(dns_name COLLATE NOCASE) WHERE dns_name <> '';
+CREATE TABLE dns_namespace (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	domain TEXT NOT NULL
+);
+`,
 }
 
 // SQLiteStore is a durable [Store] backed by SQLite.
@@ -450,7 +459,7 @@ var _ Store = (*SQLiteStore)(nil)
 // nodeColumns is the column list every node SELECT and INSERT agrees on.
 const nodeColumns = `id, stable_id, machine_key, node_key, disco_key, user_id, hostname,
 	ipv4, ipv6, endpoints, home_derp, cap_ver, hostinfo, last_seen, expiry, created, method, ephemeral,
-	approved_routes, tags, key_signature, nl_key`
+	approved_routes, tags, key_signature, nl_key, dns_name`
 
 func (s *SQLiteStore) GetNodeByID(id NodeID) (Node, bool) {
 	return s.queryNode(context.Background(), "SELECT "+nodeColumns+" FROM nodes WHERE id = ?", int64(id))
@@ -557,11 +566,12 @@ func scanNode(sc scanner) (Node, error) {
 		tags      string
 		keySig    []byte
 		nlKey     string
+		dnsName   string
 	)
 
 	err := sc.Scan(&id, &stableID, &machineS, &nodeS, &discoS, &userID, &hostname,
 		&ipv4, &ipv6, &endpoints, &homeDERP, &capVer, &hostinfo, &lastSeen, &expiry,
-		&created, &method, &ephemeral, &approved, &tags, &keySig, &nlKey)
+		&created, &method, &ephemeral, &approved, &tags, &keySig, &nlKey, &dnsName)
 	if err != nil {
 		return Node{}, err
 	}
@@ -571,6 +581,7 @@ func scanNode(sc scanner) (Node, error) {
 		StableID:  stableID,
 		UserID:    tailcfg.UserID(userID),
 		Hostname:  hostname,
+		DNSName:   dnsName,
 		HomeDERP:  tailcfg.DERPRegionID(homeDERP),
 		CapVer:    tailcfg.CapabilityVersion(capVer),
 		Created:   time.Unix(0, created).UTC(),
@@ -745,6 +756,9 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 	if n.NodeKey.IsZero() {
 		return fmt.Errorf("state: node key is required")
 	}
+	original := n
+	candidate := *n
+	n = &candidate
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -768,6 +782,18 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 		return err
 	}
 	n.ID = NodeID(nextID)
+	domain, _, err := dnsDomainTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	owners, err := dnsNameOwnersTx(ctx, tx, domain, 0, 0)
+	if err != nil {
+		return err
+	}
+	n.DNSName, err = allocateDNSLabel(*n, domain, owners)
+	if err != nil {
+		return err
+	}
 
 	allocation, err := AddressConfigurationTx(ctx, tx)
 	if err != nil {
@@ -802,7 +828,7 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 	}
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO nodes (`+nodeColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		int64(n.ID),
 		n.StableID,
 		textOf(n.MachineKey, ""),
@@ -825,6 +851,7 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 		tags,
 		nullableBytes(n.KeySignature),
 		textOf(n.NLKey, ""),
+		n.DNSName,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -833,65 +860,110 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 		return fmt.Errorf("state: inserting node: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	*original = candidate
+	return nil
 }
 
 func (s *SQLiteStore) UpdateNode(n Node) error {
-	endpoints, err := encodeEndpoints(n)
+	return s.UpdateNodeWithDNS(&n)
+}
+
+func (store *SQLiteStore) UpdateNodeWithDNS(node *Node) error {
+	if node == nil {
+		return fmt.Errorf("state: nil node")
+	}
+	updatedNode := *node
+	endpoints, err := encodeEndpoints(updatedNode)
 	if err != nil {
 		return err
 	}
-	approved, err := encodeRoutes(n.ApprovedRoutes)
+	approved, err := encodeRoutes(updatedNode.ApprovedRoutes)
 	if err != nil {
 		return err
 	}
-	tags, err := encodeStringList(n.Tags)
+	tags, err := encodeStringList(updatedNode.Tags)
 	if err != nil {
 		return err
 	}
 
-	res, err := s.db.ExecContext(context.Background(), `UPDATE nodes SET
+	ctx := context.Background()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	previous, err := scanNode(tx.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE id = ?", int64(updatedNode.ID)))
+	if err != nil {
+		return fmt.Errorf("state: reading node %d before update: %w", updatedNode.ID, err)
+	}
+	domain, _, err := dnsDomainTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	owners, err := dnsNameOwnersTx(ctx, tx, domain, updatedNode.ID, 0)
+	if err != nil {
+		return err
+	}
+	updatedNode.DNSName = previous.DNSName
+	if updatedNode.DNSName == "" || defaultDNSLabel(previous) != defaultDNSLabel(updatedNode) {
+		updatedNode.DNSName, err = allocateDNSLabel(updatedNode, domain, owners)
+		if err != nil {
+			return err
+		}
+	} else if _, taken := owners[updatedNode.DNSName]; taken {
+		return ErrDNSNameConflict
+	}
+	updatedNode.IPv4, updatedNode.IPv6 = previous.IPv4, previous.IPv6
+	res, err := tx.ExecContext(ctx, `UPDATE nodes SET
 			stable_id = ?, machine_key = ?, node_key = ?, disco_key = ?, user_id = ?,
 			hostname = ?, endpoints = ?, home_derp = ?,
 			cap_ver = ?, hostinfo = ?, last_seen = ?, expiry = ?, created = ?,
 			method = ?, ephemeral = ?, approved_routes = ?, tags = ?, key_signature = ?,
-			nl_key = ?
+			nl_key = ?, dns_name = ?
 		WHERE id = ?`,
-		n.StableID,
-		textOf(n.MachineKey, ""),
-		textOf(n.NodeKey, ""),
-		textOf(n.DiscoKey, ""),
-		int64(n.UserID),
-		n.Hostname,
+		updatedNode.StableID,
+		textOf(updatedNode.MachineKey, ""),
+		textOf(updatedNode.NodeKey, ""),
+		textOf(updatedNode.DiscoKey, ""),
+		int64(updatedNode.UserID),
+		updatedNode.Hostname,
 		endpoints,
-		int64(n.HomeDERP),
-		int64(n.CapVer),
-		marshalHostinfo(n.Hostinfo),
-		nullableTime(n.LastSeen),
-		nullableTimePtr(n.Expiry),
-		n.Created.UnixNano(),
-		string(n.Method),
-		boolToInt(n.Ephemeral),
+		int64(updatedNode.HomeDERP),
+		int64(updatedNode.CapVer),
+		marshalHostinfo(updatedNode.Hostinfo),
+		nullableTime(updatedNode.LastSeen),
+		nullableTimePtr(updatedNode.Expiry),
+		updatedNode.Created.UnixNano(),
+		string(updatedNode.Method),
+		boolToInt(updatedNode.Ephemeral),
 		approved,
 		tags,
-		nullableBytes(n.KeySignature),
-		textOf(n.NLKey, ""),
-		int64(n.ID),
+		nullableBytes(updatedNode.KeySignature),
+		textOf(updatedNode.NLKey, ""),
+		updatedNode.DNSName,
+		int64(updatedNode.ID),
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrNodeKeyExists
 		}
-		return fmt.Errorf("state: updating node %d: %w", n.ID, err)
+		return fmt.Errorf("state: updating node %d: %w", updatedNode.ID, err)
 	}
 
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("state: updating node %d: %w", n.ID, err)
+		return fmt.Errorf("state: updating node %d: %w", updatedNode.ID, err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("state: node %d not found", n.ID)
+		return fmt.Errorf("state: node %d not found", updatedNode.ID)
 	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	*node = updatedNode
 	return nil
 }
 

@@ -116,7 +116,7 @@ func (s *Server) rotateNodeKey(existing, want state.Node, applyTags bool, actor 
 		updated.UserID = want.UserID
 	}
 
-	if err := s.store.UpdateNode(updated); err != nil {
+	if err := s.store.UpdateNodeWithDNS(&updated); err != nil {
 		if errors.Is(err, state.ErrNodeKeyExists) {
 			return state.Node{}, NewHTTPError(http.StatusConflict, "node key already registered", nil)
 		}
