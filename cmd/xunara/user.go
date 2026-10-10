@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -86,33 +86,13 @@ func runUserRole(args []string) {
 		fmt.Fprintf(os.Stderr, "xunara: user %q not found\n", fs.Arg(0))
 		os.Exit(1)
 	}
-	if user.Role.Valid() && user.Role == role {
-		fmt.Printf("%d\t%s\t%s\n", user.ID, user.LoginName, role)
-		return
-	}
-	if user.Role.IsOwner() && role != identity.RoleOwner && !otherOwner(ids, user.ID) {
-		fmt.Fprintln(os.Stderr, "xunara: refusing to demote the last owner")
-		os.Exit(1)
-	}
-
-	old := user.Role
-	user.Role = role
-	if err := ids.UpdateUser(user); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	updated, err := ids.UpdateUserByOperator(ctx, user.ID, identity.MemberPatch{Role: &role})
+	if err != nil {
 		fatal("updating user role", err)
 	}
-	appendAudit(store, identity.AuditUserRoleChanged, fmt.Sprintf("user:%d", user.ID),
-		fmt.Sprintf("role %s -> %s", old, role))
-	fmt.Printf("%d\t%s\t%s\n", user.ID, user.LoginName, role)
-}
-
-// otherOwner reports whether another owner besides excludeID exists.
-func otherOwner(ids identity.UserStore, excludeID tailcfg.UserID) bool {
-	for _, u := range ids.ListUsers() {
-		if u.ID != excludeID && u.Role.IsOwner() {
-			return true
-		}
-	}
-	return false
+	fmt.Printf("%d\t%s\t%s\n", updated.ID, updated.LoginName, updated.Role)
 }
 
 // lookupUser resolves a user reference that is either a numeric ID or a login
@@ -155,28 +135,21 @@ func runUserUpdate(args []string) {
 		os.Exit(1)
 	}
 
-	var changes []string
-	if *login != "" && *login != user.LoginName {
-		changes = append(changes, "login")
-		user.LoginName = *login
+	patch := identity.MemberPatch{}
+	if *login != "" {
+		patch.LoginName = login
 	}
-	if *displayName != "" && *displayName != user.DisplayName {
-		changes = append(changes, "display_name")
-		user.DisplayName = *displayName
+	if *displayName != "" {
+		patch.DisplayName = displayName
 	}
-	if *email != "" && *email != user.Email {
-		changes = append(changes, "email")
-		user.Email = *email
+	if *email != "" {
+		patch.Email = email
 	}
-	if len(changes) == 0 {
-		fmt.Println("no changes")
-		return
-	}
-
-	if err := ids.UpdateUser(user); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	updated, err := ids.UpdateUserByOperator(ctx, user.ID, patch)
+	if err != nil {
 		fatal("updating user", err)
 	}
-	appendAudit(store, identity.AuditUserUpdated, fmt.Sprintf("user:%d", user.ID),
-		"updated "+strings.Join(changes, ", "))
-	fmt.Printf("%d\t%s\t%s\t%s\n", user.ID, user.LoginName, user.DisplayName, user.Email)
+	fmt.Printf("%d\t%s\t%s\t%s\n", updated.ID, updated.LoginName, updated.DisplayName, updated.Email)
 }

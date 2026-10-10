@@ -30,6 +30,9 @@ func TestMemberInvitationRechecksOwnerAndSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := ErrSessionRevoked
+			if err := store.CreateUser(&User{LoginName: "backup-owner", Role: RoleOwner}); err != nil {
+				t.Fatal(err)
+			}
 			switch changed {
 			case "role":
 				user, _ := store.GetUser(options.UserID)

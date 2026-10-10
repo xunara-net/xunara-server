@@ -162,6 +162,11 @@ go run ./cmd/xunarad \
   未启用本地登录或没有本地密码的用户不能通过此接口创建密码。
 
 原 `PATCH /api/v1/users/{id}` 和旧 HTML 用户管理写接口仅允许 owner。
+成员修改与必需审计已共用事务；写入时再次验证会话/服务 key、当前 owner 与目标
+版本，保护最后 owner。管理响应新增更新时间，新 Web/旧表单按原版本提交，冲突
+要求刷新并重新确认。CLI 共用补丁与事务审计，旧完整更新保留为薄适配；操作与
+无迁移/累积升级边界见 [成员管理](docs/member-management.md)及
+[ADR-0025](docs/adr/ADR-0025-atomic-member-updates.md)。
 普通成员与 admin 使用自助账户接口管理自己的资料。邮箱验证、密码找回与
 2FA 不包含在本次实现内；正式使用必须部署 HTTPS。
 

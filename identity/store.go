@@ -32,11 +32,13 @@ type UserStore interface {
 	LookupUserByLoginName(ctx context.Context, login string) (User, error)
 	// ListUsers returns every user, oldest first.
 	ListUsers() []User
+	ListUsersContext(ctx context.Context) ([]User, error)
 	// UpdateUser replaces a stored user. It fails if the user is unknown.
 	UpdateUser(u User) error
 	// DeleteUser removes a user and its external identity links. It fails
 	// with ErrUserNotFound if the user is unknown.
 	DeleteUser(id tailcfg.UserID) error
+	DeleteUserContext(ctx context.Context, id tailcfg.UserID) error
 }
 
 // ExternalIdentityStore is the link between external accounts and users.
@@ -120,6 +122,7 @@ type Store interface {
 	ShareUserStore
 	LocalCredentialStore
 	AccountStore
+	MemberStore
 	RegistrationInviteStore
 	RegistrationStore
 	BootstrapStore

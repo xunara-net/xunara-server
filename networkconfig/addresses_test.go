@@ -48,6 +48,9 @@ func TestAddressChangesRollbackWithAuditAndPermission(t *testing.T) {
 		t.Fatal("missing writer")
 	}
 	user.Role = identity.RoleMember
+	if err := identities.CreateUser(&identity.User{LoginName: "backup-owner", Role: identity.RoleOwner}); err != nil {
+		t.Fatal(err)
+	}
 	if err := identities.UpdateUser(user); err != nil {
 		t.Fatal(err)
 	}

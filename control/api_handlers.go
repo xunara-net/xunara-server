@@ -1,7 +1,6 @@
 package control
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -364,6 +363,7 @@ type apiUser struct {
 	Email       string                `json:"email,omitempty"`
 	Role        string                `json:"role"`
 	CreatedAt   time.Time             `json:"createdAt"`
+	UpdatedAt   time.Time             `json:"updatedAt"`
 	Identities  []apiExternalIdentity `json:"identities"`
 }
 
@@ -386,6 +386,7 @@ func (s *Server) apiUserView(u identity.User) apiUser {
 		Email:       u.Email,
 		Role:        role.String(),
 		CreatedAt:   u.CreatedAt,
+		UpdatedAt:   u.UpdatedAt,
 		Identities:  []apiExternalIdentity{},
 	}
 	for _, link := range s.identity.ListExternalIdentities(u.ID) {
@@ -405,7 +406,11 @@ func (s *Server) handleAPIUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users := s.identity.ListUsers()
+	users, err := s.identity.ListUsersContext(r.Context())
+	if err != nil {
+		s.writeMemberUpdateFailure(w, err)
+		return
+	}
 	out := make([]apiUser, 0, len(users))
 	for _, u := range users {
 		out = append(out, s.apiUserView(u))
@@ -441,86 +446,30 @@ func (s *Server) handleAPIUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, ok := s.lookupAPIUser(chi.URLParam(r, "id"))
-	if !ok {
-		writeAPIError(w, http.StatusNotFound, "user not found")
+	user, err := s.lookupMemberReference(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		s.writeMemberUpdateFailure(w, err)
 		return
 	}
 
-	var body struct {
-		LoginName   *string `json:"loginName"`
-		DisplayName *string `json:"displayName"`
-		Email       *string `json:"email"`
-		Role        *string `json:"role"`
-	}
+	var body memberUpdateBody
 	if !decodeAPIBody(w, r, &body) {
 		return
 	}
 
-	if body.Role != nil && !principal.Role.IsOwner() {
-		writeAPIError(w, http.StatusForbidden, "owner role required to change roles")
+	patch, err := body.patch()
+	if err != nil {
+		s.writeMemberUpdateFailure(w, err)
 		return
 	}
-
-	var changed []string
-	if body.LoginName != nil && *body.LoginName != user.LoginName {
-		if *body.LoginName == "" {
-			writeAPIError(w, http.StatusBadRequest, "loginName cannot be empty")
-			return
-		}
-		user.LoginName = *body.LoginName
-		changed = append(changed, "login_name")
-	}
-	if body.DisplayName != nil && *body.DisplayName != user.DisplayName {
-		user.DisplayName = *body.DisplayName
-		changed = append(changed, "display_name")
-	}
-	if body.Email != nil && *body.Email != user.Email {
-		user.Email = *body.Email
-		changed = append(changed, "email")
-	}
-	roleChanged := false
-	if body.Role != nil {
-		role, err := identity.ParseRole(*body.Role)
-		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if role != user.Role {
-			if user.Role.IsOwner() && role != identity.RoleOwner && !s.otherOwnerExists(user.ID) {
-				writeAPIError(w, http.StatusConflict, "cannot demote the last owner")
-				return
-			}
-			user.Role = role
-			roleChanged = true
-			changed = append(changed, "role")
-		}
-	}
-	if len(changed) == 0 {
-		writeJSON(w, http.StatusOK, s.apiUserView(user))
+	updated, err := s.identity.UpdateMember(r.Context(), identity.MemberCaller{
+		UserID: principal.UserID, SessionID: principal.Session.ID, APIKeyID: principal.APIKey.ID,
+	}, user.ID, patch)
+	if err != nil {
+		s.writeMemberUpdateFailure(w, err)
 		return
 	}
-
-	if err := s.identity.UpdateUser(user); err != nil {
-		switch {
-		case errors.Is(err, identity.ErrLoginNameTaken):
-			writeAPIError(w, http.StatusConflict, "login name already in use")
-		case errors.Is(err, identity.ErrUserNotFound):
-			writeAPIError(w, http.StatusNotFound, "user not found")
-		default:
-			s.log.Error("updating user", "user", int(user.ID), "err", err)
-			writeAPIError(w, http.StatusInternalServerError, "could not update user")
-		}
-		return
-	}
-
-	action := identity.AuditUserUpdated
-	if roleChanged {
-		action = identity.AuditUserRoleChanged
-	}
-	s.audit(principal.actor(), action, fmt.Sprintf("user:%d", user.ID),
-		"updated "+strings.Join(changed, ", "))
-	writeJSON(w, http.StatusOK, s.apiUserView(user))
+	writeJSON(w, http.StatusOK, s.apiUserView(updated))
 }
 
 // handleAPIDNS implements GET /api/v1/dns.

@@ -224,7 +224,8 @@ func TestLocalOwnerClaimPreservesTypedErrors(t *testing.T) {
 			return ctx
 		}, context.Canceled},
 		{"missing owner", func(t *testing.T, store *SQLiteStore) context.Context {
-			if err := store.DeleteUser(1); err != nil {
+			// 模拟外部损坏；正常删除入口现在禁止删除最后所有者。
+			if _, err := store.db.Exec("DELETE FROM users WHERE id = 1"); err != nil {
 				t.Fatal(err)
 			}
 			return t.Context()

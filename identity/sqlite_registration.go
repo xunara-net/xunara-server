@@ -116,9 +116,18 @@ func checkMemberLimit(ctx context.Context, tx *sql.Tx, maxUsers int) error {
 }
 
 func insertIdentityAudit(ctx context.Context, tx *sql.Tx, actor, action, target, detail string, now time.Time) error {
-	if _, err := tx.ExecContext(ctx, "INSERT INTO audit_events (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
-		now.UnixNano(), actor, action, target, detail); err != nil {
+	result, err := tx.ExecContext(ctx, "INSERT INTO audit_events (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
+		now.UnixNano(), actor, action, target, detail)
+	if err != nil {
 		return fmt.Errorf("identity: auditing identity transaction: %w", err)
+	}
+	// 没有 SQL 错误也不代表写入成功：触发器忽略插入时不能放行必需审计。
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("identity: checking identity audit insertion: %w", err)
+	}
+	if affected != 1 {
+		return errors.New("identity: required audit did not persist exactly one event")
 	}
 	return nil
 }

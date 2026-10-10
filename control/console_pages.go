@@ -596,6 +596,7 @@ device a human identity.</p>
 <form method="post" action="/console/users/{{.ID}}">
 <h3><span translate="no">{{.LoginName}}</span></h3>
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="expectedUpdatedAt" value="{{.UpdatedAt.Format "2006-01-02T15:04:05.999999999Z07:00"}}">
 <div class="field">
 <label>Display name <input name="displayName" value="{{.DisplayName}}"></label>
 <label>Email <input name="email" value="{{.Email}}"></label>

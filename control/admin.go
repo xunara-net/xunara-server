@@ -387,17 +387,20 @@ func (r *Router) handleAdminDeleteUser(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	userID := tailcfgUserID(id)
-	if len(server.identity.ListUsers()) <= 1 {
+	users, err := server.identity.ListUsersContext(req.Context())
+	if err != nil {
+		r.redirectNotice(w, req, "/admin/users", "Could not check the accounts. Please try again.")
+		return
+	}
+	if len(users) <= 1 {
 		r.redirectNotice(w, req, "/admin/users", "The last account of a tenant cannot be deleted.")
 		return
 	}
-	if ownerRole, ok := server.identity.GetUser(userID); ok && ownerRole.Role == identity.RoleOwner {
-		if !otherOwnerExists(server, uint64(userID)) {
+	if err := server.identity.DeleteUserContext(req.Context(), userID); err != nil {
+		if errors.Is(err, identity.ErrLastOwner) {
 			r.redirectNotice(w, req, "/admin/users", "A tailnet needs at least one owner.")
 			return
 		}
-	}
-	if err := server.identity.DeleteUser(userID); err != nil {
 		r.redirectNotice(w, req, "/admin/users", adminErrorText(err))
 		return
 	}
@@ -529,20 +532,6 @@ func mustTenantPlans(r *Router, req *http.Request) []TenantPlanRow {
 		return nil
 	}
 	return rows
-}
-
-// otherOwnerExists reports whether a tenant has another owner besides the
-// given account.
-func otherOwnerExists(server *Server, id uint64) bool {
-	for _, user := range server.identity.ListUsers() {
-		if uint64(user.ID) == id {
-			continue
-		}
-		if user.Role == identity.RoleOwner {
-			return true
-		}
-	}
-	return false
 }
 
 // parsePlanForm reads the Plan Editor's form into a plan definition. The form

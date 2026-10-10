@@ -446,49 +446,45 @@ func (store *SQLiteStore) LookupUserByLoginName(ctx context.Context, login strin
 }
 
 // ListUsers implements [UserStore].
-func (s *SQLiteStore) ListUsers() []User {
-	rows, err := s.db.QueryContext(context.Background(),
+func (store *SQLiteStore) ListUsers() []User {
+	users, _ := store.ListUsersContext(context.Background())
+	return users
+}
+
+func (store *SQLiteStore) ListUsersContext(ctx context.Context) ([]User, error) {
+	rows, err := store.db.QueryContext(ctx,
 		"SELECT "+userColumns+" FROM users ORDER BY id")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("identity: listing users: %w", err)
 	}
 	defer rows.Close()
 
-	var out []User
+	users := make([]User, 0)
 	for rows.Next() {
-		u, err := scanUser(rows)
+		user, err := scanUser(rows)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("identity: reading user list: %w", err)
 		}
-		out = append(out, u)
+		users = append(users, user)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("identity: reading user list: %w", err)
+	}
+	return users, nil
 }
 
 // UpdateUser implements [UserStore].
-func (s *SQLiteStore) UpdateUser(u User) error {
-	u.UpdatedAt = time.Now().UTC()
-
-	if !u.Role.Valid() {
-		u.Role = RoleMember
+func (store *SQLiteStore) UpdateUser(user User) error {
+	if !user.Role.Valid() {
+		user.Role = RoleMember
 	}
-
-	res, err := s.db.ExecContext(context.Background(),
-		`UPDATE users SET login_name = ?, display_name = ?, email = ?, role = ?, created_at = ?, updated_at = ?
-		 WHERE id = ?`,
-		u.LoginName, u.DisplayName, u.Email, string(u.Role), u.CreatedAt.UnixNano(), u.UpdatedAt.UnixNano(), int64(u.ID))
-	if err != nil {
-		if isUniqueViolation(err) {
-			return ErrLoginNameTaken
-		}
-		return fmt.Errorf("identity: updating user %d: %w", u.ID, err)
+	patch := MemberPatch{LoginName: &user.LoginName, DisplayName: &user.DisplayName, Email: &user.Email, Role: &user.Role}
+	if !user.UpdatedAt.IsZero() {
+		patch.ExpectedUpdatedAt = &user.UpdatedAt
 	}
-	if affected, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("identity: updating user %d: %w", u.ID, err)
-	} else if affected == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	// 旧内部完整快照入口只作适配；已有版本时不能恢复并发降权前的旧角色。
+	_, err := store.updateMember(context.Background(), nil, user.ID, patch, "")
+	return err
 }
 
 type scanner interface{ Scan(dest ...any) error }
@@ -497,14 +493,27 @@ type scanner interface{ Scan(dest ...any) error }
 //
 // The external identity links are deleted with the user: a dangling link
 // pointing at a missing user would be a login failure waiting to happen.
-func (s *SQLiteStore) DeleteUser(id tailcfg.UserID) error {
-	ctx := context.Background()
+func (store *SQLiteStore) DeleteUser(id tailcfg.UserID) error {
+	return store.DeleteUserContext(context.Background(), id)
+}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+func (store *SQLiteStore) DeleteUserContext(ctx context.Context, id tailcfg.UserID) error {
+	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("identity: starting user deletion: %w", err)
 	}
 	defer tx.Rollback()
+
+	user, err := scanUser(tx.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users WHERE id = ?", int64(id)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("identity: reading user for deletion: %w", err)
+	}
+	if err := checkOwnerRemoval(ctx, tx, user); err != nil {
+		return err
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM external_identities WHERE user_id = ?", int64(id)); err != nil {

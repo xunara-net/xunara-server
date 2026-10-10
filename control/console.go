@@ -475,63 +475,49 @@ func (s *Server) handleConsoleUpdateUser(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	user, ok := s.lookupAPIUser(chi.URLParam(r, "id"))
-	if !ok {
-		s.renderError(w, r, http.StatusNotFound, "Unknown user", "This user does not exist.")
+	user, err := s.lookupMemberReference(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		statusCode, message := memberUpdateFailure(err)
+		s.renderError(w, r, statusCode, "Member update failed", message)
 		return
 	}
 
-	var changed []string
-	if v := strings.TrimSpace(r.PostFormValue("displayName")); v != "" && v != user.DisplayName {
-		user.DisplayName = v
-		changed = append(changed, "display_name")
+	email := strings.TrimSpace(r.PostFormValue("email"))
+	body := memberUpdateBody{Email: &email}
+	if displayName := strings.TrimSpace(r.PostFormValue("displayName")); displayName != "" {
+		body.DisplayName = &displayName
 	}
-	if v := strings.TrimSpace(r.PostFormValue("email")); v != user.Email {
-		user.Email = v
-		changed = append(changed, "email")
+	if role := strings.TrimSpace(r.PostFormValue("role")); role != "" {
+		body.Role = &role
 	}
-
-	roleChanged := false
-	if raw := strings.TrimSpace(r.PostFormValue("role")); raw != "" {
-		actor, ok := s.identity.GetUser(session.UserID)
-		if !ok || !actor.Role.IsOwner() {
-			s.renderError(w, r, http.StatusForbidden, "Owner role required",
-				"Only an owner may change roles.")
-			return
-		}
-		role, err := identity.ParseRole(raw)
+	if version := r.PostFormValue("expectedUpdatedAt"); version != "" {
+		expected, err := time.Parse(time.RFC3339Nano, version)
 		if err != nil {
-			s.renderError(w, r, http.StatusBadRequest, "Invalid role", err.Error())
+			s.renderError(w, r, http.StatusBadRequest, "Invalid member version", "Reload the page and try again.")
 			return
 		}
-		if role != user.Role {
-			if user.Role.IsOwner() && role != identity.RoleOwner && !s.otherOwnerExists(user.ID) {
-				s.renderError(w, r, http.StatusConflict, "Cannot demote the last owner",
-					"A tailnet needs at least one owner.")
-				return
-			}
-			user.Role = role
-			roleChanged = true
-			changed = append(changed, "role")
-		}
+		body.ExpectedUpdatedAt = &expected
 	}
-
-	if len(changed) == 0 {
-		data["Notice"] = "No change."
-	} else if err := s.identity.UpdateUser(user); err != nil {
-		s.log.Error("updating user", "user", int(user.ID), "err", err)
-		s.renderError(w, r, http.StatusInternalServerError, "Update failed", "Please try again.")
+	patch, err := body.patch()
+	if err != nil {
+		statusCode, message := memberUpdateFailure(err)
+		s.renderError(w, r, statusCode, "Member update failed", message)
 		return
-	} else {
-		action := identity.AuditUserUpdated
-		if roleChanged {
-			action = identity.AuditUserRoleChanged
-		}
-		s.audit(fmt.Sprintf("user:%d", session.UserID), action,
-			fmt.Sprintf("user:%d", user.ID), "updated "+strings.Join(changed, ", ")+" through the console")
-		data["Notice"] = "User updated."
 	}
-
+	updated, err := s.identity.UpdateMember(r.Context(), identity.MemberCaller{UserID: session.UserID, SessionID: session.ID}, user.ID, patch)
+	if err != nil {
+		statusCode, message := memberUpdateFailure(err)
+		s.renderError(w, r, statusCode, "Member update failed", message)
+		return
+	}
+	data["Notice"] = "User updated."
+	if updated.UpdatedAt.Equal(user.UpdatedAt) {
+		data["Notice"] = "No change."
+	}
+	if updated.ID == session.UserID {
+		data["CanWrite"] = updated.Role.CanWrite()
+		data["IsOwner"] = updated.Role.IsOwner()
+	}
 	s.handleConsoleUsersNotice(w, r, data)
 }
 
@@ -583,7 +569,11 @@ func (s *Server) consoleUsersPageData(w http.ResponseWriter, r *http.Request, da
 		s.renderAuthenticationUnavailable(w, r)
 		return false
 	}
-	users := s.identity.ListUsers()
+	users, err := s.identity.ListUsersContext(r.Context())
+	if err != nil {
+		s.renderError(w, r, http.StatusServiceUnavailable, "Members unavailable", "Could not read members. Please try again later.")
+		return false
+	}
 	views := make([]apiUser, 0, len(users))
 	for _, u := range users {
 		views = append(views, s.apiUserView(u))

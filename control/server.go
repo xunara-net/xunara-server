@@ -935,16 +935,6 @@ func (s *Server) userCanWrite(userID tailcfg.UserID) bool {
 	return ok && user.Role.CanWrite()
 }
 
-// otherOwnerExists reports whether any owner other than excludeID exists.
-func (s *Server) otherOwnerExists(excludeID tailcfg.UserID) bool {
-	for _, u := range s.identity.ListUsers() {
-		if u.ID != excludeID && u.Role.IsOwner() {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "pass"})
 }

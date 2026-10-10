@@ -1,6 +1,7 @@
 package control
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -97,18 +98,24 @@ func (r *Router) handlePlatformDeleteUser(w http.ResponseWriter, req *http.Reque
 		return
 	}
 	userID := tailcfgUserID(userID64)
-	if len(server.identity.ListUsers()) <= 1 {
+	users, err := server.identity.ListUsersContext(req.Context())
+	if err != nil {
+		http.Error(w, "could not check the accounts", http.StatusServiceUnavailable)
+		return
+	}
+	if len(users) <= 1 {
 		http.Error(w, "the last account of a tenant cannot be deleted", http.StatusConflict)
 		return
 	}
-	if user, ok := server.identity.GetUser(userID); ok && user.Role == identity.RoleOwner {
-		if !otherOwnerExists(server, userID64) {
+	if err := server.identity.DeleteUserContext(req.Context(), userID); err != nil {
+		switch {
+		case errors.Is(err, identity.ErrLastOwner):
 			http.Error(w, "a tailnet needs at least one owner", http.StatusConflict)
-			return
+		case errors.Is(err, identity.ErrUserNotFound):
+			http.Error(w, "unknown user", http.StatusNotFound)
+		default:
+			http.Error(w, "could not delete the account", http.StatusServiceUnavailable)
 		}
-	}
-	if err := server.identity.DeleteUser(userID); err != nil {
-		http.Error(w, "could not delete the account", http.StatusInternalServerError)
 		return
 	}
 	if _, err := server.identity.RevokeUserSessions(userID, "account deleted by the platform operator"); err != nil {
