@@ -105,7 +105,7 @@ func TestSQLiteV21RelayExecutionMigrationAndRestart(test *testing.T) {
 	if err := store.CreateRelay(Relay{ID: "pre-v22", RegionID: 40001, CertName: "stored-pin"}, secret); err != nil {
 		test.Fatal(err)
 	}
-	for _, statement := range []string{"ALTER TABLE relays DROP COLUMN execution_report", "ALTER TABLE relays DROP COLUMN execution_reported_at", "PRAGMA user_version = 21"} {
+	for _, statement := range []string{"DROP TABLE address_configuration", "DROP INDEX idx_nodes_ipv4_unique", "ALTER TABLE relays DROP COLUMN execution_report", "ALTER TABLE relays DROP COLUMN execution_reported_at", "PRAGMA user_version = 21"} {
 		if _, err := store.DB().ExecContext(test.Context(), statement); err != nil {
 			test.Fatal(err)
 		}

@@ -25,7 +25,8 @@ xunara-web（用户控制台）   xunara-admin（平台后台）   CLI / SDK / �
 - **设备与网络**：设备注册与审批、Tailnet 网段分配、子网路由、Exit Node、
   MagicDNS、DERP 策略、共享与访问策略。
 - **网络控制台**：持久 ACL / Grants 发布、编译器模拟与版本恢复、DNS 设置与地址
-  记录、租户私有 DERP 地区与 TLS pin；[实现与升级边界](docs/network-console.md)。
+  记录、网段预览与单设备 IPv4 修改、默认/非托管/租户私有 DERP 与 TLS pin；
+  [实现与升级边界](docs/network-console.md)。
 - **商业化**：套餐目录（内置 free/pro/business 或 `-plans` 外置）、设备/成员/
   密钥/路由配额、租户网段自定义与冲突检测、平台运营 API。
 - **可观测与审计**：结构化日志、`/health`、`/version`、审计日志、Webhook、
@@ -267,8 +268,12 @@ go test -race ./...
   现在要求版本前置条件，历史、审计和通知同事务提交；旧管理调用须升级，详见
   [ADR-0020](docs/adr/ADR-0020-relay-configuration-history.md)。期望配置下发不等于中继已执行，
   新版 Relay 已实现实际热更/停用断连及服务自报回执，旧版执行状态仍为未知；
-  详见 [ADR-0021](docs/adr/ADR-0021-relay-runtime-execution.md)。只追加 state v22，
-  identity v13、官方客户端协议、套餐及静态公共中继配置不变。
+  详见 [ADR-0021](docs/adr/ADR-0021-relay-runtime-execution.md)。该切片追加 state v22。
+- **地址与外部中继**：用户按版本预览/确认自定义分配网段，显式修改单设备 IPv4，
+  已有 IP 不随网段保存重编号。CGNAT 子集保持官方兼容，Free 仍不能改网段。
+  非托管地图支持手工配置、固定官方源导入草稿、发布及历史恢复，不覆盖默认地区。
+  新增 state v23 与 plans v4，identity v13、官方协议、套餐额度及静态公共中继配置不变；
+  [ADR-0022](docs/adr/ADR-0022-address-management-and-external-relays.md)。
 
 ## 仓库关系
 

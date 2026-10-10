@@ -16,6 +16,7 @@ import (
 const (
 	Policy = "policy"
 	DNS    = "dns"
+	DERP   = "derp"
 )
 
 var (
@@ -87,7 +88,12 @@ func (store *SQLiteStore) Version(ctx context.Context, kind string, revision uin
 
 // Save 将配置、历史、审计与失效通知一起提交；任何一步失败均不留下“半发布”。
 func (store *SQLiteStore) Save(ctx context.Context, kind, content, initial string, expected uint64, writer Writer) (Document, error) {
-	if kind != Policy && kind != DNS {
+	return store.SaveChecked(ctx, kind, content, initial, expected, writer, nil)
+}
+
+// SaveChecked 在同一写事务内复查相关对象，防止地图发布与中继注册并发占用地区。
+func (store *SQLiteStore) SaveChecked(ctx context.Context, kind, content, initial string, expected uint64, writer Writer, check func(context.Context, *sql.Tx) error) (Document, error) {
+	if kind != Policy && kind != DNS && kind != DERP {
 		return Document{}, errors.New("unsupported configuration kind")
 	}
 	tx, err := store.db.BeginTx(ctx, nil)
@@ -106,6 +112,11 @@ func (store *SQLiteStore) Save(ctx context.Context, kind, content, initial strin
 	}
 	if current != expected {
 		return Document{}, ErrConflict
+	}
+	if check != nil {
+		if err := check(ctx, tx); err != nil {
+			return Document{}, err
+		}
 	}
 	if current == 0 {
 		if _, err := tx.ExecContext(ctx,

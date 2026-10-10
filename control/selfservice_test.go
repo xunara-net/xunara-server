@@ -195,7 +195,7 @@ func TestSelfServiceSignupCreatesTenant(t *testing.T) {
 	if !ok || !prefix.IsValid() {
 		t.Fatalf("the new tenant has no network block (%v, %v)", prefix, ok)
 	}
-	if !netip.MustParsePrefix("100.100.0.0/24").Contains(prefix.Addr()) {
+	if !netip.MustParsePrefix("100.100.1.0/24").Contains(prefix.Addr()) {
 		t.Fatalf("network block %s is outside the pool", prefix)
 	}
 

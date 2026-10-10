@@ -10,18 +10,17 @@ import (
 	"github.com/xunara-net/xunara-server/identity"
 )
 
-// This file is the read-only DERP management surface (PROJECT_SPEC section 32):
-// which regions this organization serves its clients, and where its nodes are
-// homed. The policy itself is startup/organization-table configuration; there
-// is no write path here.
+// 下发地图包含部署默认、非托管和本租户托管节点；策略仍由部署层限制。
 
 // derpRegionView is one DERP region the served map actually advertises.
 type derpRegionView struct {
-	ID        int32    `json:"id"`
-	Code      string   `json:"code"`
-	Name      string   `json:"name"`
-	Hosts     []string `json:"hosts"`
-	NodeCount int      `json:"nodeCount"`
+	ID        tailcfg.DERPRegionID `json:"id"`
+	Code      string               `json:"code"`
+	Name      string               `json:"name"`
+	Hosts     []string             `json:"hosts"`
+	NodeCount int                  `json:"nodeCount"`
+	Source    string               `json:"source"`
+	Nodes     []*tailcfg.DERPNode  `json:"nodes"`
 }
 
 // derpStatusView is the JSON shape of GET /api/v2/derp.
@@ -116,12 +115,17 @@ func (s *Server) derpStatus() (derpStatusView, []derpNodeView) {
 			}
 		}
 		sort.Strings(hosts)
+		source := "deployment"
+		if snapshot := s.managedDERP.Load(); snapshot != nil && snapshot.Sources[id] != "" {
+			source = snapshot.Sources[id]
+		}
 		view.Regions = append(view.Regions, derpRegionView{
-			ID:        int32(id),
+			ID:        id,
 			Code:      region.RegionCode,
 			Name:      region.RegionName,
 			Hosts:     hosts,
 			NodeCount: counts[id],
+			Source:    source, Nodes: region.Nodes,
 		})
 	}
 	view.RegionsServed = len(view.Regions)

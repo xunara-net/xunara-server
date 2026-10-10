@@ -282,11 +282,9 @@ func main() {
 	defer srv.Close()
 
 	if plans != nil {
-		if prefix, ok := plans.NetworkPrefix(context.Background(), srv.TenantID()); ok {
-			if err := srv.SetAddressPrefix(prefix); err != nil {
-				logger.Error("applying the tenant network range", "err", err)
-				os.Exit(1)
-			}
+		if err := srv.AttachPlanRegistry(context.Background(), plans); err != nil {
+			logger.Error("applying the tenant network range", "err", err)
+			os.Exit(1)
 		}
 		logger.Info("commercial plans enabled",
 			"default", plans.Catalog().Default().ID, "pool", plans.Pool().Prefix().String())

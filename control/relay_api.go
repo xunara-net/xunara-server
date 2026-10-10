@@ -1,6 +1,8 @@
 package control
 
 import (
+	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -157,8 +159,18 @@ func (s *Server) handleRelayEnroll(w http.ResponseWriter, r *http.Request) {
 	relay.CreatedBy = "enrollment-token:" + record.ID
 	// 套餐给出额度，存储在事务内读取实际用量，拒绝或故障时不消费操作员的令牌。
 	entitlement := s.Plan()
-	if _, err := s.store.EnrollRelay(r.Context(), token, relay, secret, entitlement.MaxRelays); err != nil {
+	enroll := s.store.EnrollRelay
+	if durable, ok := s.store.(*state.SQLiteStore); ok {
+		enroll = func(ctx context.Context, enrollmentSecret string, record state.Relay, credential string, maximum int) (state.Relay, error) {
+			return durable.EnrollRelayChecked(ctx, enrollmentSecret, record, credential, maximum, func(ctx context.Context, transaction *sql.Tx) error {
+				return checkEnrolledExternalDERPRegion(ctx, transaction, tailcfg.DERPRegionID(record.RegionID))
+			})
+		}
+	}
+	if _, err := enroll(r.Context(), token, relay, secret, entitlement.MaxRelays); err != nil {
 		switch {
+		case errors.Is(err, errDERPRegionConflict):
+			writeRelayError(w, http.StatusConflict, "RELAY_REGION_CONFLICT", "region ID is reserved by an external relay; choose another region ID")
 		case errors.Is(err, state.ErrRelayEnrollmentConsumed), errors.Is(err, state.ErrRelayAlreadyEnrolled):
 			writeRelayError(w, http.StatusConflict, "RELAY_ALREADY_ENROLLED", "enrollment token or relay identity has already been used")
 		case errors.Is(err, state.ErrRelayEnrollmentExpired):

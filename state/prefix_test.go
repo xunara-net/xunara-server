@@ -138,3 +138,25 @@ func TestAddressPrefixExhaustionIsReported(t *testing.T) {
 		}
 	}
 }
+
+func TestAddressAllocationSkipsOfficialClientReservedRanges(t *testing.T) {
+	for _, example := range []struct {
+		prefix string
+		first  string
+	}{
+		{"100.100.0.0/23", "100.100.1.0"},
+		{"100.100.100.0/23", "100.100.101.0"},
+		{"100.115.92.0/22", "100.115.94.0"},
+	} {
+		t.Run(example.prefix, func(t *testing.T) {
+			for name, store := range newTestStores(t) {
+				if err := store.SetAddressPrefixes(netip.MustParsePrefix(example.prefix), netip.Prefix{}); err != nil {
+					t.Fatal(err)
+				}
+				if address := addNode(t, store).IPv4; address != netip.MustParseAddr(example.first) {
+					t.Fatalf("%s first unreserved address = %s, want %s", name, address, example.first)
+				}
+			}
+		})
+	}
+}

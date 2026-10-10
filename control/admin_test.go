@@ -191,11 +191,11 @@ func TestAdminConsoleChangesAPlanAndNetwork(t *testing.T) {
 		t.Fatalf("plan after the change = %q, want %q", assigned.ID, plan.ProID)
 	}
 
-	if got := post("/admin/tenants/network", url.Values{"org": {"acme"}, "network_prefix": {"192.168.44.0/24"}}); got.Code != http.StatusFound {
+	if got := post("/admin/tenants/network", url.Values{"org": {"acme"}, "network_prefix": {"100.101.44.0/24"}}); got.Code != http.StatusFound {
 		t.Fatalf("setting the network = %d, want 302", got.Code)
 	}
 	prefix, ok := plans.NetworkPrefix(context.Background(), "acme")
-	if !ok || prefix.String() != "192.168.44.0/24" {
+	if !ok || prefix.String() != "100.101.44.0/24" {
 		t.Fatalf("network after the change = %s (%v)", prefix, ok)
 	}
 

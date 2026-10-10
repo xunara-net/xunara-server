@@ -29,6 +29,13 @@ func openTestSQLite(t *testing.T, path string) *SQLiteStore {
 // 历史测试使用当前库构造业务数据，再移除新增结构，不能仅倒改 user_version。
 func downgradeSQLiteTestVersion(t *testing.T, store *SQLiteStore, version int) {
 	t.Helper()
+	if version < 23 {
+		for _, statement := range []string{"DROP TABLE address_configuration", "DROP INDEX idx_nodes_ipv4_unique"} {
+			if _, err := store.db.ExecContext(t.Context(), statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	if version < 22 {
 		for _, statement := range []string{"ALTER TABLE relays DROP COLUMN execution_report", "ALTER TABLE relays DROP COLUMN execution_reported_at"} {
 			if _, err := store.db.ExecContext(t.Context(), statement); err != nil {

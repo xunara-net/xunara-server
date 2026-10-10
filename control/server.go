@@ -275,6 +275,7 @@ type Server struct {
 	networkConfig *networkconfig.SQLiteStore
 	policyConfig  atomic.Pointer[policyConfiguration]
 	dnsConfig     atomic.Pointer[dnsRuntimeConfig]
+	addressSource atomic.Pointer[addressSource]
 
 	// webhooks delivers audit events, or nil when no endpoint is configured.
 	webhooks *webhook.Dispatcher

@@ -315,10 +315,11 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 	// address range. This is the automatic path, not the operator's custom
 	// range: a plan that forbids custom CIDRs (the free plan) still gets the
 	// block it was allocated.
-	if prefix, ok := r.cfg.Plans.NetworkPrefix(ctx, orgID); ok {
-		if err := srv.SetAddressPrefix(prefix); err != nil {
+	{
+		if err := srv.refreshAddressAllocation(ctx); err != nil {
 			rollback(err)
-			writeAPIError(w, http.StatusInternalServerError, "the tenant's network range could not be applied")
+			w.Header().Set("Retry-After", "5")
+			writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: the tenant's network range could not be initialized; try again later")
 			return
 		}
 	}

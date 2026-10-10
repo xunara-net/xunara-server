@@ -70,16 +70,16 @@ func TestPlanRegistryAllocateHandsOutPoolBlocks(t *testing.T) {
 	if first.PlanID != plan.FreeID {
 		t.Errorf("Allocate plan = %q, want %q", first.PlanID, plan.FreeID)
 	}
-	if first.NetworkPrefix != "100.100.0.0/24" {
-		t.Errorf("first block = %q, want 100.100.0.0/24", first.NetworkPrefix)
+	if first.NetworkPrefix != "100.100.1.0/24" {
+		t.Errorf("first block = %q, want 100.100.1.0/24", first.NetworkPrefix)
 	}
 
 	second, err := registry.Allocate(ctx, "globex")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
 	}
-	if second.NetworkPrefix != "100.100.1.0/24" {
-		t.Errorf("second block = %q, want 100.100.1.0/24", second.NetworkPrefix)
+	if second.NetworkPrefix != "100.100.2.0/24" {
+		t.Errorf("second block = %q, want 100.100.2.0/24", second.NetworkPrefix)
 	}
 
 	// Idempotent: allocating again must not move a tenant.
@@ -95,7 +95,7 @@ func TestPlanRegistryAllocateHandsOutPoolBlocks(t *testing.T) {
 	}
 
 	prefix, ok := registry.NetworkPrefix(ctx, "acme")
-	if !ok || prefix.String() != "100.100.0.0/24" {
+	if !ok || prefix.String() != "100.100.1.0/24" {
 		t.Fatalf("NetworkPrefix = %s (%v)", prefix, ok)
 	}
 }
@@ -128,7 +128,7 @@ func TestPlanRegistryCustomNetworkRules(t *testing.T) {
 	registry, _ := newTestPlanRegistry(t, t.TempDir())
 
 	for _, tc := range []struct{ org, want string }{
-		{"acme", "100.100.0.0/24"}, {"globex", "100.100.1.0/24"}, {"initech", "100.100.2.0/24"},
+		{"acme", "100.100.1.0/24"}, {"globex", "100.100.2.0/24"}, {"initech", "100.100.3.0/24"},
 	} {
 		got, err := registry.Allocate(ctx, tc.org)
 		if err != nil {
@@ -151,21 +151,21 @@ func TestPlanRegistryCustomNetworkRules(t *testing.T) {
 	}
 
 	// A pro tenant may choose a range, but not onto somebody else's.
-	if _, err := registry.SetNetwork(ctx, "globex", netip.MustParsePrefix("100.100.0.0/24")); !errors.Is(err, ErrNetworkConflict) {
+	if _, err := registry.SetNetwork(ctx, "globex", netip.MustParsePrefix("100.100.1.0/24")); !errors.Is(err, ErrNetworkConflict) {
 		t.Fatalf("SetNetwork onto acme's block = %v, want ErrNetworkConflict", err)
 	}
 
-	updated, err := registry.SetNetwork(ctx, "acme", netip.MustParsePrefix("192.168.50.5/24"))
+	updated, err := registry.SetNetwork(ctx, "acme", netip.MustParsePrefix("100.101.50.5/24"))
 	if err != nil {
 		t.Fatalf("SetNetwork: %v", err)
 	}
-	if updated.NetworkPrefix != "192.168.50.0/24" {
-		t.Fatalf("SetNetwork stored %q, want the masked 192.168.50.0/24", updated.NetworkPrefix)
+	if updated.NetworkPrefix != "100.101.50.0/24" {
+		t.Fatalf("SetNetwork stored %q, want the masked 100.101.50.0/24", updated.NetworkPrefix)
 	}
-	if _, err := registry.SetNetwork(ctx, "globex", netip.MustParsePrefix("192.168.51.0/25")); err != nil {
+	if _, err := registry.SetNetwork(ctx, "globex", netip.MustParsePrefix("100.101.51.0/25")); err != nil {
 		t.Fatalf("a neighboring range must be free: %v", err)
 	}
-	if _, err := registry.SetNetwork(ctx, "initech", netip.MustParsePrefix("192.168.50.128/25")); !errors.Is(err, ErrNetworkConflict) {
+	if _, err := registry.SetNetwork(ctx, "initech", netip.MustParsePrefix("100.101.50.128/25")); !errors.Is(err, ErrNetworkConflict) {
 		t.Fatalf("partially overlapping SetNetwork = %v, want ErrNetworkConflict", err)
 	}
 
@@ -203,7 +203,7 @@ func TestPlanRegistryDowngradeResetsCustomRange(t *testing.T) {
 	if _, err := registry.AssignPlan(ctx, "acme", plan.ProID); err != nil {
 		t.Fatalf("AssignPlan: %v", err)
 	}
-	if _, err := registry.SetNetwork(ctx, "acme", netip.MustParsePrefix("10.10.0.0/24")); err != nil {
+	if _, err := registry.SetNetwork(ctx, "acme", netip.MustParsePrefix("100.101.10.0/24")); err != nil {
 		t.Fatalf("SetNetwork: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestPlanRegistryDowngradeResetsCustomRange(t *testing.T) {
 
 func TestPlanRegistryPoolExhaustion(t *testing.T) {
 	ctx := context.Background()
-	pool, err := netspace.NewPool(netip.MustParsePrefix("192.168.90.0/24"), 24)
+	pool, err := netspace.NewPool(netip.MustParsePrefix("100.101.90.0/24"), 24)
 	if err != nil {
 		t.Fatalf("NewPool: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestPlanRegistrySurvivesReopen(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Get after reopen = (%v, %v)", ok, err)
 	}
-	if assignment.PlanID != plan.BusinessID || assignment.NetworkPrefix != "100.100.0.0/24" {
+	if assignment.PlanID != plan.BusinessID || assignment.NetworkPrefix != "100.100.1.0/24" {
 		t.Fatalf("assignment after reopen = %#v", assignment)
 	}
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/xunara-net/xunara-server/netspace"
 	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Tenant plans and tenant network blocks (PROJECT_SPEC section 54).
@@ -32,9 +33,7 @@ import (
 // and single-tenant deployments that pass -plans). Without it every tenant is
 // on [plan.UnlimitedPlan] and nothing changes for a self-hosted installation.
 //
-// Assignment is deliberately a plain row per tenant with no history: the audit
-// log records who changed what, the row records the current state. Two sources
-// of truth for "which plan is this tenant on" would be one too many.
+// 套餐记录保存当前归属；网段另有版本日志和预留，用于跨库收敛与保护旧设备地址。
 
 // TenantPlan is one tenant's commercial state.
 type TenantPlan struct {
@@ -104,6 +103,32 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at);
 `,
+	// v4：旧设备可能保留原 IP，因此旧网段预留不能随套餐记录覆盖而释放。
+	`
+CREATE TABLE tenant_network_reservations (
+	org_id TEXT NOT NULL,
+	prefix TEXT NOT NULL,
+	PRIMARY KEY (org_id, prefix)
+);
+INSERT INTO tenant_network_reservations SELECT org_id, network_prefix FROM tenant_plans WHERE network_prefix <> '';
+CREATE TABLE tenant_network_versions (
+	org_id TEXT PRIMARY KEY,
+	revision INTEGER NOT NULL,
+	prefix TEXT NOT NULL,
+	actor TEXT NOT NULL,
+	created INTEGER NOT NULL
+);
+INSERT INTO tenant_network_versions SELECT org_id, 1, network_prefix, 'system:import', updated_at FROM tenant_plans;
+CREATE TABLE tenant_network_history (
+	org_id TEXT NOT NULL,
+	revision INTEGER NOT NULL,
+	prefix TEXT NOT NULL,
+	actor TEXT NOT NULL,
+	created INTEGER NOT NULL,
+	PRIMARY KEY (org_id, revision)
+);
+INSERT INTO tenant_network_history SELECT org_id, revision, prefix, actor, created FROM tenant_network_versions;
+`,
 }
 
 // PlanRegistryConfig configures the tenant plan registry.
@@ -137,6 +162,12 @@ type PlanRegistry struct {
 func OpenPlanRegistry(ctx context.Context, cfg PlanRegistryConfig) (*PlanRegistry, error) {
 	if strings.TrimSpace(cfg.Path) == "" {
 		return nil, errors.New("control: plan registry needs a database path")
+	}
+	if !cfg.Pool.Zero() {
+		prefix := cfg.Pool.Prefix()
+		if !prefix.Addr().Is4() || prefix.Bits() < 10 || !netip.MustParsePrefix("100.64.0.0/10").Contains(prefix.Addr()) {
+			return nil, errors.New("control: official client address pools must be a subnet of 100.64.0.0/10")
+		}
 	}
 	if strings.ContainsAny(cfg.Path, "?#") {
 		return nil, fmt.Errorf("control: unsupported character in database path %q", cfg.Path)
@@ -374,7 +405,7 @@ func (g *PlanRegistry) AssignPlan(ctx context.Context, orgID, planID string) (Te
 		}
 	}
 	assignment.UpdatedAt = now
-	if err := upsertTenantPlanTx(ctx, tx, assignment); err != nil {
+	if err := upsertTenantPlanTx(ctx, tx, assignment, "system:plan-assignment"); err != nil {
 		return TenantPlan{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -418,7 +449,7 @@ func (g *PlanRegistry) Allocate(ctx context.Context, orgID string) (TenantPlan, 
 		assignment.NetworkPrefix = block.String()
 	}
 	assignment.UpdatedAt = now
-	if err := upsertTenantPlanTx(ctx, tx, assignment); err != nil {
+	if err := upsertTenantPlanTx(ctx, tx, assignment, "system:allocation"); err != nil {
 		return TenantPlan{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -433,6 +464,10 @@ func (g *PlanRegistry) Allocate(ctx context.Context, orgID string) (TenantPlan, 
 // itself. Passing an invalid prefix clears the custom range, which restores
 // the automatically allocated block (or the deployment default).
 func (g *PlanRegistry) SetNetwork(ctx context.Context, orgID string, prefix netip.Prefix) (TenantPlan, error) {
+	return g.setNetwork(ctx, orgID, prefix, nil, "platform:"+orgID)
+}
+
+func (g *PlanRegistry) setNetwork(ctx context.Context, orgID string, prefix netip.Prefix, expected *uint64, actor string) (TenantPlan, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return TenantPlan{}, orgInvalidf("organization id is required")
 	}
@@ -443,6 +478,15 @@ func (g *PlanRegistry) SetNetwork(ctx context.Context, orgID string, prefix neti
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
+	if expected != nil {
+		version, err := readNetworkVersion(ctx, tx, orgID)
+		if err != nil {
+			return TenantPlan{}, err
+		}
+		if version.Revision != *expected {
+			return TenantPlan{}, state.ErrAddressConflict
+		}
+	}
 	current, ok, err := getTenantPlanTx(ctx, tx, orgID)
 	if err != nil {
 		return TenantPlan{}, err
@@ -476,7 +520,7 @@ func (g *PlanRegistry) SetNetwork(ctx context.Context, orgID string, prefix neti
 		if !tenantPlan.AllowCustomCIDR {
 			return TenantPlan{}, fmt.Errorf("%w: plan %s", ErrNetworkNotAllowed, tenantPlan.ID)
 		}
-		normalized, err := netspace.ValidateTenantPrefix(prefix, g.cfg.Reserved)
+		normalized, err := netspace.ValidateTailnetPrefix(prefix, g.cfg.Reserved)
 		if err != nil {
 			return TenantPlan{}, orgInvalidf("%v", err)
 		}
@@ -490,7 +534,7 @@ func (g *PlanRegistry) SetNetwork(ctx context.Context, orgID string, prefix neti
 		assignment.NetworkPrefix = normalized.String()
 	}
 	assignment.UpdatedAt = now
-	if err := upsertTenantPlanTx(ctx, tx, assignment); err != nil {
+	if err := upsertTenantPlanTx(ctx, tx, assignment, actor); err != nil {
 		return TenantPlan{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -596,10 +640,27 @@ func (g *PlanRegistry) storedPlan(ctx context.Context, id string) (bool, error) 
 
 // Delete drops a tenant's assignment, which returns it to the catalog default.
 func (g *PlanRegistry) Delete(ctx context.Context, orgID string) error {
-	if _, err := g.db.ExecContext(ctx, "DELETE FROM tenant_plans WHERE org_id = ?", orgID); err != nil {
+	transaction, err := g.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	assignment, found, err := getTenantPlanTx(ctx, transaction, orgID)
+	if err != nil {
+		return err
+	}
+	if found {
+		assignment.NetworkPrefix = ""
+		assignment.UpdatedAt = time.Now().UTC()
+		if err := upsertTenantPlanTx(ctx, transaction, assignment, "system:assignment-removed"); err != nil {
+			return err
+		}
+	}
+	// 删除或归档组织不释放仍可能被旧设备使用的地址预留。
+	if _, err := transaction.ExecContext(ctx, "DELETE FROM tenant_plans WHERE org_id = ?", orgID); err != nil {
 		return fmt.Errorf("control: deleting tenant plan %q: %w", orgID, err)
 	}
-	return nil
+	return transaction.Commit()
 }
 
 // allocateTx picks the lowest free block of the pool inside a transaction.
@@ -610,7 +671,7 @@ func (g *PlanRegistry) allocateTx(ctx context.Context, tx *sql.Tx, orgID string)
 	if err != nil {
 		return netip.Prefix{}, err
 	}
-	block, err := g.cfg.Pool.Allocate(g.Reserved(), used)
+	block, err := g.cfg.Pool.Allocate(append(g.Reserved(), netspace.ClientReserved()...), used)
 	if err != nil {
 		return netip.Prefix{}, fmt.Errorf("%w: %v", ErrNoNetworkBlock, err)
 	}
@@ -620,7 +681,7 @@ func (g *PlanRegistry) allocateTx(ctx context.Context, tx *sql.Tx, orgID string)
 // usedNetworksTx lists the network ranges other tenants hold.
 func (g *PlanRegistry) usedNetworksTx(ctx context.Context, tx *sql.Tx, excludeOrg string) ([]netip.Prefix, error) {
 	rows, err := tx.QueryContext(ctx,
-		"SELECT network_prefix FROM tenant_plans WHERE org_id <> ? AND network_prefix <> ''", excludeOrg)
+		"SELECT network_prefix FROM tenant_plans WHERE org_id <> ? AND network_prefix <> '' UNION SELECT prefix FROM tenant_network_reservations WHERE org_id <> ?", excludeOrg, excludeOrg)
 	if err != nil {
 		return nil, fmt.Errorf("control: listing allocated network ranges: %w", err)
 	}
@@ -656,8 +717,35 @@ func getTenantPlanTx(ctx context.Context, tx *sql.Tx, orgID string) (TenantPlan,
 }
 
 // upsertTenantPlanTx writes one assignment inside a transaction.
-func upsertTenantPlanTx(ctx context.Context, tx *sql.Tx, assignment TenantPlan) error {
-	_, err := tx.ExecContext(ctx, `
+func upsertTenantPlanTx(ctx context.Context, tx *sql.Tx, assignment TenantPlan, actor string) error {
+	previous, _, err := getTenantPlanTx(ctx, tx, assignment.OrgID)
+	if err != nil {
+		return err
+	}
+	version, err := readNetworkVersion(ctx, tx, assignment.OrgID)
+	if err != nil {
+		return err
+	}
+	if version.Revision >= state.MaxAddressRevision && version.Prefix != assignment.NetworkPrefix {
+		return state.ErrAddressConflict
+	}
+	for _, prefix := range []string{previous.NetworkPrefix, assignment.NetworkPrefix} {
+		if prefix != "" {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO tenant_network_reservations(org_id,prefix) VALUES (?,?)", assignment.OrgID, prefix); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tenant_network_versions(org_id,revision,prefix,actor,created) VALUES (?,1,?,?,?)
+		ON CONFLICT(org_id) DO UPDATE SET revision=revision+1,prefix=excluded.prefix,actor=excluded.actor,created=excluded.created WHERE prefix<>excluded.prefix`,
+		assignment.OrgID, assignment.NetworkPrefix, actor, assignment.UpdatedAt.UnixNano()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO tenant_network_history(org_id,revision,prefix,actor,created)
+		SELECT org_id,revision,prefix,actor,created FROM tenant_network_versions WHERE org_id=?`, assignment.OrgID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO tenant_plans (org_id, plan_id, network_prefix, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(org_id) DO UPDATE SET

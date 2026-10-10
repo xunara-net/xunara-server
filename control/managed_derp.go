@@ -14,8 +14,10 @@ import (
 )
 
 type derpMapSnapshot struct {
-	Map         *tailcfg.DERPMap
-	Fingerprint string
+	Map              *tailcfg.DERPMap
+	Fingerprint      string
+	Sources          map[tailcfg.DERPRegionID]string
+	ExternalRevision uint64
 }
 
 // 仅合并当前租户的托管中继，不把注册记录升级成跨租户共享基础设施。
@@ -26,6 +28,16 @@ func (server *Server) refreshRelayMap(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("managed relay map requires a durable store")
 	}
+	document, external, err := server.externalDERPConfiguration(ctx)
+	if err != nil {
+		return err
+	}
+	sources := make(map[tailcfg.DERPRegionID]string)
+	if server.derpMap != nil {
+		for identifier := range server.derpMap.Regions {
+			sources[identifier] = "deployment"
+		}
+	}
 	rows, err := sqlite.DB().QueryContext(ctx, "SELECT id, region_id, hostname, region_code, region_name, derp_port, stun_port, cert_name, desired_state, healthy, last_seen, visibility FROM relays ORDER BY region_id")
 	if err != nil {
 		return err
@@ -34,6 +46,33 @@ func (server *Server) refreshRelayMap(ctx context.Context) error {
 	served := server.derpMap
 	if served != nil {
 		served = served.Clone()
+	}
+	for identifier, region := range external.Regions {
+		if server.cfg.DERPMap != nil && server.cfg.DERPMap.Regions[identifier] != nil {
+			return errDERPRegionConflict
+		}
+		if server.derpPolicy.Mode == DERPPolicyNone || server.derpPolicy.Mode == DERPPolicyRegions && !slices.Contains(server.derpPolicy.Regions, int(identifier)) {
+			continue
+		}
+		if served == nil {
+			served = emptyExternalDERPMap()
+		}
+		if served.Regions == nil {
+			served.Regions = make(map[tailcfg.DERPRegionID]*tailcfg.DERPRegion)
+		}
+		served.Regions[identifier] = region
+		sources[identifier] = "external"
+		if external.HomeParams != nil && external.HomeParams.RegionScore != nil {
+			if served.HomeParams == nil {
+				served.HomeParams = &tailcfg.DERPHomeParams{RegionScore: make(map[tailcfg.DERPRegionID]float64)}
+			}
+			if served.HomeParams.RegionScore == nil {
+				served.HomeParams.RegionScore = make(map[tailcfg.DERPRegionID]float64)
+			}
+			if score, found := external.HomeParams.RegionScore[identifier]; found {
+				served.HomeParams.RegionScore[identifier] = score
+			}
+		}
 	}
 	hasManaged := false
 	now := time.Now()
@@ -46,6 +85,9 @@ func (server *Server) refreshRelayMap(ctx context.Context) error {
 		}
 		if relay.RegionID <= 0 {
 			continue
+		}
+		if external.Regions[tailcfg.DERPRegionID(relay.RegionID)] != nil {
+			return errDERPRegionConflict
 		}
 		if relay.Visibility == state.RelayVisibilityPublic {
 			continue
@@ -71,6 +113,7 @@ func (server *Server) refreshRelayMap(ctx context.Context) error {
 			RegionID: regionID, RegionCode: relay.RegionCode, RegionName: relay.RegionName,
 			Nodes: []*tailcfg.DERPNode{{Name: "xunara-" + strconv.Itoa(relay.RegionID), RegionID: regionID, HostName: relay.HostName, DERPPort: relay.DERPPort, STUNPort: relay.STUNPort, CertName: relay.CertName}},
 		}
+		sources[regionID] = "managed"
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -82,8 +125,8 @@ func (server *Server) refreshRelayMap(ctx context.Context) error {
 	}
 	encoded, _ := json.Marshal(served)
 	fingerprint := string(encoded)
-	if previous == nil || previous.Fingerprint != fingerprint {
-		server.managedDERP.Store(&derpMapSnapshot{Map: served, Fingerprint: fingerprint})
+	if previous == nil || previous.Fingerprint != fingerprint || previous.ExternalRevision != document.Revision {
+		server.managedDERP.Store(&derpMapSnapshot{Map: served, Fingerprint: fingerprint, Sources: sources, ExternalRevision: document.Revision})
 		server.notifyWatchers()
 	}
 	return nil

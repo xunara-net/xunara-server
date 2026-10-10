@@ -109,6 +109,11 @@ func (s *SQLiteStore) ListRelayEnrollmentTokensContext(ctx context.Context) ([]R
 
 // EnrollRelay 把令牌、配额和身份绑定在一个写事务内；跨连接竞争由 BEGIN IMMEDIATE 串行化。
 func (store *SQLiteStore) EnrollRelay(ctx context.Context, enrollmentSecret string, relay Relay, token string, maxRelays int) (Relay, error) {
+	return store.EnrollRelayChecked(ctx, enrollmentSecret, relay, token, maxRelays, nil)
+}
+
+// EnrollRelayChecked 的平台检查与身份、一次性令牌消费共用事务；核心不依赖外部地图业务。
+func (store *SQLiteStore) EnrollRelayChecked(ctx context.Context, enrollmentSecret string, relay Relay, token string, maxRelays int, check func(context.Context, *sql.Tx) error) (Relay, error) {
 	prepared, err := prepareRelayForCreation(relay, token)
 	if err != nil {
 		return Relay{}, err
@@ -126,6 +131,11 @@ func (store *SQLiteStore) EnrollRelay(ctx context.Context, enrollmentSecret stri
 		return Relay{}, fmt.Errorf("state: beginning relay enrollment: %w", err)
 	}
 	defer transaction.Rollback()
+	if check != nil {
+		if err := check(ctx, transaction); err != nil {
+			return Relay{}, err
+		}
+	}
 
 	record, err := scanRelayEnrollmentToken(transaction.QueryRowContext(ctx,
 		`SELECT `+relayEnrollmentColumns+` FROM relay_enrollment_tokens WHERE secret_hash = ?`, RelaySecretHash(enrollmentSecret)))

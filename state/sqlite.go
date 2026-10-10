@@ -351,6 +351,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_relays_region_id ON relays(region_id) WHER
 ALTER TABLE relays ADD COLUMN execution_report TEXT NOT NULL DEFAULT '';
 ALTER TABLE relays ADD COLUMN execution_reported_at INTEGER;
 `,
+	// v23：实际分配范围持久化，跨实例分配与手动改 IP 使用同一事务边界。
+	`
+CREATE TABLE address_configuration (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	ipv4 TEXT NOT NULL,
+	ipv6 TEXT NOT NULL,
+	source_revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO address_configuration (id, ipv4, ipv6) VALUES (1, '100.64.0.0/10', 'fd7a:115c:a1e0::/48');
+CREATE UNIQUE INDEX idx_nodes_ipv4_unique ON nodes(ipv4) WHERE ipv4 IS NOT NULL AND ipv4 <> '';
+`,
 }
 
 // SQLiteStore is a durable [Store] backed by SQLite.
@@ -364,12 +375,6 @@ type SQLiteStore struct {
 	// mu makes "read counters, allocate, write" atomic across the two
 	// statements CreateNode needs.
 	mu sync.Mutex
-
-	// ipv4Prefix and ipv6Prefix are the ranges new nodes are allocated from.
-	// They default to the tailnet's well-known ranges and follow the tenant's
-	// commercial network block (see prefix.go).
-	ipv4Prefix netip.Prefix
-	ipv6Prefix netip.Prefix
 }
 
 // OpenSQLite opens (creating if necessary) a SQLite-backed store at path and
@@ -392,7 +397,7 @@ func OpenSQLite(ctx context.Context, path string) (*SQLiteStore, error) {
 	}
 	db.SetMaxOpenConns(1)
 
-	s := &SQLiteStore{db: db, ipv4Prefix: defaultIPv4Prefix, ipv6Prefix: defaultIPv6Prefix}
+	s := &SQLiteStore{db: db}
 	if err := s.migrate(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -764,15 +769,19 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 	}
 	n.ID = NodeID(nextID)
 
+	allocation, err := AddressConfigurationTx(ctx, tx)
+	if err != nil {
+		return err
+	}
 	if !n.IPv4.IsValid() {
-		addr, err := nextNodeAddr(ctx, tx, counterNextIPv4Offset, s.ipv4Prefix, "IPv4", nodeHasIPv4)
+		addr, err := nextNodeAddr(ctx, tx, counterNextIPv4Offset, allocation.IPv4, "IPv4", nodeHasIPv4)
 		if err != nil {
 			return err
 		}
 		n.IPv4 = addr
 	}
 	if !n.IPv6.IsValid() {
-		addr, err := nextNodeAddr(ctx, tx, counterNextIPv6Offset, s.ipv6Prefix, "IPv6", nodeHasIPv6)
+		addr, err := nextNodeAddr(ctx, tx, counterNextIPv6Offset, allocation.IPv6, "IPv6", nodeHasIPv6)
 		if err != nil {
 			return err
 		}
@@ -843,7 +852,7 @@ func (s *SQLiteStore) UpdateNode(n Node) error {
 
 	res, err := s.db.ExecContext(context.Background(), `UPDATE nodes SET
 			stable_id = ?, machine_key = ?, node_key = ?, disco_key = ?, user_id = ?,
-			hostname = ?, ipv4 = ?, ipv6 = ?, endpoints = ?, home_derp = ?,
+			hostname = ?, endpoints = ?, home_derp = ?,
 			cap_ver = ?, hostinfo = ?, last_seen = ?, expiry = ?, created = ?,
 			method = ?, ephemeral = ?, approved_routes = ?, tags = ?, key_signature = ?,
 			nl_key = ?
@@ -854,8 +863,6 @@ func (s *SQLiteStore) UpdateNode(n Node) error {
 		textOf(n.DiscoKey, ""),
 		int64(n.UserID),
 		n.Hostname,
-		nullableAddr(n.IPv4),
-		nullableAddr(n.IPv6),
 		endpoints,
 		int64(n.HomeDERP),
 		int64(n.CapVer),

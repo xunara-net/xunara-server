@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"slices"
 	"sort"
@@ -299,8 +300,11 @@ func (g *grpcPlatformServer) GetDERPStatus(ctx context.Context, _ *xunarav2.GetD
 		NodesWithUnservedHome: uint32(view.NodesWithUnservedHome),
 	}
 	for _, region := range view.Regions {
+		if region.ID > math.MaxInt32 {
+			return nil, status.Error(codes.OutOfRange, "region ID exceeds the legacy gRPC status field; use the HTTP DERP status endpoint")
+		}
 		out.Regions = append(out.Regions, &xunarav2.DERPRegion{
-			Id:        region.ID,
+			Id:        int32(region.ID),
 			Code:      region.Code,
 			Name:      region.Name,
 			Hosts:     region.Hosts,

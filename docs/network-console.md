@@ -1,10 +1,11 @@
-# 网络控制台：权限、DNS 与私有中继
+# 网络控制台：权限、DNS、地址与中继
 
 本说明是产品 API 的实现边界；使用步骤见
 [用户手册](https://github.com/xunara-net/xunara-docs/blob/main/docs/user/network-console.md)。
 前端为独立 xunara-web，Core 不依赖 Vue、可视化布局或网页身份。决策见
 [ADR-0018](adr/ADR-0018-network-console.md)、[ADR-0019](adr/ADR-0019-managed-relay-map.md)
-与 [ADR-0020](adr/ADR-0020-relay-configuration-history.md)、[ADR-0021](adr/ADR-0021-relay-runtime-execution.md)。
+与 [ADR-0020](adr/ADR-0020-relay-configuration-history.md)、[ADR-0021](adr/ADR-0021-relay-runtime-execution.md)、
+[ADR-0022](adr/ADR-0022-address-management-and-external-relays.md)。
 
 ## 权限数据流
 
@@ -37,6 +38,10 @@
 | `/api/v2/relays/{id}`、`/api/v2/relays/{id}/history` | GET 当前配置 / 历史、PATCH 修改或恢复、DELETE 版本保护删除；`control/relay_configuration.go`、`networkconfig/relay.go` |
 | `/api/platform/v1/organizations/{orgID}/relays/{relayID}` 及 `/history` | 独立平台凭据；同一版本与历史事务；`control/platform_relays.go` |
 | `/api/v2/derp` | GET 客户端实际下发地图；`control/api_v2_derp.go` |
+| `/api/v2/network/addresses`、`/validate` | GET 实际/期望网段，PUT 带版本保存，POST 仅校验预览；`control/address_management.go` |
+| `/api/v2/machines/{ref}/ipv4` | PUT 带旧 IP 基准显式修改单设备地址；`networkconfig/addresses.go`、`state/addresses.go` |
+| `/api/v2/derp/configuration`、`/history` | GET / PUT 非托管地图与 GET 版本历史；`control/external_derp.go` |
+| `/api/v2/derp/import-official` | POST 固定官方 HTTPS 地图预览，不自动保存；`control/external_derp.go` |
 
 配置发布要求当前 `revision` 和 `base_hash`，记录更新使用记录版本，删除要求
 `If-Match`。过期版本 409，不能连续重试覆盖；存储错误 503，不能伪装成空列表/互通。
@@ -87,9 +92,50 @@ DNS 只管理官方客户端实际支持的 A / AAAA 地址记录；设备自动
 中继上报真实编号 / pin，托管 CLI 自动设置持久租户准入，官方 DERP TLS 客户端验证
 该 pin；公网可达性、STUN 开放和实际设备通信仍需要部署实测。
 
+## 网段与单设备 IP
+
+官方客户端设备 IPv4 使用 `100.64.0.0/10` 子集；自定义网段支持 /16～/28，
+排除官方内部、分享、部署保留段及其他租户的现有/历史预留。RFC1918 用于子网
+路由，不作为官方客户端节点地址；兼容性勘误见 ADR-0022 与 upstream IP pool。
+自动地址分配与手动修改共用官方保留段检查，但不擅自改写已有设备。
+
+Free 的 `AllowCustomCIDR` 为 false；固定分配范围内的 IP 修改与网段能力分开，
+仍需网络管理员及写入门禁。IPv6 当前由系统分配，不能在此界面手工改写。
+预览不写状态，保存网段仅改变后续分配；已有设备不会批量断连或重编号。
+设备详情修改要求旧 IP 基准、地址未被占用并属于实际范围，失败保留草稿。
+标准自身/peer 地址更新沿用原 Mapper 与通知；心跳的旧副本不再覆盖地址列。
+按 IP 写的 ACL、自定义 DNS、应用或外部配置须由管理员显式同步，不能盲目替换。
+
+节点库保存实际范围与来源版本，分配在事务内读取。平台库先持久提交期望范围与
+新旧预留，再应用节点库；不是跨库原子事务。故障时返回失败，GET 标注 pending，
+现有实际范围保持，后台及重启重试收敛，不能假报已生效。
+地址、审计与配置通知同事务，角色/凭据在事务内复核；配置来源不依赖进程缓存。
+
+历史网段及补录的旧节点 /32 保守保留，删除/归档租户也不自动回收。尚未实现安全
+回收与批量迁移工作流；池空间不足须运维审查，不直接删预留或旧设备绕过冲突。
+升级发现既有设备与另一租户分配冲突时失败关闭，需要先审查，不自动更改生产 IP。
+
+## 默认、非托管与托管中继
+
+用户中心默认打开「可用中继」，展示实际部署/外部/托管来源及端口。非托管地图
+单独管理，可手工新增多节点地区或从固定官方 HTTPS 源导入草稿，确认后发布。
+导入不带凭据、不跟随重定向，有 context、超时与大小上限；不提供任意 URL 抓取。
+版本冲突保留草稿，恢复历史生成新版本；删除仅撤回本租户地图，不控制外部服务。
+
+地区编号不能覆盖部署地图或任何托管记录，离线/维护节点的编号也受保护；反向
+接入检查与令牌消费在同一事务。合并保留部署字段、完整节点/TLS 字段和 DERPPolicy，
+不自动把公开注册记录广播到其他租户。没有心跳的外部节点不伪造在线或执行回执。
+固定官方地图导入不承诺公共服务器一定接纳本平台节点，仍须独立测试外部服务。
+
+预编译程序及校验方法以
+[Relay 下载说明](https://github.com/xunara-net/xunara-relay/blob/main/docs/precompiled-release.md)
+为准；Web 固定到真实预览发布，不按浏览器系统自动误选服务器架构，不包含凭据。
+交叉编译与校验和不等于全 OS 现场验收、独立签名或自动升级。
+
 ## 迁移与验收
 
-state 只追加 v20（配置/历史与记录版本）、v21（中继地区/pin）及 v22（执行回执与接收时间），identity 保持 v13。
+state 只追加 v20（配置/历史与记录版本）、v21（中继地区/pin）、v22（执行回执与接收时间）、
+v23（持久分配范围及 IP 唯一性），平台 plans 追加 v4（预留/版本日志），identity 保持 v13。
 旧 DNS、设备、会话和中继凭据保留；旧二进制拒绝新 schema。回退必须在维护窗口
 同时恢复升级前完整一致性状态和旧产物，恢复业务后禁止用旧快照覆盖新写入。
 
@@ -98,3 +144,7 @@ state 只追加 v20（配置/历史与记录版本）、v21（中继地区/pin�
 `policy/managed_test.go`；在本仓库执行 build/vet/test/race。真实 Noise 流验证 DNS / ACL
 更新，官方 derphttp 客户端验证 TLS pin。跨实例故障保留有效快照并重试刷新，不承诺
 零传播延迟。权限允许不等于服务监听、防火墙放行或实时连接可达。
+
+本切片还验证 `control/address_management_test.go`、`control/external_derp_test.go`、
+`state/addresses_test.go`、`networkconfig/addresses_test.go` 与 `netspace/client_test.go`，
+包括实际/期望收敛、两连接抢占、审计回滚、地址自身/peer 下发、外部导入/碰撞/隔离。

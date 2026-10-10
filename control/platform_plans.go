@@ -154,13 +154,13 @@ func (r *Router) handlePlatformAllocateTenant(w http.ResponseWriter, req *http.R
 	// through SetTenantNetwork here would be wrong — that path is the
 	// operator's *custom* range and is refused for plans that forbid custom
 	// CIDRs, which is the shipped free plan.
-	if prefix, ok := registry.NetworkPrefix(req.Context(), orgID); ok {
+	{
 		org := r.orgByID(orgID)
 		if org == nil {
 			r.writeOrgAPIError(w, ErrOrgNotFound)
 			return
 		}
-		if err := org.site.Server.SetAddressPrefix(prefix); err != nil {
+		if err := org.site.Server.refreshAddressAllocation(req.Context()); err != nil {
 			r.writeOrgAPIError(w, err)
 			return
 		}

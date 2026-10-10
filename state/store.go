@@ -43,7 +43,8 @@ type Store interface {
 	// CreateNode assigns an ID, stable ID, addresses and creation time to a new
 	// node and stores it.
 	CreateNode(n *Node) error
-	// UpdateNode replaces a stored node. It fails if the node is unknown.
+	// UpdateNode replaces runtime node facts, keeping independently managed addresses.
+	// It fails if the node is unknown.
 	UpdateNode(n Node) error
 	// DeleteNode removes a node. It is a no-op if the node is unknown.
 	DeleteNode(id NodeID) error

@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xunara-net/xunara-server/netspace"
+
 	"tailscale.com/types/key"
 )
 
@@ -244,6 +246,7 @@ func (s *MemoryStore) UpdateNode(n Node) error {
 		s.byMach[old.MachineKey] = removeID(s.byMach[old.MachineKey], n.ID)
 		s.byMach[n.MachineKey] = append(s.byMach[n.MachineKey], n.ID)
 	}
+	n.IPv4, n.IPv6 = old.IPv4, old.IPv6
 	s.byID[n.ID] = n
 	return nil
 }
@@ -419,7 +422,7 @@ func (a *ipAllocator) next() (netip.Addr, bool) {
 			return netip.Addr{}, false
 		}
 		a.last = next
-		if isShareMasqAddr(next) {
+		if isShareMasqAddr(next) || netspace.IsClientReservedIPv4(next) {
 			continue
 		}
 		if a.skip != nil && a.skip(next) {

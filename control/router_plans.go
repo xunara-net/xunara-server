@@ -7,7 +7,9 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/xunara-net/xunara-server/networkconfig"
 	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // Plans at the router (PROJECT_SPEC section 54).
@@ -52,19 +54,47 @@ func (r *Router) Plans() *PlanRegistry { return r.cfg.Plans }
 // control plane learns how to look up its plan and starts allocating device
 // addresses from the tenant's block.
 func (r *Router) applyPlans(org *routerOrg) error {
-	registry := r.cfg.Plans
+	return org.site.Server.attachPlanRegistry(context.Background(), r.cfg.Plans, org.site.ID)
+}
+
+// AttachPlanRegistry 让单租户与路由器部署共用持久网段、冲突检查和重试链路。
+func (server *Server) AttachPlanRegistry(ctx context.Context, registry *PlanRegistry) error {
+	return server.attachPlanRegistry(ctx, registry, server.TenantID())
+}
+
+func (server *Server) attachPlanRegistry(ctx context.Context, registry *PlanRegistry, orgID string) error {
 	if registry == nil {
 		return nil
 	}
-	org.site.Server.setPlanSource(func(tenantID string) plan.Plan {
+	server.setPlanSource(func(tenantID string) plan.Plan {
 		return registry.Plan(context.Background(), tenantID)
 	})
-	prefix, ok := registry.NetworkPrefix(context.Background(), org.site.ID)
-	if !ok {
-		return nil
+	nodes, err := server.networkNodes(ctx)
+	if err != nil {
+		return err
 	}
-	if err := org.site.Server.SetAddressPrefix(prefix); err != nil {
-		return fmt.Errorf("control: applying the network range of organization %q: %w", org.site.ID, err)
+	if err := registry.reserveLegacyAddresses(ctx, orgID, nodes); err != nil {
+		return err
+	}
+	server.addressSource.Store(&addressSource{
+		Load: func(ctx context.Context) (networkVersion, error) { return registry.networkVersion(ctx, orgID) },
+		Change: func(ctx context.Context, prefix netip.Prefix, expected *uint64, actor string) (networkVersion, error) {
+			if _, err := registry.setNetwork(ctx, orgID, prefix, expected, actor); err != nil {
+				return networkVersion{}, err
+			}
+			version, err := registry.networkVersion(ctx, orgID)
+			if err == nil && version.Prefix != prefix.String() {
+				return networkVersion{}, state.ErrAddressConflict
+			}
+			return version, err
+		},
+		Validate: func(ctx context.Context, prefix netip.Prefix) error {
+			return registry.validateNetwork(ctx, orgID, prefix)
+		},
+		Reserved: registry.Reserved(),
+	})
+	if err := server.refreshAddressAllocation(ctx); err != nil {
+		return fmt.Errorf("control: applying the network range of organization %q: %w", orgID, err)
 	}
 	return nil
 }
@@ -128,10 +158,14 @@ func (r *Router) SetTenantPlan(ctx context.Context, orgID, planID string) (Tenan
 	if registry == nil {
 		return TenantPlanRow{}, errors.New("control: this deployment does not serve plans")
 	}
-	if r.orgByID(orgID) == nil {
+	org := r.orgByID(orgID)
+	if org == nil {
 		return TenantPlanRow{}, ErrTenantNotFound
 	}
 	if _, err := registry.AssignPlan(ctx, orgID, planID); err != nil {
+		return TenantPlanRow{}, err
+	}
+	if err := org.site.Server.refreshAddressAllocation(ctx); err != nil {
 		return TenantPlanRow{}, err
 	}
 	return r.TenantPlan(ctx, orgID)
@@ -148,14 +182,18 @@ func (r *Router) SetTenantNetwork(ctx context.Context, orgID string, prefix neti
 	if org == nil {
 		return TenantPlanRow{}, ErrTenantNotFound
 	}
-	if _, err := registry.SetNetwork(ctx, orgID, prefix); err != nil {
-		return TenantPlanRow{}, err
-	}
-	applied, ok := registry.NetworkPrefix(ctx, orgID)
-	if !ok {
-		return TenantPlanRow{}, errors.New("control: the stored network range could not be read back")
-	}
-	if err := org.site.Server.SetAddressPrefix(applied); err != nil {
+	_, err := org.site.Server.networkConfig.SaveAllocation(ctx, nil, func(ctx context.Context, current state.AddressConfiguration) (networkconfig.AllocationUpdate, error) {
+		if _, err := registry.SetNetwork(ctx, orgID, prefix); err != nil {
+			return networkconfig.AllocationUpdate{}, err
+		}
+		version, err := registry.networkVersion(ctx, orgID)
+		if err != nil {
+			return networkconfig.AllocationUpdate{}, err
+		}
+		configuration, err := allocationFromVersion(current, version)
+		return networkconfig.AllocationUpdate{Configuration: configuration, Actor: "platform:" + orgID}, err
+	})
+	if err != nil {
 		return TenantPlanRow{}, err
 	}
 	return r.TenantPlan(ctx, orgID)

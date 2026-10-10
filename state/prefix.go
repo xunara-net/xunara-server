@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
+
+	"github.com/xunara-net/xunara-server/netspace"
 )
 
 // Tenant network ranges (PROJECT_SPEC section 54).
@@ -17,10 +19,8 @@ import (
 // feature; the commercial half (which tenant holds which range, and whether
 // its plan allows a custom one) lives in the platform's PlanRegistry.
 //
-// The ranges are process-local on purpose: the registry is the durable source
-// of truth and the router applies a tenant's range when it starts the
-// tenant's control plane. Nothing here is written to the node database, so a
-// downgrade or a deleted registry row cannot leave a tailnet unable to start.
+// 平台记录期望网段，节点库持久记录实际分配网段。分配事务读取节点库，
+// 不依赖进程内缓存；重启或多个实例不能重新使用旧的地址池。
 //
 // Changing a range never re-addresses a node: devices keep the addresses they
 // registered with (a live tailnet must not be renumbered under its users), and
@@ -48,24 +48,6 @@ func (s *SQLiteStore) SetAddressPrefixes(v4, v6 netip.Prefix) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	changed := false
-	if v4.IsValid() && v4 != s.ipv4Prefix {
-		s.ipv4Prefix = v4
-		changed = true
-	}
-	if v6.IsValid() && v6 != s.ipv6Prefix {
-		s.ipv6Prefix = v6
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	// Allocation restarts at the beginning of each range: the offsets that
-	// were handed out under the previous range are meaningless now, and
-	// starting over is what lets a tenant move to a smaller range without
-	// hitting a stale counter. Addresses already in use are skipped by the
-	// allocator itself. The first counter value is 1, so the first address
-	// handed out is the first host address of the range (never its base).
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -73,12 +55,18 @@ func (s *SQLiteStore) SetAddressPrefixes(v4, v6 netip.Prefix) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
-	for _, counter := range []string{counterNextIPv4Offset, counterNextIPv6Offset} {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO counters (name, value) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET value = 1",
-			counter); err != nil {
-			return fmt.Errorf("state: resetting address allocation: %w", err)
-		}
+	configuration, err := AddressConfigurationTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if v4.IsValid() {
+		configuration.IPv4 = v4.Masked()
+	}
+	if v6.IsValid() {
+		configuration.IPv6 = v6.Masked()
+	}
+	if _, err := ApplyAddressConfigurationTx(ctx, tx, configuration); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("state: committing prefix update: %w", err)
@@ -88,9 +76,11 @@ func (s *SQLiteStore) SetAddressPrefixes(v4, v6 netip.Prefix) error {
 
 // AddressPrefixes returns the ranges new nodes are allocated from.
 func (s *SQLiteStore) AddressPrefixes() (netip.Prefix, netip.Prefix) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ipv4Prefix, s.ipv6Prefix
+	configuration, err := s.AddressConfiguration(context.Background())
+	if err != nil {
+		return netip.Prefix{}, netip.Prefix{}
+	}
+	return configuration.IPv4, configuration.IPv6
 }
 
 // SetAddressPrefixes replaces the ranges new nodes are allocated from. An
@@ -218,7 +208,7 @@ func nextNodeAddr(
 		if !ok {
 			return netip.Addr{}, addrExhausted(family)
 		}
-		if isShareMasqAddr(addr) {
+		if isShareMasqAddr(addr) || netspace.IsClientReservedIPv4(addr) {
 			continue
 		}
 		taken, err := inUse(ctx, tx, addr)

@@ -298,6 +298,11 @@ func (s *Server) runConfigWatcher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// 期望库已提交而节点库失败时，通知版本尚未增加，也必须重试收敛。
+			if err := s.refreshAddressAllocation(ctx); err != nil {
+				s.log.Error("reconciling allocation range", "err", err)
+				continue
+			}
 			if rev := s.store.ConfigRevision(); rev != last {
 				if err := s.refreshManagedConfiguration(ctx); err != nil {
 					s.log.Error("refreshing committed network configuration", "err", err)
