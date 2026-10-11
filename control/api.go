@@ -247,6 +247,7 @@ func (s *Server) apiRouter() http.Handler {
 
 	r.Get("/machines", s.handleAPIMachines)
 	r.Get("/machines/{ref}", s.handleAPIMachine)
+	r.Get("/machines/{ref}/connection", s.handleAPIMachineConnection)
 	r.Delete("/machines/{ref}", s.handleAPIDeleteMachine)
 	r.Post("/machines/{ref}/routes", s.handleAPIMachineRoutes)
 	r.Get("/routes", s.handleAPIRoutes)

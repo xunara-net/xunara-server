@@ -130,3 +130,9 @@ func NewPublicIdentityHTTPClient() *http.Client {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
+
+// PublicEndpointDialer 复用同一公网地址边界；调用方自行设置 TLS，但不能重新解析目标或使用代理。
+func PublicEndpointDialer() func(context.Context, string, string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	return identityPublicDialer(resolveIdentityAddresses, dialer.DialContext)
+}

@@ -22,6 +22,10 @@ func (s *SQLiteStore) AppendAudit(e *AuditEvent) error {
 	if err != nil {
 		return fmt.Errorf("identity: appending audit event: %w", err)
 	}
+	// SQLite 触发器可以忽略 INSERT；没有落盘的审计不能被报告为成功。
+	if affected, err := res.RowsAffected(); err != nil || affected != 1 {
+		return fmt.Errorf("identity: audit event was not stored")
+	}
 
 	id, err := res.LastInsertId()
 	if err != nil {
