@@ -133,19 +133,20 @@ type AuditEvent struct {
 // AuditActions are the actions this build records. They are constants so that
 // the log stays greppable and so that action names cannot drift.
 const (
-	AuditUserCreated          = "user.created"
-	AuditUserUpdated          = "user.updated"
-	AuditUserRoleChanged      = "user.role_changed"
-	AuditUserDisabled         = "user.disabled"
-	AuditUserEnabled          = "user.enabled"
-	AuditPasswordChanged      = "user.password_changed"
-	AuditPasswordResetIssued  = "user.password_reset_issued"
-	AuditPasswordResetUsed    = "user.password_reset_used"
-	AuditPasswordChangeFailed = "user.password_change_failed"
-	AuditNodeRegistered       = "node.registered"
-	AuditNodeApproved         = "node.approved"
-	AuditNodeReaped           = "node.reaped"
-	AuditNodeDeleted          = "node.deleted"
+	AuditUserCreated           = "user.created"
+	AuditUserUpdated           = "user.updated"
+	AuditAccountExportPrepared = "account.export_prepared"
+	AuditUserRoleChanged       = "user.role_changed"
+	AuditUserDisabled          = "user.disabled"
+	AuditUserEnabled           = "user.enabled"
+	AuditPasswordChanged       = "user.password_changed"
+	AuditPasswordResetIssued   = "user.password_reset_issued"
+	AuditPasswordResetUsed     = "user.password_reset_used"
+	AuditPasswordChangeFailed  = "user.password_change_failed"
+	AuditNodeRegistered        = "node.registered"
+	AuditNodeApproved          = "node.approved"
+	AuditNodeReaped            = "node.reaped"
+	AuditNodeDeleted           = "node.deleted"
 	// AuditNodeKeyRotated records a node key rotation: the same machine key
 	// re-authorized with a new node key, so the node kept its identity
 	// (ID/StableID/ownership) instead of registering a duplicate.

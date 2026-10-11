@@ -9,6 +9,8 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+const accountLoginRecordColumns = "id, auth_method, kind, created_at, expires_at, last_seen_at, revoked_at, revoked_reason, client_ip, user_agent"
+
 func (store *SQLiteStore) ListAccountLoginHistory(ctx context.Context, userID tailcfg.UserID, options LoginHistoryOptions) (LoginHistoryPage, error) {
 	limit, cursor, err := options.validate()
 	if err != nil {
@@ -17,8 +19,7 @@ func (store *SQLiteStore) ListAccountLoginHistory(ctx context.Context, userID ta
 	if userID == 0 {
 		return LoginHistoryPage{}, ErrUserNotFound
 	}
-	query := `SELECT id, auth_method, kind, created_at, expires_at, last_seen_at,
-		revoked_at, revoked_reason, client_ip, user_agent FROM account_login_records WHERE user_id = ?`
+	query := "SELECT " + accountLoginRecordColumns + " FROM account_login_records WHERE user_id = ?"
 	arguments := []any{int64(userID)}
 	if cursor.id != "" {
 		query += " AND (created_at < ? OR (created_at = ? AND id < ?))"
@@ -33,21 +34,9 @@ func (store *SQLiteStore) ListAccountLoginHistory(ctx context.Context, userID ta
 	defer rows.Close()
 	page := LoginHistoryPage{Records: make([]LoginRecord, 0, limit)}
 	for rows.Next() {
-		var record LoginRecord
-		var createdAt, expiresAt int64
-		var lastSeenAt, revokedAt sql.NullInt64
-		if err := rows.Scan(&record.ID, &record.AuthMethod, &record.Kind, &createdAt, &expiresAt,
-			&lastSeenAt, &revokedAt, &record.RevokedReason, &record.ClientInfo.IP, &record.ClientInfo.UserAgent); err != nil {
+		record, err := scanAccountLoginRecord(rows, userID)
+		if err != nil {
 			return LoginHistoryPage{}, fmt.Errorf("identity: reading account login history: %w", err)
-		}
-		record.UserID = userID
-		record.CreatedAt = time.Unix(0, createdAt).UTC()
-		record.ExpiresAt = time.Unix(0, expiresAt).UTC()
-		if lastSeenAt.Valid {
-			record.LastSeenAt = time.Unix(0, lastSeenAt.Int64).UTC()
-		}
-		if revokedAt.Valid {
-			record.RevokedAt = time.Unix(0, revokedAt.Int64).UTC()
 		}
 		page.Records = append(page.Records, record)
 	}
@@ -59,6 +48,27 @@ func (store *SQLiteStore) ListAccountLoginHistory(ctx context.Context, userID ta
 		page.NextCursor = encodeLoginHistoryCursor(page.Records[limit-1])
 	}
 	return page, nil
+}
+
+// 分页和快照复用同一字段投影，避免导出读取令牌哈希或产生第二套时间转换。
+func scanAccountLoginRecord(row rowScanner, userID tailcfg.UserID) (LoginRecord, error) {
+	var record LoginRecord
+	var createdAt, expiresAt int64
+	var lastSeenAt, revokedAt sql.NullInt64
+	if err := row.Scan(&record.ID, &record.AuthMethod, &record.Kind, &createdAt, &expiresAt,
+		&lastSeenAt, &revokedAt, &record.RevokedReason, &record.ClientInfo.IP, &record.ClientInfo.UserAgent); err != nil {
+		return LoginRecord{}, err
+	}
+	record.UserID = userID
+	record.CreatedAt = time.Unix(0, createdAt).UTC()
+	record.ExpiresAt = time.Unix(0, expiresAt).UTC()
+	if lastSeenAt.Valid {
+		record.LastSeenAt = time.Unix(0, lastSeenAt.Int64).UTC()
+	}
+	if revokedAt.Valid {
+		record.RevokedAt = time.Unix(0, revokedAt.Int64).UTC()
+	}
+	return record, nil
 }
 
 // 删除账号的隐私清理不能只依赖连接的 foreign_keys 设置；忽略写入也必须回滚。

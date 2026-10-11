@@ -33,7 +33,7 @@ func (s *SQLiteStore) AllowRate(scope string, limit int, window time.Duration, n
 		Scan(&startNanos, &count)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if _, err := tx.ExecContext(ctx,
+		if err := persistRateLimit(ctx, tx,
 			"INSERT INTO rate_limits(scope, window_start, count) VALUES(?, ?, 1)",
 			scope, now.UnixNano()); err != nil {
 			return false, 0, fmt.Errorf("state: rate limiting %q: %w", scope, err)
@@ -51,7 +51,7 @@ func (s *SQLiteStore) AllowRate(scope string, limit int, window time.Duration, n
 		count:       count,
 	}, limit, window, now)
 	if allowed {
-		if _, err := tx.ExecContext(ctx,
+		if err := persistRateLimit(ctx, tx,
 			"UPDATE rate_limits SET window_start = ?, count = ? WHERE scope = ?",
 			bucket.windowStart.UnixNano(), bucket.count, scope); err != nil {
 			return false, 0, fmt.Errorf("state: rate limiting %q: %w", scope, err)
@@ -61,6 +61,22 @@ func (s *SQLiteStore) AllowRate(scope string, limit int, window time.Duration, n
 		return false, 0, fmt.Errorf("state: rate limiting %q: %w", scope, err)
 	}
 	return allowed, retryAfter, nil
+}
+
+// 忽略 INSERT / UPDATE 不能当成消耗配额成功，否则导出等入口会静默绕过限流。
+func persistRateLimit(ctx context.Context, transaction *sql.Tx, query string, arguments ...any) error {
+	result, err := transaction.ExecContext(ctx, query, arguments...)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return errors.New("state: rate admission did not persist exactly one row")
+	}
+	return nil
 }
 
 // PruneRateLimits implements [RateLimitStore].

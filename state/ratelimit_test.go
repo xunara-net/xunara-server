@@ -135,3 +135,36 @@ func TestSQLiteRateLimitConformance(t *testing.T) {
 		return openTestSQLite(t, t.TempDir()+"/state.db")
 	})
 }
+
+func TestSQLiteRateLimitIgnoredWritesFailClosed(test *testing.T) {
+	for _, operation := range []string{"INSERT", "UPDATE"} {
+		test.Run(operation, func(test *testing.T) {
+			store := openTestSQLite(test, test.TempDir()+"/rate.db")
+			now := time.Now()
+			if operation == "UPDATE" {
+				if allowed, _, err := store.AllowRate("export-test", 5, time.Minute, now); err != nil || !allowed {
+					test.Fatal("could not initialize the isolated bucket")
+				}
+			}
+			if _, err := store.db.Exec("CREATE TRIGGER ignore_rate BEFORE " + operation + " ON rate_limits BEGIN SELECT RAISE(IGNORE); END"); err != nil {
+				test.Fatal(err)
+			}
+			if allowed, _, err := store.AllowRate("export-test", 5, time.Minute, now); err == nil || allowed {
+				test.Fatal("ignored quota consumption was admitted")
+			}
+			var count int
+			if err := store.db.QueryRow("SELECT COALESCE(SUM(count),0) FROM rate_limits WHERE scope = 'export-test'").Scan(&count); err != nil {
+				test.Fatal(err)
+			}
+			if operation == "INSERT" && count != 0 || operation == "UPDATE" && count != 1 {
+				test.Fatal("failed admission changed the persisted bucket")
+			}
+			if _, err := store.db.Exec("DROP TRIGGER ignore_rate"); err != nil {
+				test.Fatal(err)
+			}
+			if allowed, _, err := store.AllowRate("export-test", 5, time.Minute, now); err != nil || !allowed {
+				test.Fatal("rate admission did not recover")
+			}
+		})
+	}
+}

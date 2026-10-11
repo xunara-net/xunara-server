@@ -27,4 +27,5 @@ type AccountStore interface {
 	DeleteAccountPasskey(ctx context.Context, userID tailcfg.UserID, initiatingID, passkeyID string) error
 	CreatePasskeySession(ctx context.Context, userID tailcfg.UserID, passkeyID string, ttl time.Duration, clientInfo ...SessionClientInfo) (Session, string, error)
 	ListAccountLoginHistory(ctx context.Context, userID tailcfg.UserID, options LoginHistoryOptions) (LoginHistoryPage, error)
+	PrepareAccountExport(ctx context.Context, userID tailcfg.UserID, sessionID string, options AccountExportOptions) (AccountExportSnapshot, error)
 }

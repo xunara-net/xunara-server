@@ -176,6 +176,10 @@ go run ./cmd/xunarad \
 本人安全中心；轮换 / 旧记录明确区分，不猜城市或设备信任。接口、身份 v18、
 保留和故障 / 升级边界见[登录记录说明](docs/account-login-history.md)。
 
+个人设置新增本人账户安全资料 JSON / 成功登录记录 CSV 导出；私有白名单快照、
+日期范围、完整拒绝超限和必需准备审计见[账户导出说明](docs/account-security-export.md)。
+不提供凭据或其他成员数据，不等于全部网络备份；本切片不新增迁移。
+
 - `GET /api/v1/account` 返回当前用户资料、`password_change_enabled` 和
   `csrf_token`，仅接受本租户的人类 Session，API Key 不可访问。
 - `PATCH /api/v1/account` 仅接受可选的 `display_name` 与 `email`，不接受用户

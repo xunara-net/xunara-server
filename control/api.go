@@ -237,6 +237,7 @@ func (s *Server) apiRouter() http.Handler {
 	r.Delete("/account/identities/{id}", s.handleAPIUnlinkAccountIdentity)
 	r.Get("/account/sessions", s.handleAPIAccountSessions)
 	r.Get("/account/login-history", s.handleAPIAccountLoginHistory)
+	r.Post("/account/export", s.handleAPIAccountExport)
 	r.Post("/account/sessions/revoke", s.handleAPIRevokeAccountSessions)
 	r.Delete("/account/sessions/{id}", s.handleAPIRevokeAccountSession)
 	r.Get("/account/passkeys", s.handleAPIAccountPasskeys)
