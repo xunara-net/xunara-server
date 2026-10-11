@@ -46,10 +46,11 @@ func CheckNetworkWriter(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, 
 		}
 	}
 	var role string
-	if err := tx.QueryRowContext(ctx, "SELECT role FROM users WHERE id = ?", int64(userID)).Scan(&role); err != nil {
+	var disabled bool
+	if err := tx.QueryRowContext(ctx, "SELECT role, disabled_at IS NOT NULL FROM users WHERE id = ?", int64(userID)).Scan(&role, &disabled); err != nil {
 		return fmt.Errorf("identity: checking network writer: %w", err)
 	}
-	if !Role(role).CanWrite() {
+	if disabled || !Role(role).CanWrite() {
 		return ErrNetworkWriterForbidden
 	}
 	return nil

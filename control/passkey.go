@@ -72,6 +72,10 @@ func (server *Server) handlePasskeyLoginFinish(writer http.ResponseWriter, reque
 	}
 	session, token, err := server.identity.CreatePasskeySession(request.Context(), user.ID, used.ID, server.sessionTTL)
 	if err != nil {
+		if errors.Is(err, identity.ErrUserDisabled) {
+			writeAPIError(writer, http.StatusUnauthorized, "PASSKEY_LOGIN_FAILED: sign-in is not available for this credential")
+			return
+		}
 		writeAPIError(writer, http.StatusInternalServerError, "PASSKEY_LOGIN_FAILED: could not create a session; start sign-in again")
 		return
 	}

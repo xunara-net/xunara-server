@@ -91,6 +91,7 @@ func (r *Router) mountPlatform(pr chi.Router) {
 
 	pr.Get("/v1/users", r.handlePlatformUsers)
 	pr.Post("/v1/organizations/{orgID}/users/{userID}/revoke", r.handlePlatformRevokeUserSessions)
+	pr.Patch("/v1/organizations/{orgID}/users/{userID}/status", r.handlePlatformUserStatus)
 	pr.Delete("/v1/organizations/{orgID}/users/{userID}", r.handlePlatformDeleteUser)
 }
 

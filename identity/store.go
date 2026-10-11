@@ -124,6 +124,7 @@ type Store interface {
 	LocalCredentialStore
 	AccountStore
 	MemberStore
+	UserStatusStore
 	RegistrationInviteStore
 	RegistrationStore
 	BootstrapStore

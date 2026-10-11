@@ -312,7 +312,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 			status, message = http.StatusConflict, "This external identity already belongs to another account. Accounts are never merged by email."
 		case errors.Is(err, identity.ErrInviteUsed), errors.Is(err, identity.ErrInviteExpired), errors.Is(err, identity.ErrInviteNotFound):
 			status, message = http.StatusForbidden, "This invitation has expired, was revoked or has already been used. Ask the owner for a new code."
-		case errors.Is(err, identity.ErrSessionRevoked), errors.Is(err, identity.ErrCredentialChanged), errors.Is(err, identity.ErrTransactionConsumed):
+		case errors.Is(err, identity.ErrSessionRevoked), errors.Is(err, identity.ErrCredentialChanged), errors.Is(err, identity.ErrTransactionConsumed), errors.Is(err, identity.ErrUserDisabled):
 			status, message = http.StatusForbidden, "This authorization or initiating session is no longer valid. Start again."
 		}
 		s.renderError(w, r, status, "Authorization failed", message)

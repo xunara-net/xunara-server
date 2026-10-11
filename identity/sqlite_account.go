@@ -113,7 +113,7 @@ func (store *SQLiteStore) ChangeLocalPassword(ctx context.Context, userID tailcf
 		UPDATE local_credentials SET password_hash = ?, updated_at = ?
 		WHERE user_id = ? AND password_hash = ? AND EXISTS (
 			SELECT 1 FROM sessions WHERE id = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?
-		) AND EXISTS (SELECT 1 FROM users WHERE id = ?)`,
+		) AND EXISTS (SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL)`,
 		replacementHash, now.UnixNano(), int64(userID), expectedHash, sessionID, int64(userID), now.UnixNano(), int64(userID))
 	if err != nil {
 		return 0, fmt.Errorf("identity: replacing password: %w", err)
@@ -155,7 +155,7 @@ func lockAccountSession(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE sessions SET last_seen_at = last_seen_at
 		WHERE id = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?
-		AND EXISTS (SELECT 1 FROM users WHERE id = ?)`,
+		AND EXISTS (SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL)`,
 		sessionID, int64(userID), now.UnixNano(), int64(userID))
 	if err != nil {
 		return fmt.Errorf("identity: checking initiating session: %w", err)

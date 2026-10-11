@@ -18,22 +18,27 @@ import (
 
 // platformUser is one account as the platform API reports it.
 type platformUser struct {
-	Org         string     `json:"org"`
-	OrgName     string     `json:"orgName"`
-	ID          uint64     `json:"id"`
-	Login       string     `json:"login"`
-	DisplayName string     `json:"displayName"`
-	Email       string     `json:"email"`
-	Role        string     `json:"role"`
-	Plan        string     `json:"plan"`
-	Sessions    int        `json:"sessions"`
-	LastSeen    *time.Time `json:"lastSeen,omitempty"`
-	CreatedAt   time.Time  `json:"createdAt"`
+	Org            string     `json:"org"`
+	OrgName        string     `json:"orgName"`
+	ID             uint64     `json:"id"`
+	Login          string     `json:"login"`
+	DisplayName    string     `json:"displayName"`
+	Email          string     `json:"email"`
+	Role           string     `json:"role"`
+	Plan           string     `json:"plan"`
+	Sessions       int        `json:"sessions"`
+	LastSeen       *time.Time `json:"lastSeen,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	Disabled       bool       `json:"disabled"`
+	DisabledAt     *time.Time `json:"disabledAt,omitempty"`
+	DisabledReason string     `json:"disabledReason"`
 }
 
 // handlePlatformUsers implements GET /api/platform/v1/users: every account on
 // the deployment, grouped by tenant.
 func (r *Router) handlePlatformUsers(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	now := time.Now().UTC()
 	out := []platformUser{}
 	for _, org := range r.orgSnapshot() {
@@ -42,14 +47,29 @@ func (r *Router) handlePlatformUsers(w http.ResponseWriter, req *http.Request) {
 		if r.cfg.Plans != nil {
 			planID = r.cfg.Plans.Plan(req.Context(), org.site.ID).ID
 		}
-		for _, u := range server.identity.ListUsers() {
+		users, err := server.identity.ListUsersContext(req.Context())
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "USER_STATUS_UNAVAILABLE: could not read accounts")
+			return
+		}
+		for _, u := range users {
 			row := platformUser{
 				Org: org.site.ID, OrgName: org.site.Name,
 				ID: uint64(u.ID), Login: u.LoginName, DisplayName: u.DisplayName,
 				Email: u.Email, Role: string(u.Role), Plan: planID,
-				CreatedAt: u.CreatedAt,
+				CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+				Disabled: !u.DisabledAt.IsZero(), DisabledReason: u.DisabledReason,
 			}
-			for _, session := range server.identity.ListSessions(u.ID) {
+			if row.Disabled {
+				disabledAt := u.DisabledAt
+				row.DisabledAt = &disabledAt
+			}
+			sessions, err := server.identity.ListAccountSessions(req.Context(), u.ID)
+			if err != nil {
+				writeAPIError(w, http.StatusServiceUnavailable, "USER_STATUS_UNAVAILABLE: could not read account sessions")
+				return
+			}
+			for _, session := range sessions {
 				if session.RevokedAt.IsZero() && session.ExpiresAt.After(now) {
 					row.Sessions++
 					if session.LastSeenAt.After(session.CreatedAt) && (row.LastSeen == nil || session.LastSeenAt.After(*row.LastSeen)) {
@@ -62,6 +82,60 @@ func (r *Router) handlePlatformUsers(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
+}
+
+// 平台状态写入只接受完整版本与明确布尔值；普通租户 Cookie 不能使用此管理入口。
+func (router *Router) handlePlatformUserStatus(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	orgID := chi.URLParam(request, "orgID")
+	server := router.serverFor(orgID)
+	userID, err := strconv.ParseUint(chi.URLParam(request, "userID"), 10, 64)
+	if server == nil || err != nil || userID == 0 {
+		writeAPIError(writer, http.StatusNotFound, "USER_NOT_FOUND: unknown tenant or account")
+		return
+	}
+	var body struct {
+		Disabled          *bool     `json:"disabled"`
+		Reason            string    `json:"reason"`
+		ExpectedUpdatedAt time.Time `json:"expected_updated_at"`
+	}
+	if !decodeAccountBodyLimit(writer, request, &body, 4<<10) {
+		return
+	}
+	if body.ExpectedUpdatedAt.IsZero() {
+		writeAPIError(writer, http.StatusPreconditionRequired, "USER_VERSION_REQUIRED: refresh before changing account status")
+		return
+	}
+	if body.Disabled == nil {
+		writeAPIError(writer, http.StatusBadRequest, "USER_STATUS_INVALID: disabled must be provided")
+		return
+	}
+	result, err := server.identity.SetUserStatusByPlatform(request.Context(), tailcfgUserID(userID), identity.UserStatusChange{
+		Disabled: *body.Disabled, Reason: body.Reason, ExpectedUpdatedAt: body.ExpectedUpdatedAt,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, identity.ErrMemberConflict):
+			writeAPIError(writer, http.StatusConflict, "USER_STATUS_CHANGED: account changed; refresh and review before submitting")
+		case errors.Is(err, identity.ErrLastOwner):
+			writeAPIError(writer, http.StatusConflict, "LAST_ACTIVE_OWNER: a tailnet needs at least one enabled owner")
+		case errors.Is(err, identity.ErrUserNotFound):
+			writeAPIError(writer, http.StatusNotFound, "USER_NOT_FOUND: unknown account")
+		case errors.Is(err, identity.ErrMemberInvalid):
+			writeAPIError(writer, http.StatusBadRequest, "USER_STATUS_INVALID: provide a reason of 1 to 256 characters without control characters")
+		default:
+			writeAPIError(writer, http.StatusServiceUnavailable, "USER_STATUS_UNAVAILABLE: could not commit account status; refresh to check the result")
+		}
+		return
+	}
+	payload := map[string]any{
+		"org": orgID, "id": uint64(result.User.ID), "disabled": !result.User.DisabledAt.IsZero(),
+		"disabledReason": result.User.DisabledReason, "updatedAt": result.User.UpdatedAt, "revoked": result.RevokedSessions,
+	}
+	if !result.User.DisabledAt.IsZero() {
+		payload["disabledAt"] = result.User.DisabledAt
+	}
+	writeJSON(writer, http.StatusOK, payload)
 }
 
 // handlePlatformRevokeUserSessions implements

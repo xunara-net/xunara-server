@@ -30,6 +30,9 @@ type User struct {
 	Role      Role
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// 禁用只约束人类登录及其委托权限，不改变机器或中继的独立信任。
+	DisabledAt     time.Time
+	DisabledReason string
 }
 
 // ExternalIdentity binds a user to an account at an external provider.
@@ -133,6 +136,8 @@ const (
 	AuditUserCreated          = "user.created"
 	AuditUserUpdated          = "user.updated"
 	AuditUserRoleChanged      = "user.role_changed"
+	AuditUserDisabled         = "user.disabled"
+	AuditUserEnabled          = "user.enabled"
 	AuditPasswordChanged      = "user.password_changed"
 	AuditPasswordChangeFailed = "user.password_change_failed"
 	AuditNodeRegistered       = "node.registered"

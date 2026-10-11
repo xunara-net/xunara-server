@@ -29,6 +29,7 @@ func (s *SQLiteStore) CreateSession(opts NewSessionOptions) (Session, string, er
 // executor so rotation can revoke and reissue inside one transaction.
 func (s *SQLiteStore) createSession(ctx context.Context, exec interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, opts NewSessionOptions, token string) (Session, error) {
 	if opts.UserID == 0 {
 		return Session{}, fmt.Errorf("identity: session needs a user")
@@ -56,10 +57,11 @@ func (s *SQLiteStore) createSession(ctx context.Context, exec interface {
 	}
 
 	result, err := exec.ExecContext(ctx,
-		`INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '', ?)`,
+		`INSERT INTO sessions (`+sessionColumns+`) SELECT ?, ?, ?, ?, ?, ?, ?, NULL, '', ?
+		WHERE EXISTS (SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL)`,
 		session.ID, HashSecret(token), int64(session.UserID), session.AuthMethod,
 		session.CreatedAt.UnixNano(), session.ExpiresAt.UnixNano(), session.LastSeenAt.UnixNano(),
-		session.RotatedFrom)
+		session.RotatedFrom, int64(session.UserID))
 	if err != nil {
 		return Session{}, fmt.Errorf("identity: creating session: %w", err)
 	}
@@ -69,6 +71,17 @@ func (s *SQLiteStore) createSession(ctx context.Context, exec interface {
 		return Session{}, fmt.Errorf("identity: checking session insertion: %w", err)
 	}
 	if affected != 1 {
+		var disabled bool
+		err := exec.QueryRowContext(ctx, "SELECT disabled_at IS NOT NULL FROM users WHERE id = ?", int64(opts.UserID)).Scan(&disabled)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Session{}, ErrUserNotFound
+		}
+		if err != nil {
+			return Session{}, fmt.Errorf("identity: checking account session admission: %w", err)
+		}
+		if disabled {
+			return Session{}, ErrUserDisabled
+		}
 		return Session{}, errors.New("identity: session did not persist exactly one row")
 	}
 	return session, nil
@@ -78,7 +91,7 @@ func (s *SQLiteStore) createSession(ctx context.Context, exec interface {
 func (s *SQLiteStore) GetSessionByToken(token string) (Session, error) {
 	now := time.Now().UTC()
 	row := s.db.QueryRowContext(context.Background(),
-		"SELECT "+sessionColumns+" FROM sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+		"SELECT "+sessionColumns+" FROM sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM users WHERE id = sessions.user_id AND disabled_at IS NULL)",
 		HashSecret(token), now.UnixNano())
 
 	session, err := scanSession(row)

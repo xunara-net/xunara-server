@@ -317,6 +317,11 @@ CREATE TABLE authentication_config (
 );
 ALTER TABLE auth_transactions ADD COLUMN authentication_revision INTEGER NOT NULL DEFAULT 0;
 `,
+	// v16：禁用事实独立于密码与角色；旧用户保持启用，禁止回写已发布迁移。
+	`
+ALTER TABLE users ADD COLUMN disabled_at INTEGER;
+ALTER TABLE users ADD COLUMN disabled_reason TEXT NOT NULL DEFAULT '';
+`,
 }
 
 // SQLiteStore is a durable [Store] sharing the control plane's database.
@@ -387,7 +392,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	return nil
 }
 
-const userColumns = "id, login_name, display_name, email, role, created_at, updated_at"
+const userColumns = "id, login_name, display_name, email, role, created_at, updated_at, disabled_at, disabled_reason"
 
 // CreateUser implements [UserStore].
 func (s *SQLiteStore) CreateUser(u *User) error {
@@ -420,6 +425,8 @@ func (s *SQLiteStore) CreateUser(u *User) error {
 		return fmt.Errorf("identity: reading user ID: %w", err)
 	}
 	u.ID = tailcfg.UserID(id)
+	u.DisabledAt = time.Time{}
+	u.DisabledReason = ""
 	return nil
 }
 
@@ -561,24 +568,31 @@ func (store *SQLiteStore) DeleteUserContext(ctx context.Context, id tailcfg.User
 
 func scanUser(sc scanner) (User, error) {
 	var (
-		id        int64
-		login     string
-		display   string
-		email     string
-		role      string
-		createdAt int64
-		updatedAt int64
+		id             int64
+		login          string
+		display        string
+		email          string
+		role           string
+		createdAt      int64
+		updatedAt      int64
+		disabledAt     sql.NullInt64
+		disabledReason string
 	)
-	if err := sc.Scan(&id, &login, &display, &email, &role, &createdAt, &updatedAt); err != nil {
+	if err := sc.Scan(&id, &login, &display, &email, &role, &createdAt, &updatedAt, &disabledAt, &disabledReason); err != nil {
 		return User{}, err
 	}
-	return User{
-		ID:          tailcfg.UserID(id),
-		LoginName:   login,
-		DisplayName: display,
-		Email:       email,
-		Role:        Role(role),
-		CreatedAt:   time.Unix(0, createdAt).UTC(),
-		UpdatedAt:   time.Unix(0, updatedAt).UTC(),
-	}, nil
+	user := User{
+		ID:             tailcfg.UserID(id),
+		LoginName:      login,
+		DisplayName:    display,
+		Email:          email,
+		Role:           Role(role),
+		CreatedAt:      time.Unix(0, createdAt).UTC(),
+		UpdatedAt:      time.Unix(0, updatedAt).UTC(),
+		DisabledReason: disabledReason,
+	}
+	if disabledAt.Valid {
+		user.DisabledAt = time.Unix(0, disabledAt.Int64).UTC()
+	}
+	return user, nil
 }

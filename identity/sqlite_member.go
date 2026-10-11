@@ -123,11 +123,11 @@ func (store *SQLiteStore) updateMember(ctx context.Context, caller *MemberCaller
 
 // checkOwnerRemoval 必须在相同写事务内使用；修改与删除共用这个不变量，不能各看旧列表。
 func checkOwnerRemoval(ctx context.Context, transaction *sql.Tx, user User) error {
-	if !user.Role.IsOwner() {
+	if !user.Role.IsOwner() || !user.DisabledAt.IsZero() {
 		return nil
 	}
 	var otherOwner bool
-	if err := transaction.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM users WHERE role = ? AND id != ?)",
+	if err := transaction.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM users WHERE role = ? AND id != ? AND disabled_at IS NULL)",
 		string(RoleOwner), int64(user.ID)).Scan(&otherOwner); err != nil {
 		return fmt.Errorf("identity: checking other owner: %w", err)
 	}

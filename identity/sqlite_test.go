@@ -380,6 +380,8 @@ ALTER TABLE auth_transactions DROP COLUMN account_user_id;
 ALTER TABLE auth_transactions DROP COLUMN account_session_id;
 ALTER TABLE auth_transactions DROP COLUMN invite_token_hash;
 ALTER TABLE auth_transactions DROP COLUMN authentication_revision;
+ALTER TABLE users DROP COLUMN disabled_at;
+ALTER TABLE users DROP COLUMN disabled_reason;
 DROP TABLE authentication_config;
 UPDATE schema_migrations SET version = 11 WHERE module = 'identity';
 `); err != nil {

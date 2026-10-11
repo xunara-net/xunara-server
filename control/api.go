@@ -78,6 +78,9 @@ func (s *Server) principalForToken(ctx context.Context, token string) (apiPrinci
 			// identity and must not authenticate.
 			return apiPrincipal{}, err
 		}
+		if !user.DisabledAt.IsZero() {
+			return apiPrincipal{}, identity.ErrUserDisabled
+		}
 		if err := s.identity.TouchAPIKey(key.ID, time.Now().UTC()); err != nil {
 			s.log.Warn("recording API key use", "key", key.ID, "err", err)
 		}
@@ -110,6 +113,9 @@ func (server *Server) resolveSessionPrincipal(ctx context.Context, session ident
 		// A session for a deleted user is not a valid principal.
 		return apiPrincipal{}, err
 	}
+	if !user.DisabledAt.IsZero() {
+		return apiPrincipal{}, identity.ErrUserDisabled
+	}
 	return apiPrincipal{
 		Kind:    "session",
 		UserID:  session.UserID,
@@ -123,7 +129,7 @@ var errAuthenticationRequired = errors.New("authentication required")
 
 func isAuthenticationRequired(err error) bool {
 	return errors.Is(err, errAuthenticationRequired) || errors.Is(err, identity.ErrSessionNotFound) ||
-		errors.Is(err, identity.ErrAPIKeyNotFound) || errors.Is(err, identity.ErrUserNotFound)
+		errors.Is(err, identity.ErrAPIKeyNotFound) || errors.Is(err, identity.ErrUserNotFound) || errors.Is(err, identity.ErrUserDisabled)
 }
 
 // 无效身份与认证服务故障使用不同结果；错误正文不暴露数据库信息或原始凭据。

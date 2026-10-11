@@ -75,13 +75,14 @@ func (server *Server) signInWithPassword(ctx context.Context, address, login, pa
 	if err != nil {
 		return passwordSignInResult{}, err
 	}
-	if !identity.VerifyPassword(credential.PasswordHash, password) {
+	verified := identity.VerifyPassword(credential.PasswordHash, password)
+	if !verified || !user.DisabledAt.IsZero() {
 		return reject("wrong password")
 	}
 
 	// 慢哈希完成后再次在事务中核对原密码，避免并发改密后签发旧密码登录。
 	session, token, err := server.identity.CreateLocalSession(ctx, user.ID, credential.PasswordHash, server.sessionTTL)
-	if errors.Is(err, identity.ErrCredentialChanged) {
+	if errors.Is(err, identity.ErrCredentialChanged) || errors.Is(err, identity.ErrUserDisabled) {
 		return reject("credential changed during sign-in")
 	}
 	if err != nil {

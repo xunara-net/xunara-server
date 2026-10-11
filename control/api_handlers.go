@@ -364,6 +364,8 @@ type apiUser struct {
 	Role        string                `json:"role"`
 	CreatedAt   time.Time             `json:"createdAt"`
 	UpdatedAt   time.Time             `json:"updatedAt"`
+	Disabled    bool                  `json:"disabled"`
+	DisabledAt  *time.Time            `json:"disabledAt,omitempty"`
 	Identities  []apiExternalIdentity `json:"identities"`
 }
 
@@ -388,6 +390,11 @@ func (s *Server) apiUserView(u identity.User) apiUser {
 		CreatedAt:   u.CreatedAt,
 		UpdatedAt:   u.UpdatedAt,
 		Identities:  []apiExternalIdentity{},
+		Disabled:    !u.DisabledAt.IsZero(),
+	}
+	if view.Disabled {
+		disabledAt := u.DisabledAt
+		view.DisabledAt = &disabledAt
 	}
 	for _, link := range s.identity.ListExternalIdentities(u.ID) {
 		view.Identities = append(view.Identities, apiExternalIdentity{

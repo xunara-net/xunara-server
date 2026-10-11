@@ -297,7 +297,7 @@ func TestBootstrapMigrationSealsExistingAccountsWithoutChangingData(t *testing.T
 			}
 			linksBefore, auditBefore := store.ListExternalIdentities(owner.ID), store.ListAudit(0)
 			credentialBefore, credentialExists := store.GetLocalCredential(owner.ID)
-			if _, err := store.db.Exec("DROP TABLE local_bootstrap_state; ALTER TABLE auth_transactions DROP COLUMN account_user_id; ALTER TABLE auth_transactions DROP COLUMN account_session_id; ALTER TABLE auth_transactions DROP COLUMN invite_token_hash; ALTER TABLE auth_transactions DROP COLUMN authentication_revision; DROP TABLE authentication_config; UPDATE schema_migrations SET version = 12 WHERE module = 'identity'"); err != nil {
+			if _, err := store.db.Exec("DROP TABLE local_bootstrap_state; ALTER TABLE auth_transactions DROP COLUMN account_user_id; ALTER TABLE auth_transactions DROP COLUMN account_session_id; ALTER TABLE auth_transactions DROP COLUMN invite_token_hash; ALTER TABLE auth_transactions DROP COLUMN authentication_revision; DROP TABLE authentication_config; ALTER TABLE users DROP COLUMN disabled_at; ALTER TABLE users DROP COLUMN disabled_reason; UPDATE schema_migrations SET version = 12 WHERE module = 'identity'"); err != nil {
 				t.Fatal(err)
 			}
 			upgraded, err := NewSQLiteStore(t.Context(), store.db)
