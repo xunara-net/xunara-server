@@ -11,13 +11,14 @@ var ErrMemberLimitReached = errors.New("identity: member limit reached")
 // LocalRegistration 包含事务提交所需数据；密码校验和慢哈希在调用方完成。
 // MaxUsers 为 -1 时不限，0 时拒绝新增；额度来自 Entitlement，不解释套餐名称。
 type LocalRegistration struct {
-	LoginName    string
-	DisplayName  string
-	Email        string
-	PasswordHash []byte
-	InviteToken  string
-	MaxUsers     int
-	SessionTTL   time.Duration
+	LoginName              string
+	DisplayName            string
+	Email                  string
+	PasswordHash           []byte
+	InviteToken            string
+	MaxUsers               int
+	SessionTTL             time.Duration
+	AuthenticationRevision uint64
 }
 
 type RegistrationStore interface {

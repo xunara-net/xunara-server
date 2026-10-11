@@ -44,8 +44,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	views := make([]providerView, 0, len(s.providers.IDs()))
-	for _, id := range s.providers.IDs() {
+	views := make([]providerView, 0, len(s.identityProviders().IDs()))
+	for _, id := range s.identityProviders().IDs() {
 		if id == identity.LocalProviderID {
 			continue
 		}
@@ -70,7 +70,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // startExternalLogin 复用持久事务发起 OIDC 或原生 OAuth2，不能在这里直接审批设备。
 func (s *Server) startExternalLogin(w http.ResponseWriter, r *http.Request, providerID, returnTo string) {
-	provider, ok := s.providers.Get(providerID)
+	provider, ok := s.identityProviders().Get(providerID)
 	if !ok {
 		s.renderError(w, r, http.StatusBadRequest, "Unknown provider",
 			"The requested identity provider is not configured on this server.")
@@ -89,10 +89,11 @@ func (s *Server) startExternalLogin(w http.ResponseWriter, r *http.Request, prov
 	}
 
 	tx, browserSecret, err := s.identity.CreateAuthTransaction(identity.NewAuthTransactionOptions{
-		ProviderID:  providerID,
-		RedirectURI: s.providerRedirects[providerID],
-		ReturnTo:    returnTo,
-		TTL:         s.authTTL,
+		ProviderID:             providerID,
+		RedirectURI:            s.providerRedirect(providerID),
+		AuthenticationRevision: s.authenticationRevision(),
+		ReturnTo:               returnTo,
+		TTL:                    s.authTTL,
 	})
 	if err != nil {
 		s.log.Error("creating auth transaction", "provider", providerID, "err", err)
@@ -198,13 +199,13 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	providerID := chi.URLParam(r, "providerID")
 
-	provider, ok := s.providers.Get(providerID)
+	provider, ok := s.identityProviders().Get(providerID)
 	if !ok {
 		s.renderError(w, r, http.StatusNotFound, "Unknown provider",
 			"The requested identity provider is not configured on this server.")
 		return
 	}
-	if _, nativeOAuth2 := provider.(*identity.OAuth2Provider); nativeOAuth2 {
+	if protocol, typed := provider.(interface{ Protocol() string }); typed && protocol.Protocol() == "oauth2" {
 		// 别名路由不能绕过回调 allowlist；精确路径与换码时的固定 redirect_uri 保持一致。
 		if r.URL.Path != "/oauth2/callback/"+providerID {
 			s.renderError(w, r, http.StatusBadRequest, "Sign-in rejected", "Start again from the configured sign-in page.")
@@ -294,7 +295,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 		base = result.ProviderID + "_" + result.Subject
 	}
 	completed, err := s.identity.CompleteExternalAuthentication(ctx, tx.ID, *result, identity.ExternalAuthenticationOptions{
-		AllowCreate: s.registration == RegistrationOpen && s.selfServiceInfo() == nil,
+		AllowCreate: s.memberRegistrationMode() == RegistrationOpen && s.selfServiceInfo() == nil,
 		MaxUsers:    s.Plan().MaxUsers, LoginName: sanitizeLoginName(base), SessionTTL: s.sessionTTL,
 	})
 	if err != nil {
@@ -397,11 +398,16 @@ func loginReturnTo(raw string) string {
 
 // providerName returns the display name of a provider.
 func (s *Server) providerName(id string) string {
-	if p, ok := s.providers.Get(id); ok {
+	if p, ok := s.identityProviders().Get(id); ok {
 		if named, ok := p.(interface{ DisplayName() string }); ok {
 			if name := named.DisplayName(); name != "" {
 				return name
 			}
+		}
+	}
+	for _, settings := range s.authenticationConfig().Providers {
+		if settings.ID == id && settings.DisplayName != "" {
+			return settings.DisplayName
 		}
 	}
 	return id

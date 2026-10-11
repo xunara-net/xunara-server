@@ -196,7 +196,7 @@ func (g *grpcPlatformServer) GetMeta(ctx context.Context, _ *xunarav2.GetMetaReq
 		CapabilityVersion:     uint64(tailcfg.CurrentCapabilityVersion),
 		MinCapabilityVersion:  uint64(MinSupportedCapabilityVersion),
 		MaxPageSize:           uint32(apiV2MaxPageSize),
-		IdentityProviders:     s.providers.IDs(),
+		IdentityProviders:     s.identityProviders().IDs(),
 		AgentProtocolVersion:  uint32(agentProtocolVersion),
 		WebhooksEnabled:       s.webhooksEnabled(),
 		DnsProviderConfigured: s.cfg.DNSProvider != nil,

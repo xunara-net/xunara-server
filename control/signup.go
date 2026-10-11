@@ -30,7 +30,7 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 			"This server creates accounts through an identity provider.")
 		return
 	}
-	if !s.registration.AllowsSignup() {
+	if !s.memberRegistrationMode().AllowsSignup() {
 		s.renderError(w, r, http.StatusNotFound, "Registration unavailable",
 			"This deployment creates accounts through an administrator.")
 		return
@@ -46,7 +46,7 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 	s.renderPublicPage(w, r, signupPageTemplate, map[string]any{
 		"Title":          "Create your account",
 		"Invite":         "",
-		"InviteRequired": s.registration.RequiresInvite(),
+		"InviteRequired": s.memberRegistrationMode().RequiresInvite(),
 		"FormToken":      s.newFormToken(formPurposeSignup),
 		"Setup":          false,
 	})
@@ -91,12 +91,17 @@ func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 		return signupRejection{Code: code, Title: "Registration rejected", Message: message}
 	}
 
-	if s.selfServiceInfo() != nil {
+	if s.selfServiceInfo() != nil && strings.TrimSpace(req.Invite) == "" {
 		return signupAdmission{}, reject(http.StatusForbidden, msgTenantSignupRequired)
 	}
 
 	token := strings.TrimSpace(req.Invite)
-	switch s.registration {
+	mode := s.memberRegistrationMode()
+	// 开放加入仍允许明确兑换邀请角色；邀请码绝不能被忽略而静默降为匿名注册。
+	if token != "" && mode.AllowsSignup() {
+		mode = RegistrationInvite
+	}
+	switch mode {
 	case RegistrationInvite:
 		_, err := s.identity.FindRegistrationInvite(token)
 		switch {
@@ -128,6 +133,7 @@ func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 }
 
 func (s *Server) signupLocalUser(ctx context.Context, req localSignupRequest) (identity.User, identity.Session, string, error) {
+	revision := s.authenticationRevision()
 	reject := func(code int, message string) error {
 		return signupRejection{Code: code, Title: "Registration rejected", Message: message}
 	}
@@ -162,8 +168,11 @@ func (s *Server) signupLocalUser(ctx context.Context, req localSignupRequest) (i
 	user, session, token, err := s.identity.RegisterLocalAccount(ctx, identity.LocalRegistration{
 		LoginName: login, DisplayName: display, Email: email, PasswordHash: hash,
 		InviteToken: admission.token, MaxUsers: s.Plan().MaxUsers, SessionTTL: s.sessionTTL,
+		AuthenticationRevision: revision,
 	})
 	switch {
+	case errors.Is(err, identity.ErrAuthenticationConfigChanged):
+		err = reject(http.StatusConflict, "Registration settings changed. Reload the page before trying again.")
 	case errors.Is(err, identity.ErrMemberLimitReached):
 		err = reject(http.StatusForbidden, MsgUserLimitReached)
 	case errors.Is(err, identity.ErrLoginNameTaken):

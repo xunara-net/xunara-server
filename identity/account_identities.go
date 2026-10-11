@@ -38,7 +38,8 @@ func IdentityReference(link ExternalIdentity) string {
 }
 
 type LoginMethods struct {
-	Providers []string
-	Local     bool
-	Passkeys  bool
+	Providers              []string
+	Local                  bool
+	Passkeys               bool
+	AuthenticationRevision uint64
 }

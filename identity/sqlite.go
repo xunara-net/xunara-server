@@ -308,6 +308,15 @@ ALTER TABLE auth_transactions ADD COLUMN account_user_id INTEGER NOT NULL DEFAUL
 ALTER TABLE auth_transactions ADD COLUMN account_session_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE auth_transactions ADD COLUMN invite_token_hash TEXT NOT NULL DEFAULT '';
 `,
+	// v15：运行时认证配置独立持久化；版本同时约束发起与完成，旧回跳不能混用新配置。
+	`
+CREATE TABLE authentication_config (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	revision INTEGER NOT NULL CHECK (revision > 0),
+	payload BLOB NOT NULL
+);
+ALTER TABLE auth_transactions ADD COLUMN authentication_revision INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 // SQLiteStore is a durable [Store] sharing the control plane's database.

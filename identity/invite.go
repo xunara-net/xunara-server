@@ -30,12 +30,13 @@ var ErrInviteOwnerRequired = errors.New("identity: invitations require an owner 
 
 // MemberInvitation 携带发起人会话，写事务会重新检查会话有效性及 owner 角色。
 type MemberInvitation struct {
-	UserID    tailcfg.UserID
-	SessionID string
-	Role      Role
-	Note      string
-	TTL       time.Duration
-	MaxUsers  int
+	UserID                 tailcfg.UserID
+	SessionID              string
+	Role                   Role
+	Note                   string
+	TTL                    time.Duration
+	MaxUsers               int
+	AuthenticationRevision uint64
 }
 
 // RegistrationInvite is one single-use invitation.

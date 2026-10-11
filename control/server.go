@@ -252,6 +252,9 @@ type Server struct {
 	// sign-up entry point reads it so the HTML page and the JSON API cannot
 	// disagree.
 	registration RegistrationMode
+	// 运行时认证快照按持久版本整体替换，不能在并发请求中直接改静态字段。
+	authentication   atomic.Pointer[authenticationRuntime]
+	authenticationMu sync.Mutex
 	// trustedProxy reads the client address from X-Forwarded-For (Config).
 	trustedProxy bool
 
@@ -561,6 +564,10 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	if err := srv.refreshAuthentication(context.Background()); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("control: loading authentication settings: %w", err)
+	}
 	return srv, nil
 }
 
@@ -761,6 +768,7 @@ func (s *Server) DERPMap() *tailcfg.DERPMap {
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+	r.Use(s.authenticationMiddleware)
 
 	// TS2021 accepts both the native client's HTTP POST upgrade and the
 	// browser/WASM client's WebSocket GET upgrade; the handler dispatches on the

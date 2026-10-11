@@ -22,6 +22,9 @@ func (store *SQLiteStore) RegisterLocalAccount(ctx context.Context, registration
 		return User{}, Session{}, "", fmt.Errorf("identity: starting registration: %w", err)
 	}
 	defer tx.Rollback()
+	if err := lockAuthenticationRevision(ctx, tx, registration.AuthenticationRevision); err != nil {
+		return User{}, Session{}, "", err
+	}
 
 	now := time.Now().UTC()
 	inviteToken := normalizeInviteToken(registration.InviteToken)

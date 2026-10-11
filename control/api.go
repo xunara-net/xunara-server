@@ -249,6 +249,11 @@ func (s *Server) apiRouter() http.Handler {
 	r.Get("/member-invitations", s.handleAPIMemberInvites)
 	r.Post("/member-invitations", s.handleAPICreateMemberInvite)
 	r.Delete("/member-invitations/{id}", s.handleAPIRevokeMemberInvite)
+	r.Get("/authentication/settings", s.handleAPIAuthenticationSettings)
+	r.Patch("/authentication/settings", s.handleAPIAuthenticationSettings)
+	r.Post("/authentication/providers", s.handleAPIAuthenticationSettings)
+	r.Patch("/authentication/providers/{providerID}", s.handleAPIAuthenticationSettings)
+	r.Delete("/authentication/providers/{providerID}", s.handleAPIAuthenticationSettings)
 
 	r.Get("/dns", s.handleAPIDNS)
 	r.Delete("/dns/{id}", s.handleAPIDeleteDNS)

@@ -280,7 +280,7 @@ func (s *Server) handleAPIV2Meta(w http.ResponseWriter, r *http.Request) {
 		"capabilityVersion":     uint64(tailcfg.CurrentCapabilityVersion),
 		"minCapabilityVersion":  uint64(MinSupportedCapabilityVersion),
 		"maxPageSize":           apiV2MaxPageSize,
-		"identityProviders":     s.providers.IDs(),
+		"identityProviders":     s.identityProviders().IDs(),
 		"agentProtocolVersion":  agentProtocolVersion,
 		"webhooksEnabled":       s.webhooksEnabled(),
 		"dnsProviderConfigured": s.cfg.DNSProvider != nil,

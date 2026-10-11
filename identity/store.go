@@ -106,6 +106,7 @@ type WebhookCursorStore interface {
 
 // Store is the persistence boundary of the trust plane.
 type Store interface {
+	AuthenticationConfigStore
 	UserStore
 	ExternalIdentityStore
 	AuditStore

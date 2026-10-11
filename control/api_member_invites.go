@@ -20,7 +20,7 @@ type memberInviteRequest struct {
 }
 
 func (server *Server) memberInvitationsEnabled(ctx context.Context) (bool, error) {
-	if server.registration != RegistrationInvite || server.selfServiceInfo() != nil {
+	if !server.memberRegistrationMode().AllowsSignup() {
 		return false, nil
 	}
 	required, err := server.localSetupRequired(ctx)
@@ -73,21 +73,23 @@ func (server *Server) handleAPIMemberInvites(writer http.ResponseWriter, request
 	for _, invite := range invites {
 		items = append(items, inviteView(invite, now))
 	}
+	registrationURL := "/register?mode=invite"
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"items": items, "enabled": enabled,
-		"registration_url": "/register", "csrf_token": csrfTokenFor(server.accountSessionToken(request)),
+		"registration_url": registrationURL, "settings_url": "/authentication", "csrf_token": csrfTokenFor(server.accountSessionToken(request)),
 	})
 }
 
 // createMemberInvitation 同时供正式 JSON 与旧表单使用，不能保留两套准入和角色规则。
 func (server *Server) createMemberInvitation(ctx context.Context, session identity.Session, body memberInviteRequest) (identity.RegistrationInvite, string, error) {
+	revision := server.authenticationRevision()
 	enabled, err := server.memberInvitationsEnabled(ctx)
 	if err != nil {
 		return identity.RegistrationInvite{}, "", memberInvitationError(err)
 	}
 	if !enabled {
 		return identity.RegistrationInvite{}, "", NewHTTPError(http.StatusForbidden,
-			"INVITATIONS_DISABLED: member invitations require invitation registration on this tenant", nil)
+			"INVITATIONS_DISABLED: member invitations are disabled by this network's registration policy", nil)
 	}
 	role, err := identity.ParseRole(body.Role)
 	note := strings.TrimSpace(body.Note)
@@ -98,6 +100,7 @@ func (server *Server) createMemberInvitation(ctx context.Context, session identi
 	invite, token, err := server.identity.CreateMemberInvitation(ctx, identity.MemberInvitation{
 		UserID: session.UserID, SessionID: session.ID, Role: role, Note: note,
 		TTL: time.Duration(body.TTLHours) * time.Hour, MaxUsers: server.Plan().MaxUsers,
+		AuthenticationRevision: revision,
 	})
 	return invite, token, memberInvitationError(err)
 }
@@ -106,6 +109,8 @@ func memberInvitationError(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, identity.ErrAuthenticationConfigChanged):
+		return NewHTTPError(http.StatusConflict, "AUTH_CONFIG_CHANGED: reload invitation settings before continuing", err)
 	case errors.Is(err, identity.ErrMemberLimitReached):
 		return planGateError(MsgUserLimitReached)
 	case errors.Is(err, identity.ErrInviteOwnerRequired):

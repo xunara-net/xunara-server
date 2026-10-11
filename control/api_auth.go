@@ -112,11 +112,11 @@ func (s *Server) apiCapabilities() []string {
 		caps = append(caps, "auth.passkey")
 	}
 	protocols := make(map[string]bool)
-	for _, providerID := range s.providers.IDs() {
+	for _, providerID := range s.identityProviders().IDs() {
 		if providerID == identity.LocalProviderID {
 			continue
 		}
-		provider, _ := s.providers.Get(providerID)
+		provider, _ := s.identityProviders().Get(providerID)
 		if typed, ok := provider.(interface{ Protocol() string }); ok {
 			protocols[typed.Protocol()] = true
 		}
@@ -133,7 +133,7 @@ func (s *Server) apiCapabilities() []string {
 	// Which self-service path this deployment accepts is a capability, not a
 	// guess: a console that offers an invitation field on an open deployment
 	// (or hides the sign-up link on a closed one) is worse than useless.
-	switch s.registration {
+	switch s.registrationMode() {
 	case RegistrationInvite:
 		caps = append(caps, "auth.register.invite")
 	case RegistrationOpen:
@@ -226,7 +226,7 @@ func (s *Server) writeAPIAnonymousSession(w http.ResponseWriter, r *http.Request
 		"authenticated":      false,
 		"setup_required":     required,
 		"local_login":        s.localLogin,
-		"registration":       s.registration.String(),
+		"registration":       s.registrationMode().String(),
 		"registration_token": s.newFormToken(formPurposeSignup),
 		"capabilities":       s.apiCapabilities(),
 	})
@@ -267,8 +267,8 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 		writeAuthenticationError(w, err)
 		return
 	}
-	views := make([]map[string]any, 0, len(s.providers.IDs()))
-	for _, id := range s.providers.IDs() {
+	views := make([]map[string]any, 0, len(s.identityProviders().IDs()))
+	for _, id := range s.identityProviders().IDs() {
 		if id == identity.LocalProviderID {
 			continue
 		}
@@ -279,12 +279,14 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	payload := map[string]any{
-		"providers":          views,
-		"local_login":        s.localLogin,
-		"setup_required":     required,
-		"passkeys":           s.passkeys != nil,
-		"registration":       s.registration.String(),
-		"registration_token": s.newFormToken(formPurposeSignup),
+		"providers":           views,
+		"local_login":         s.localLogin,
+		"setup_required":      required,
+		"passkeys":            s.passkeys != nil,
+		"registration":        s.registrationMode().String(),
+		"member_registration": s.memberRegistrationMode().String(),
+		"member_invitations":  !required && s.memberRegistrationMode().AllowsSignup(),
+		"registration_token":  s.newFormToken(formPurposeSignup),
 	}
 	// A deployment whose sign-up desk creates a tenant per account says so,
 	// so the console posts to the platform endpoint instead of the
@@ -484,7 +486,7 @@ func (s *Server) handleAPICapabilities(w http.ResponseWriter, r *http.Request) {
 		"capabilities":                  s.apiCapabilities(),
 		"local_login":                   s.localLogin,
 		"setup_required":                required,
-		"registration":                  s.registration.String(),
+		"registration":                  s.registrationMode().String(),
 		"min_client_capability_version": uint64(MinSupportedCapabilityVersion),
 		"server_capability_version":     uint64(tailcfg.CurrentCapabilityVersion),
 	})

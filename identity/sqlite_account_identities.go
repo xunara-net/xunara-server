@@ -64,6 +64,9 @@ func (store *SQLiteStore) CompleteExternalAuthentication(ctx context.Context, tr
 	if authorization.ProviderID != result.ProviderID {
 		return ExternalAuthentication{}, ErrCredentialChanged
 	}
+	if err := lockAuthenticationRevision(ctx, tx, authorization.AuthenticationRevision); err != nil {
+		return ExternalAuthentication{}, err
+	}
 	link, err := scanExternalIdentity(tx.QueryRowContext(ctx, "SELECT "+externalIdentityColumns+" FROM external_identities WHERE provider_id = ? AND subject = ?", result.ProviderID, result.Subject))
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return ExternalAuthentication{}, err
@@ -184,6 +187,9 @@ func (store *SQLiteStore) UnlinkAccountIdentity(ctx context.Context, userID tail
 		return false, err
 	}
 	defer tx.Rollback()
+	if err := lockAuthenticationRevision(ctx, tx, methods.AuthenticationRevision); err != nil {
+		return false, err
+	}
 	now := time.Now().UTC()
 	if err := lockAccountSession(ctx, tx, userID, sessionID, now); err != nil {
 		return false, err

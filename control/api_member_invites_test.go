@@ -154,7 +154,7 @@ func TestAPIMemberInvitationsRequireOwnerHumanSessionAndCSRF(t *testing.T) {
 }
 
 func TestAPIMemberInvitationsModeQuotaValidationAndTenantBoundary(t *testing.T) {
-	for _, mode := range []RegistrationMode{RegistrationClosed, RegistrationOpen} {
+	for _, mode := range []RegistrationMode{RegistrationClosed} {
 		server := newServerWithConfig(t, Config{Registration: mode})
 		host := newTestHTTPServer(t, server)
 		token := inviteOwnerToken(t, server)

@@ -23,7 +23,7 @@ func (server *Server) handleAPIAccountIdentities(writer http.ResponseWriter, req
 		return
 	}
 	providers := make([]map[string]any, 0)
-	for _, providerID := range server.providers.IDs() {
+	for _, providerID := range server.identityProviders().IDs() {
 		if providerID != identity.LocalProviderID {
 			providers = append(providers, map[string]any{"id": providerID, "name": server.providerName(providerID)})
 		}
@@ -33,14 +33,14 @@ func (server *Server) handleAPIAccountIdentities(writer http.ResponseWriter, req
 		if link.ProviderID == identity.LocalProviderID {
 			continue
 		}
-		_, configured := server.providers.Get(link.ProviderID)
+		_, configured := server.identityProviders().Get(link.ProviderID)
 		items = append(items, map[string]any{
 			"id": identity.IdentityReference(link), "provider_id": link.ProviderID,
 			"provider_name": server.providerName(link.ProviderID), "email": link.Email,
 			"display_name": link.DisplayName, "created_at": link.CreatedAt, "enabled": configured,
 		})
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": items, "providers": providers, "csrf_token": csrfTokenFor(server.accountSessionToken(request))})
+	writeJSON(writer, http.StatusOK, map[string]any{"items": items, "providers": providers, "can_manage_providers": principal.Role.IsOwner(), "settings_url": "/authentication", "csrf_token": csrfTokenFor(server.accountSessionToken(request))})
 }
 
 func (server *Server) handleAPIAccountIdentityBegin(writer http.ResponseWriter, request *http.Request) {
@@ -111,7 +111,7 @@ func (server *Server) handleAPIExternalInviteStart(writer http.ResponseWriter, r
 }
 
 func (server *Server) beginExternalAccountAuthorization(writer http.ResponseWriter, request *http.Request, options identity.NewAuthTransactionOptions) {
-	provider, ok := server.providers.Get(options.ProviderID)
+	provider, ok := server.identityProviders().Get(options.ProviderID)
 	if !ok || options.ProviderID == identity.LocalProviderID {
 		writeAPIError(writer, http.StatusBadRequest, "PROVIDER_INVALID: choose a configured external provider")
 		return
@@ -127,7 +127,8 @@ func (server *Server) beginExternalAccountAuthorization(writer http.ResponseWrit
 			return
 		}
 	}
-	options.RedirectURI, options.TTL = server.providerRedirects[options.ProviderID], server.authTTL
+	options.RedirectURI, options.TTL = server.providerRedirect(options.ProviderID), server.authTTL
+	options.AuthenticationRevision = server.authenticationRevision()
 	authorization, secret, err := server.identity.CreateAccountAuthTransaction(request.Context(), options)
 	if err != nil {
 		server.writeAccountIdentityError(writer, err)
@@ -151,7 +152,8 @@ func (server *Server) handleAPIUnlinkAccountIdentity(writer http.ResponseWriter,
 		return
 	}
 	revoked, err := server.identity.UnlinkAccountIdentity(request.Context(), principal.UserID, principal.Session.ID, chi.URLParam(request, "id"), identity.LoginMethods{
-		Providers: server.providers.IDs(), Local: server.localLogin, Passkeys: server.passkeys != nil,
+		Providers: server.identityProviders().IDs(), Local: server.localLogin, Passkeys: server.passkeys != nil,
+		AuthenticationRevision: server.authenticationRevision(),
 	})
 	if err != nil {
 		server.writeAccountIdentityError(writer, err)
@@ -165,6 +167,8 @@ func (server *Server) handleAPIUnlinkAccountIdentity(writer http.ResponseWriter,
 
 func (server *Server) writeAccountIdentityError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, identity.ErrAuthenticationConfigChanged):
+		writeAPIError(writer, http.StatusConflict, "AUTH_CONFIG_CHANGED: reload login methods before continuing")
 	case errors.Is(err, identity.ErrSessionRevoked), errors.Is(err, identity.ErrCredentialChanged):
 		writeAPIError(writer, http.StatusUnauthorized, "SESSION_CHANGED: sign in again")
 	case errors.Is(err, identity.ErrLastLoginMethod):

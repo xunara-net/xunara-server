@@ -274,6 +274,8 @@ func TestAccountIdentityMigrationPreservesPendingLogin(t *testing.T) {
 	if _, err := store.db.Exec(`ALTER TABLE auth_transactions DROP COLUMN account_user_id;
 		ALTER TABLE auth_transactions DROP COLUMN account_session_id;
 		ALTER TABLE auth_transactions DROP COLUMN invite_token_hash;
+		ALTER TABLE auth_transactions DROP COLUMN authentication_revision;
+		DROP TABLE authentication_config;
 		UPDATE schema_migrations SET version = 13 WHERE module = 'identity'`); err != nil {
 		t.Fatal(err)
 	}

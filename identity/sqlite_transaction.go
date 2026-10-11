@@ -8,7 +8,7 @@ import (
 )
 
 const authTransactionColumns = "id, provider_id, state, nonce, pkce_verifier, pkce_challenge, pkce_method, " +
-	"redirect_uri, return_to, requested_action, machine_login_id, browser_session_hash, created_at, expires_at, consumed_at, account_user_id, account_session_id, invite_token_hash"
+	"redirect_uri, return_to, requested_action, machine_login_id, browser_session_hash, created_at, expires_at, consumed_at, account_user_id, account_session_id, invite_token_hash, authentication_revision"
 
 // CreateAuthTransaction implements [AuthTransactionStore].
 func (s *SQLiteStore) CreateAuthTransaction(opts NewAuthTransactionOptions) (AuthTransaction, string, error) {
@@ -48,23 +48,24 @@ func (s *SQLiteStore) CreateAccountAuthTransaction(ctx context.Context, opts New
 
 	now := time.Now().UTC()
 	tx := AuthTransaction{
-		ID:                 id,
-		ProviderID:         opts.ProviderID,
-		State:              state,
-		Nonce:              nonce,
-		PKCEVerifier:       verifier,
-		PKCEChallenge:      challenge,
-		PKCEMethod:         "S256",
-		RedirectURI:        opts.RedirectURI,
-		ReturnTo:           opts.ReturnTo,
-		RequestedAction:    opts.RequestedAction,
-		MachineLoginID:     opts.MachineLoginID,
-		AccountUserID:      opts.AccountUserID,
-		AccountSessionID:   opts.AccountSessionID,
-		InviteTokenHash:    opts.InviteTokenHash,
-		BrowserSessionHash: HashSecret(browserSecret),
-		CreatedAt:          now,
-		ExpiresAt:          now.Add(ttl),
+		ID:                     id,
+		ProviderID:             opts.ProviderID,
+		State:                  state,
+		Nonce:                  nonce,
+		PKCEVerifier:           verifier,
+		PKCEChallenge:          challenge,
+		PKCEMethod:             "S256",
+		RedirectURI:            opts.RedirectURI,
+		ReturnTo:               opts.ReturnTo,
+		RequestedAction:        opts.RequestedAction,
+		MachineLoginID:         opts.MachineLoginID,
+		AccountUserID:          opts.AccountUserID,
+		AccountSessionID:       opts.AccountSessionID,
+		InviteTokenHash:        opts.InviteTokenHash,
+		AuthenticationRevision: opts.AuthenticationRevision,
+		BrowserSessionHash:     HashSecret(browserSecret),
+		CreatedAt:              now,
+		ExpiresAt:              now.Add(ttl),
 	}
 
 	databaseTx, err := s.db.BeginTx(ctx, nil)
@@ -72,6 +73,9 @@ func (s *SQLiteStore) CreateAccountAuthTransaction(ctx context.Context, opts New
 		return AuthTransaction{}, "", err
 	}
 	defer databaseTx.Rollback()
+	if err := lockAuthenticationRevision(ctx, databaseTx, opts.AuthenticationRevision); err != nil {
+		return AuthTransaction{}, "", err
+	}
 	if opts.RequestedAction == AuthActionLink {
 		if err := lockAccountSession(ctx, databaseTx, opts.AccountUserID, opts.AccountSessionID, now); err != nil {
 			return AuthTransaction{}, "", err
@@ -81,10 +85,10 @@ func (s *SQLiteStore) CreateAccountAuthTransaction(ctx context.Context, opts New
 	}
 	if err := requireIdentityWrite(databaseTx.ExecContext(ctx,
 		`INSERT INTO auth_transactions (`+authTransactionColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
 		tx.ID, tx.ProviderID, tx.State, tx.Nonce, tx.PKCEVerifier, tx.PKCEChallenge, tx.PKCEMethod,
 		tx.RedirectURI, tx.ReturnTo, tx.RequestedAction, tx.MachineLoginID, tx.BrowserSessionHash,
-		tx.CreatedAt.UnixNano(), tx.ExpiresAt.UnixNano(), int64(tx.AccountUserID), tx.AccountSessionID, tx.InviteTokenHash)); err != nil {
+		tx.CreatedAt.UnixNano(), tx.ExpiresAt.UnixNano(), int64(tx.AccountUserID), tx.AccountSessionID, tx.InviteTokenHash, tx.AuthenticationRevision)); err != nil {
 		return AuthTransaction{}, "", fmt.Errorf("identity: creating auth transaction: %w", err)
 	}
 	if err := databaseTx.Commit(); err != nil {
@@ -162,7 +166,7 @@ func scanAuthTransaction(sc rowScanner) (AuthTransaction, error) {
 	)
 	if err := sc.Scan(&tx.ID, &tx.ProviderID, &tx.State, &tx.Nonce, &tx.PKCEVerifier, &tx.PKCEChallenge,
 		&tx.PKCEMethod, &tx.RedirectURI, &tx.ReturnTo, &tx.RequestedAction, &tx.MachineLoginID,
-		&tx.BrowserSessionHash, &createdAt, &expiresAt, &consumedAt, &tx.AccountUserID, &tx.AccountSessionID, &tx.InviteTokenHash); err != nil {
+		&tx.BrowserSessionHash, &createdAt, &expiresAt, &consumedAt, &tx.AccountUserID, &tx.AccountSessionID, &tx.InviteTokenHash, &tx.AuthenticationRevision); err != nil {
 		return AuthTransaction{}, err
 	}
 	tx.CreatedAt = time.Unix(0, createdAt).UTC()

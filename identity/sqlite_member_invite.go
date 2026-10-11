@@ -41,6 +41,9 @@ func (store *SQLiteStore) CreateMemberInvitation(ctx context.Context, invitation
 		return RegistrationInvite{}, "", fmt.Errorf("identity: starting member invitation: %w", err)
 	}
 	defer tx.Rollback()
+	if err := lockAuthenticationRevision(ctx, tx, invitation.AuthenticationRevision); err != nil {
+		return RegistrationInvite{}, "", err
+	}
 	if err := lockInviteOwner(ctx, tx, invitation.UserID, invitation.SessionID, time.Now().UTC()); err != nil {
 		return RegistrationInvite{}, "", err
 	}

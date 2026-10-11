@@ -379,6 +379,8 @@ DROP TABLE registration_invites;
 ALTER TABLE auth_transactions DROP COLUMN account_user_id;
 ALTER TABLE auth_transactions DROP COLUMN account_session_id;
 ALTER TABLE auth_transactions DROP COLUMN invite_token_hash;
+ALTER TABLE auth_transactions DROP COLUMN authentication_revision;
+DROP TABLE authentication_config;
 UPDATE schema_migrations SET version = 11 WHERE module = 'identity';
 `); err != nil {
 		t.Fatalf("rewinding to v11: %v", err)

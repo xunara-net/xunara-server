@@ -214,6 +214,14 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		org.handler.ServeHTTP(w, req)
 		return
 	}
+	if err := org.site.Server.refreshAuthentication(req.Context()); err != nil {
+		org.site.Server.writeAuthenticationConfigError(w, err)
+		return
+	}
+	if org.site.Server.registrationMode() != RegistrationOpen {
+		writeAPIError(w, http.StatusForbidden, "REGISTRATION_CLOSED: public tenant signup is disabled")
+		return
+	}
 	if err := req.Context().Err(); err != nil {
 		w.Header().Set("Retry-After", "5")
 		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: try again later")
