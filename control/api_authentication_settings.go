@@ -243,6 +243,10 @@ func (server *Server) patchAuthenticationPolicy(draft *authenticationConfigurati
 }
 
 func (server *Server) sealAuthenticationSecret(secret string) (string, error) {
+	// OIDC 公共客户端没有 secret；OAuth2 是否必须填写仍由对应提供方校验。
+	if secret == "" {
+		return "", nil
+	}
 	if len(secret) > 4096 || strings.ContainsAny(secret, "\x00\r\n") {
 		return "", NewHTTPError(http.StatusBadRequest, "AUTH_CONFIG_INVALID: invalid client secret", nil)
 	}

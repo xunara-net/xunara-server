@@ -189,13 +189,16 @@ func (server *Server) runtimeIdentityProvider(settings runtimeIdentityProvider) 
 	if err := validateRuntimeIdentitySettings(settings); err != nil {
 		return nil, err
 	}
-	key, err := loadOrCreateSealingKey(filepath.Join(server.cfg.StateDir, "authentication_secret.key"))
-	if err != nil {
-		return nil, errors.New("control: authentication secret storage is unavailable")
-	}
-	secret, err := openSecret(key, settings.SealedSecret)
-	if err != nil {
-		return nil, errors.New("control: authentication secret cannot be opened")
+	secret := ""
+	if settings.SealedSecret != "" {
+		key, err := loadOrCreateSealingKey(filepath.Join(server.cfg.StateDir, "authentication_secret.key"))
+		if err != nil {
+			return nil, errors.New("control: authentication secret storage is unavailable")
+		}
+		secret, err = openSecret(key, settings.SealedSecret)
+		if err != nil {
+			return nil, errors.New("control: authentication secret cannot be opened")
+		}
 	}
 	callbackPath := "/oauth2/callback/"
 	if settings.Type == "oidc" {
@@ -206,6 +209,7 @@ func (server *Server) runtimeIdentityProvider(settings runtimeIdentityProvider) 
 		return nil, errors.New("control: runtime providers need a public HTTPS control URL")
 	}
 	var provider identity.IdentityProvider
+	var err error
 	if settings.Type == "oidc" {
 		provider, err = identity.NewOIDCProvider(identity.OIDCConfig{
 			ID: settings.ID, DisplayName: settings.DisplayName, Issuer: settings.Issuer,

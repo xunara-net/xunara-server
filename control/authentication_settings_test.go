@@ -108,6 +108,54 @@ func TestRuntimeAuthenticationPolicyInvitationsAndOwnerBoundary(test *testing.T)
 	}
 }
 
+func TestRuntimeOIDCPublicClientConfiguration(test *testing.T) {
+	server := newServerWithConfig(test, Config{ServerURL: "https://app.example.test"})
+	token := inviteOwnerToken(test, server)
+	endpoint := "/api/v1/authentication/providers"
+	body := map[string]any{"revision": 0, "id": "public-oidc", "type": "oidc", "display_name": "OIDC 公共客户端", "client_id": "public-client", "issuer": "https://issuer.example.test", "enabled": true}
+	created := authenticationSettingsRequest(test, server, http.MethodPost, endpoint, body, token)
+	if created.Code != http.StatusCreated {
+		test.Fatalf("public client creation: %d %s", created.Code, created.Body.String())
+	}
+	var payload struct {
+		Providers []struct {
+			SecretConfigured bool `json:"secret_configured"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &payload); err != nil || len(payload.Providers) != 1 || payload.Providers[0].SecretConfigured {
+		test.Fatal("public client falsely reports a stored secret")
+	}
+	if _, err := os.Stat(filepath.Join(server.cfg.StateDir, "authentication_secret.key")); !os.IsNotExist(err) {
+		test.Fatal("public client created an unnecessary sealing key")
+	}
+	peer, err := New(server.cfg)
+	if err != nil {
+		test.Fatal(err)
+	}
+	defer peer.Close()
+	if _, exists := peer.identityProviders().Get("public-oidc"); !exists {
+		test.Fatal("public client did not survive restart without a secret")
+	}
+	for _, change := range []struct {
+		revision uint64
+		secret   string
+	}{{1, "confidential-oidc-secret"}, {2, ""}} {
+		response := authenticationSettingsRequest(test, server, http.MethodPatch, endpoint+"/public-oidc", map[string]any{"revision": change.revision, "client_secret": change.secret}, token)
+		if response.Code != http.StatusOK {
+			test.Fatal("OIDC client secret configuration transition failed")
+		}
+	}
+	saved, err := server.identity.ReadAuthenticationConfig(test.Context())
+	var config authenticationConfiguration
+	if err != nil || json.Unmarshal(saved.Payload, &config) != nil || config.Providers[0].SealedSecret != "" {
+		test.Fatal("public client retained the removed confidential secret")
+	}
+	denied := authenticationSettingsRequest(test, server, http.MethodPost, endpoint, map[string]any{"revision": 3, "id": "github-without-secret", "type": "github", "client_id": "client", "enabled": false}, token)
+	if denied.Code != http.StatusBadRequest {
+		test.Fatal("OAuth2 application silently accepted missing server credentials")
+	}
+}
+
 func TestRuntimeAuthenticationRejectsUnsafeProviderConfiguration(test *testing.T) {
 	server := newServerWithConfig(test, Config{ServerURL: "https://app.example.test"})
 	token := inviteOwnerToken(test, server)
