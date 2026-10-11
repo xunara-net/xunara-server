@@ -38,6 +38,7 @@ func (s *Server) apiAuthRouter() http.Handler {
 	r.Get("/start", s.handleAPIAuthStart)
 	r.Post("/invite/start", s.handleAPIExternalInviteStart)
 	r.Post("/login", s.handleAPIAuthLogin)
+	r.Post("/password-reset", s.handleAPIResetPassword)
 	r.Post("/signup", s.handleAPIAuthSignup)
 	r.With(deprecatedAccountEndpoint).Post("/logout", s.handleAPIAuthLogout)
 	r.Post("/passkey/begin", s.handlePasskeyLoginBegin)
@@ -106,6 +107,7 @@ func (s *Server) apiCapabilities() []string {
 	caps := []string{}
 	if s.localLogin {
 		caps = append(caps, "auth.password")
+		caps = append(caps, "account.password_reset")
 	}
 	p := s.Plan()
 	if s.passkeys != nil {
@@ -283,6 +285,7 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 		"local_login":         s.localLogin,
 		"setup_required":      required,
 		"passkeys":            s.passkeys != nil,
+		"password_reset":      s.localLogin && !required,
 		"registration":        s.registrationMode().String(),
 		"member_registration": s.memberRegistrationMode().String(),
 		"member_invitations":  !required && s.memberRegistrationMode().AllowsSignup(),

@@ -82,6 +82,9 @@ func (store *SQLiteStore) SetUserStatusByPlatform(ctx context.Context, userID ta
 			return UserStatusResult{}, errors.New("identity: account sessions were not fully revoked")
 		}
 	}
+	if err := deletePasswordReset(ctx, transaction, userID); err != nil {
+		return UserStatusResult{}, err
+	}
 	detail := fmt.Sprintf("disabled=%t -> %t; revoked_sessions=%d; reason=%s", !previous.DisabledAt.IsZero(), change.Disabled, revoked, reason)
 	if err := insertIdentityAudit(ctx, transaction, "platform", action, fmt.Sprintf("user:%d", userID), detail, now); err != nil {
 		return UserStatusResult{}, err

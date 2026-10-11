@@ -139,6 +139,8 @@ const (
 	AuditUserDisabled         = "user.disabled"
 	AuditUserEnabled          = "user.enabled"
 	AuditPasswordChanged      = "user.password_changed"
+	AuditPasswordResetIssued  = "user.password_reset_issued"
+	AuditPasswordResetUsed    = "user.password_reset_used"
 	AuditPasswordChangeFailed = "user.password_change_failed"
 	AuditNodeRegistered       = "node.registered"
 	AuditNodeApproved         = "node.approved"

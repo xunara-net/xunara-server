@@ -125,6 +125,7 @@ type Store interface {
 	AccountStore
 	MemberStore
 	UserStatusStore
+	PasswordResetStore
 	RegistrationInviteStore
 	RegistrationStore
 	BootstrapStore

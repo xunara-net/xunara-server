@@ -136,6 +136,20 @@ func (store *SQLiteStore) ChangeLocalPassword(ctx context.Context, userID tailcf
 	if err != nil {
 		return 0, fmt.Errorf("identity: checking revoked session count: %w", err)
 	}
+	if err := deletePasswordReset(ctx, tx, userID); err != nil {
+		return 0, err
+	}
+	user, err := scanUser(tx.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users WHERE id = ?", int64(userID)))
+	if err != nil {
+		return 0, err
+	}
+	revision := now
+	if !revision.After(user.UpdatedAt) {
+		revision = user.UpdatedAt.Add(time.Nanosecond)
+	}
+	if err := requireIdentityWrite(tx.ExecContext(ctx, "UPDATE users SET updated_at = ? WHERE id = ? AND updated_at = ?", revision.UnixNano(), int64(userID), user.UpdatedAt.UnixNano())); err != nil {
+		return 0, err
+	}
 	if err := insertAccountAudit(ctx, tx, userID, AuditPasswordChanged, fmt.Sprintf("password changed; revoked %d sessions", revoked), now); err != nil {
 		return 0, err
 	}
@@ -173,10 +187,5 @@ func lockAccountSession(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, 
 // insertAccountAudit 与账户变更共用事务：写审计失败时，业务变更也必须回滚。
 func insertAccountAudit(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, action, detail string, now time.Time) error {
 	target := fmt.Sprintf("user:%d", userID)
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO audit_events (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
-		now.UnixNano(), target, action, target, detail); err != nil {
-		return fmt.Errorf("identity: auditing account change: %w", err)
-	}
-	return nil
+	return insertIdentityAudit(ctx, tx, target, action, target, detail, now)
 }

@@ -278,6 +278,7 @@ func TestAccountIdentityMigrationPreservesPendingLogin(t *testing.T) {
 		DROP TABLE authentication_config;
 		ALTER TABLE users DROP COLUMN disabled_at;
 		ALTER TABLE users DROP COLUMN disabled_reason;
+		DROP TABLE password_reset_tickets;
 		UPDATE schema_migrations SET version = 13 WHERE module = 'identity'`); err != nil {
 		t.Fatal(err)
 	}

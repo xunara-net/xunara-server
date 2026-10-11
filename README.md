@@ -147,12 +147,17 @@ go run ./cmd/xunarad \
 数据流、测试范围及未闭环并发路径见 [ADR-0014](docs/adr/ADR-0014-browser-auth-and-member-invitations.md)。
 第三方邀请加入、账户绑定/解绑与原子认证已补齐，未知身份也遵守 invite/closed 准入；
 详见 [MagicDNS 与账户入门](docs/account-onboarding-and-magicdns.md)。
-此处不代表邮箱验证/找回、2FA 或邮件投递已经完成。
+此处不代表邮箱验证、自动邮件找回、2FA 或邮件投递已经完成。
 自助开通入口拒绝未知第三方身份直接加入入口网络，不按邮箱认领 owner；已有显式
 绑定仍可登录。第三方自动创建独立租户尚未完成，见
 [ADR-0015](docs/adr/ADR-0015-self-service-external-admission.md)。
 
 ## 账户自助管理
+
+平台辅助密码重置已提供后台生成与匿名一次性兑换；不使用未验证邮箱恢复身份，
+不让管理员看到旧密码。入口、事务、identity v17、升级与未完成边界见
+[密码恢复说明](docs/password-recovery.md)。生成不改密码或登录；兑换后重新登录，
+设备、中继、API Key 与其他绑定不因改密而撤销。
 
 平台现在可在后台按租户禁用 / 解禁账号；状态、会话撤销与审计原子提交，使用用户
 完整版本防覆盖，保护最后一位启用的 owner。所有人类登录和委托 API 权限遵守
@@ -187,7 +192,7 @@ go run ./cmd/xunarad \
 要求刷新并重新确认。CLI 共用补丁与事务审计，旧完整更新保留为薄适配；操作与
 无迁移/累积升级边界见 [成员管理](docs/member-management.md)及
 [ADR-0025](docs/adr/ADR-0025-atomic-member-updates.md)。
-普通成员与 admin 使用自助账户接口管理自己的资料。邮箱验证、密码找回与
+普通成员与 admin 使用自助账户接口管理自己的资料。邮箱验证、自动邮件找回与
 2FA 不包含在本次实现内；正式使用必须部署 HTTPS。
 
 ### 控制台登录管理

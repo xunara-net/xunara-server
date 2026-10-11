@@ -374,6 +374,7 @@ func TestMigrationTwelveCreatesCredentialAndInviteTables(t *testing.T) {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
+DROP TABLE password_reset_tickets;
 DROP TABLE local_credentials;
 DROP TABLE registration_invites;
 ALTER TABLE auth_transactions DROP COLUMN account_user_id;

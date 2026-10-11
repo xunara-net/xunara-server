@@ -322,6 +322,18 @@ ALTER TABLE auth_transactions ADD COLUMN authentication_revision INTEGER NOT NUL
 ALTER TABLE users ADD COLUMN disabled_at INTEGER;
 ALTER TABLE users ADD COLUMN disabled_reason TEXT NOT NULL DEFAULT '';
 `,
+	// v17：重置码独立于会话与第三方授权；同一用户最多保留一个仅哈希的待用码。
+	`
+CREATE TABLE password_reset_tickets (
+	user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+	id TEXT NOT NULL UNIQUE,
+	token_hash TEXT NOT NULL UNIQUE,
+	credential_fingerprint TEXT NOT NULL,
+	credential_updated_at INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL CHECK (expires_at > created_at)
+);
+`,
 }
 
 // SQLiteStore is a durable [Store] sharing the control plane's database.
@@ -548,6 +560,9 @@ func (store *SQLiteStore) DeleteUserContext(ctx context.Context, id tailcfg.User
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM webauthn_ceremonies WHERE user_id = ?", int64(id)); err != nil {
 		return fmt.Errorf("identity: deleting passkey ceremonies of user %d: %w", id, err)
+	}
+	if err := deletePasswordReset(ctx, tx, id); err != nil {
+		return err
 	}
 	res, err := tx.ExecContext(ctx, "DELETE FROM users WHERE id = ?", int64(id))
 	if err != nil {

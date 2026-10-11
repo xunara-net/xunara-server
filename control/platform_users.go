@@ -18,21 +18,23 @@ import (
 
 // platformUser is one account as the platform API reports it.
 type platformUser struct {
-	Org            string     `json:"org"`
-	OrgName        string     `json:"orgName"`
-	ID             uint64     `json:"id"`
-	Login          string     `json:"login"`
-	DisplayName    string     `json:"displayName"`
-	Email          string     `json:"email"`
-	Role           string     `json:"role"`
-	Plan           string     `json:"plan"`
-	Sessions       int        `json:"sessions"`
-	LastSeen       *time.Time `json:"lastSeen,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-	Disabled       bool       `json:"disabled"`
-	DisabledAt     *time.Time `json:"disabledAt,omitempty"`
-	DisabledReason string     `json:"disabledReason"`
+	Org                    string     `json:"org"`
+	OrgName                string     `json:"orgName"`
+	ID                     uint64     `json:"id"`
+	Login                  string     `json:"login"`
+	DisplayName            string     `json:"displayName"`
+	Email                  string     `json:"email"`
+	Role                   string     `json:"role"`
+	Plan                   string     `json:"plan"`
+	Sessions               int        `json:"sessions"`
+	LastSeen               *time.Time `json:"lastSeen,omitempty"`
+	CreatedAt              time.Time  `json:"createdAt"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
+	Disabled               bool       `json:"disabled"`
+	DisabledAt             *time.Time `json:"disabledAt,omitempty"`
+	DisabledReason         string     `json:"disabledReason"`
+	PasswordResetAvailable bool       `json:"passwordResetAvailable"`
+	PasswordResetExpiresAt *time.Time `json:"passwordResetExpiresAt,omitempty"`
 }
 
 // handlePlatformUsers implements GET /api/platform/v1/users: every account on
@@ -63,6 +65,24 @@ func (r *Router) handlePlatformUsers(w http.ResponseWriter, req *http.Request) {
 			if row.Disabled {
 				disabledAt := u.DisabledAt
 				row.DisabledAt = &disabledAt
+			}
+			if server.localLogin && !row.Disabled {
+				_, err := server.identity.LookupLocalCredential(req.Context(), u.ID)
+				if err != nil && !errors.Is(err, identity.ErrCredentialNotFound) {
+					writeAPIError(w, http.StatusServiceUnavailable, "PASSWORD_RESET_UNAVAILABLE: could not read password availability")
+					return
+				}
+				row.PasswordResetAvailable = err == nil
+				if row.PasswordResetAvailable {
+					status, found, err := server.identity.GetPasswordResetStatus(req.Context(), u.ID)
+					if err != nil {
+						writeAPIError(w, http.StatusServiceUnavailable, "PASSWORD_RESET_UNAVAILABLE: could not read pending reset status")
+						return
+					}
+					if found {
+						row.PasswordResetExpiresAt = &status.ExpiresAt
+					}
+				}
 			}
 			sessions, err := server.identity.ListAccountSessions(req.Context(), u.ID)
 			if err != nil {
@@ -139,8 +159,8 @@ func (router *Router) handlePlatformUserStatus(writer http.ResponseWriter, reque
 }
 
 // handlePlatformRevokeUserSessions implements
-// POST /api/platform/v1/organizations/{orgID}/users/{userID}/revoke: force a
-// user off every device.
+// POST /api/platform/v1/organizations/{orgID}/users/{userID}/revoke：只撤销浏览器会话，
+// 不改变 Machine Identity、在线节点或独立服务凭据。
 func (r *Router) handlePlatformRevokeUserSessions(w http.ResponseWriter, req *http.Request) {
 	orgID := chi.URLParam(req, "orgID")
 	server := r.serverFor(orgID)

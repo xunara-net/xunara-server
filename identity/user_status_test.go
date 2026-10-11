@@ -247,7 +247,8 @@ func TestUserStatusCASAndInput(test *testing.T) {
 func TestUserStatusMigrationPreservesOldAccounts(test *testing.T) {
 	store := openTestStore(test)
 	_, member, session, token := statusFixture(test, store)
-	if _, err := store.db.Exec(`ALTER TABLE users DROP COLUMN disabled_at;
+	if _, err := store.db.Exec(`DROP TABLE password_reset_tickets;
+		ALTER TABLE users DROP COLUMN disabled_at;
 		ALTER TABLE users DROP COLUMN disabled_reason;
 		UPDATE schema_migrations SET version = 15 WHERE module = 'identity'`); err != nil {
 		test.Fatal(err)
