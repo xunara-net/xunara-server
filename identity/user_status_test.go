@@ -247,6 +247,7 @@ func TestUserStatusCASAndInput(test *testing.T) {
 func TestUserStatusMigrationPreservesOldAccounts(test *testing.T) {
 	store := openTestStore(test)
 	_, member, session, token := statusFixture(test, store)
+	rewindLoginHistorySchema(test, store.db)
 	if _, err := store.db.Exec(`DROP TABLE password_reset_tickets;
 		ALTER TABLE users DROP COLUMN disabled_at;
 		ALTER TABLE users DROP COLUMN disabled_reason;

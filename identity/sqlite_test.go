@@ -373,6 +373,7 @@ func TestMigrationTwelveCreatesCredentialAndInviteTables(t *testing.T) {
 	if _, err := NewSQLiteStore(ctx, db); err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
+	rewindLoginHistorySchema(t, db)
 	if _, err := db.ExecContext(ctx, `
 DROP TABLE password_reset_tickets;
 DROP TABLE local_credentials;

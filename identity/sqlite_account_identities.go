@@ -106,7 +106,7 @@ func (store *SQLiteStore) CompleteExternalAuthentication(ctx context.Context, tr
 		if err != nil {
 			return ExternalAuthentication{}, err
 		}
-		completed.Session, err = store.createSession(ctx, tx, NewSessionOptions{UserID: user.ID, AuthMethod: result.ProviderID, TTL: options.SessionTTL}, completed.Token)
+		completed.Session, err = store.createSession(ctx, tx, NewSessionOptions{UserID: user.ID, AuthMethod: result.ProviderID, TTL: options.SessionTTL, ClientInfo: options.ClientInfo}, completed.Token)
 		if err != nil {
 			return ExternalAuthentication{}, err
 		}

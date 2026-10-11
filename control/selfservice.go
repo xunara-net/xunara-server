@@ -348,7 +348,7 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	user, session, token, err := srv.claimLocalAccount(ctx, identity.ClaimTenantOwner, login, display, email, body.Password)
+	user, session, token, err := srv.claimLocalAccount(ctx, identity.ClaimTenantOwner, login, display, email, body.Password, front.sessionClientInfo(req))
 	if err != nil {
 		rollback(err)
 		w.Header().Set("Retry-After", "5")

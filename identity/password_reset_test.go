@@ -299,6 +299,7 @@ func TestPasswordResetMigrationPreservesOldIdentity(test *testing.T) {
 	store := openTestStore(test)
 	member, session, token := passwordResetFixture(test, store)
 	credential, _ := store.GetLocalCredential(member.ID)
+	rewindLoginHistorySchema(test, store.db)
 	if _, err := store.db.Exec("DROP TABLE password_reset_tickets; UPDATE schema_migrations SET version = 16 WHERE module = 'identity'"); err != nil {
 		test.Fatal(err)
 	}

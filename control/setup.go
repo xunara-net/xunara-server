@@ -250,7 +250,7 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, session, token, err := s.claimLocalAccount(r.Context(), identity.ClaimAdministrator, login, display, email, password)
+	_, session, token, err := s.claimLocalAccount(r.Context(), identity.ClaimAdministrator, login, display, email, password, s.sessionClientInfo(r))
 	switch {
 	case errors.Is(err, identity.ErrUserNotFound):
 		fail(http.StatusInternalServerError, "Setup failed", "The administrator account is missing.")

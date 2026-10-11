@@ -271,6 +271,7 @@ func TestAccountIdentityMigrationPreservesPendingLogin(t *testing.T) {
 	store := openTestStore(t)
 	user, _, session, token := seedAccount(t, store, "existing")
 	authorization := accountAuthorization(t, store, NewAuthTransactionOptions{ReturnTo: "/security"})
+	rewindLoginHistorySchema(t, store.db)
 	if _, err := store.db.Exec(`ALTER TABLE auth_transactions DROP COLUMN account_user_id;
 		ALTER TABLE auth_transactions DROP COLUMN account_session_id;
 		ALTER TABLE auth_transactions DROP COLUMN invite_token_hash;

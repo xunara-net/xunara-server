@@ -334,6 +334,8 @@ CREATE TABLE password_reset_tickets (
 	expires_at INTEGER NOT NULL CHECK (expires_at > created_at)
 );
 `,
+	// v18：登录记录不包含凭据，且不随过期会话清理；来源仅对新认证采集。
+	accountLoginHistoryMigration,
 }
 
 // SQLiteStore is a durable [Store] sharing the control plane's database.
@@ -562,6 +564,9 @@ func (store *SQLiteStore) DeleteUserContext(ctx context.Context, id tailcfg.User
 		return fmt.Errorf("identity: deleting passkey ceremonies of user %d: %w", id, err)
 	}
 	if err := deletePasswordReset(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := deleteAccountLoginHistory(ctx, tx, id); err != nil {
 		return err
 	}
 	res, err := tx.ExecContext(ctx, "DELETE FROM users WHERE id = ?", int64(id))

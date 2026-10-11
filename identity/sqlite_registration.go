@@ -79,7 +79,7 @@ func (store *SQLiteStore) RegisterLocalAccount(ctx context.Context, registration
 		}
 	}
 	session, err := store.createSession(ctx, tx, NewSessionOptions{
-		UserID: user.ID, AuthMethod: LocalProviderID, TTL: registration.SessionTTL,
+		UserID: user.ID, AuthMethod: LocalProviderID, TTL: registration.SessionTTL, ClientInfo: registration.ClientInfo,
 	}, sessionToken)
 	if err != nil {
 		return User{}, Session{}, "", err

@@ -10,7 +10,9 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-const sessionColumns = "id, token_hash, user_id, auth_method, created_at, expires_at, last_seen_at, revoked_at, revoked_reason, rotated_from"
+const sessionColumns = "id, token_hash, user_id, auth_method, created_at, expires_at, last_seen_at, revoked_at, revoked_reason, rotated_from, client_ip, user_agent"
+
+const SessionActivityInterval = time.Minute
 
 // CreateSession implements [SessionStore].
 func (s *SQLiteStore) CreateSession(opts NewSessionOptions) (Session, string, error) {
@@ -54,14 +56,15 @@ func (s *SQLiteStore) createSession(ctx context.Context, exec interface {
 		ExpiresAt:   now.Add(ttl),
 		LastSeenAt:  now,
 		RotatedFrom: opts.RotatedFrom,
+		ClientInfo:  opts.ClientInfo.Normalize(),
 	}
 
 	result, err := exec.ExecContext(ctx,
-		`INSERT INTO sessions (`+sessionColumns+`) SELECT ?, ?, ?, ?, ?, ?, ?, NULL, '', ?
+		`INSERT INTO sessions (`+sessionColumns+`) SELECT ?, ?, ?, ?, ?, ?, ?, NULL, '', ?, ?, ?
 		WHERE EXISTS (SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL)`,
 		session.ID, HashSecret(token), int64(session.UserID), session.AuthMethod,
 		session.CreatedAt.UnixNano(), session.ExpiresAt.UnixNano(), session.LastSeenAt.UnixNano(),
-		session.RotatedFrom, int64(session.UserID))
+		session.RotatedFrom, session.ClientInfo.IP, session.ClientInfo.UserAgent, int64(session.UserID))
 	if err != nil {
 		return Session{}, fmt.Errorf("identity: creating session: %w", err)
 	}
@@ -89,8 +92,12 @@ func (s *SQLiteStore) createSession(ctx context.Context, exec interface {
 
 // GetSessionByToken implements [SessionStore].
 func (s *SQLiteStore) GetSessionByToken(token string) (Session, error) {
+	return s.lookupSession(context.Background(), token)
+}
+
+func (s *SQLiteStore) lookupSession(ctx context.Context, token string) (Session, error) {
 	now := time.Now().UTC()
-	row := s.db.QueryRowContext(context.Background(),
+	row := s.db.QueryRowContext(ctx,
 		"SELECT "+sessionColumns+" FROM sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM users WHERE id = sessions.user_id AND disabled_at IS NULL)",
 		HashSecret(token), now.UnixNano())
 
@@ -100,6 +107,22 @@ func (s *SQLiteStore) GetSessionByToken(token string) (Session, error) {
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("identity: looking up session: %w", err)
+	}
+	return session, nil
+}
+
+func (s *SQLiteStore) UseSession(ctx context.Context, token string) (Session, error) {
+	session, err := s.lookupSession(ctx, token)
+	if err != nil {
+		return Session{}, err
+	}
+	now := time.Now().UTC()
+	if now.Sub(session.LastSeenAt) < SessionActivityInterval {
+		return session, nil
+	}
+	session.LastSeenAt, err = s.touchSession(ctx, session.ID, session.UserID, now)
+	if err != nil {
+		return Session{}, err
 	}
 	return session, nil
 }
@@ -137,12 +160,50 @@ func (s *SQLiteStore) ListSessions(userID tailcfg.UserID) []Session {
 
 // TouchSession implements [SessionStore].
 func (s *SQLiteStore) TouchSession(id string, now time.Time) error {
-	_, err := s.db.ExecContext(context.Background(),
-		"UPDATE sessions SET last_seen_at = ? WHERE id = ?", now.UnixNano(), id)
-	if err != nil {
-		return fmt.Errorf("identity: touching session: %w", err)
+	ctx := context.Background()
+	session, err := scanSession(s.db.QueryRowContext(ctx, "SELECT "+sessionColumns+" FROM sessions WHERE id = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSessionNotFound
 	}
-	return nil
+	if err != nil {
+		return fmt.Errorf("identity: reading session for activity: %w", err)
+	}
+	_, err = s.touchSession(ctx, id, session.UserID, now)
+	return err
+}
+
+// 数据库条件同时保证节流、单调、用户边界与有效性；跨实例不依赖内存缓存。
+func (s *SQLiteStore) touchSession(ctx context.Context, id string, userID tailcfg.UserID, now time.Time) (time.Time, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE sessions SET last_seen_at = ?
+		WHERE id = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?
+		AND COALESCE(last_seen_at, 0) <= ?
+		AND EXISTS (SELECT 1 FROM users WHERE id = sessions.user_id AND disabled_at IS NULL)`,
+		now.UnixNano(), id, int64(userID), now.UnixNano(), now.Add(-SessionActivityInterval).UnixNano())
+	if err != nil {
+		return time.Time{}, fmt.Errorf("identity: recording session activity: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("identity: checking session activity: %w", err)
+	}
+	if affected == 1 {
+		return now, nil
+	}
+	var lastSeen int64
+	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(last_seen_at, 0) FROM sessions
+		WHERE id = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?
+		AND EXISTS (SELECT 1 FROM users WHERE id = sessions.user_id AND disabled_at IS NULL)`,
+		id, int64(userID), now.UnixNano()).Scan(&lastSeen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("identity: rereading session activity: %w", err)
+	}
+	if lastSeen <= now.Add(-SessionActivityInterval).UnixNano() {
+		return time.Time{}, errors.New("identity: required session activity was not written")
+	}
+	return time.Unix(0, lastSeen).UTC(), nil
 }
 
 // RevokeSession implements [SessionStore].
@@ -206,6 +267,7 @@ func (s *SQLiteStore) RotateSession(token string, ttl time.Duration) (Session, s
 		AuthMethod:  old.AuthMethod,
 		TTL:         ttl,
 		RotatedFrom: old.ID,
+		ClientInfo:  old.ClientInfo,
 	}, newToken)
 	if err != nil {
 		return Session{}, "", err
@@ -237,7 +299,8 @@ func scanSession(sc rowScanner) (Session, error) {
 		revokedAt sql.NullInt64
 	)
 	if err := sc.Scan(&session.ID, &tokenHash, &userID, &session.AuthMethod, &createdAt,
-		&expiresAt, &lastSeen, &revokedAt, &session.RevokedReason, &session.RotatedFrom); err != nil {
+		&expiresAt, &lastSeen, &revokedAt, &session.RevokedReason, &session.RotatedFrom,
+		&session.ClientInfo.IP, &session.ClientInfo.UserAgent); err != nil {
 		return Session{}, err
 	}
 	session.UserID = tailcfg.UserID(userID)

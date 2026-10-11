@@ -172,6 +172,10 @@ go run ./cmd/xunarad \
 
 用户控制台的个人设置使用独立账户接口（[ADR-0009](docs/adr/ADR-0009-account-self-service.md)）：
 
+成功登录记录与 Session 清理解耦，来源 IP / 客户端自报浏览器与最近活动已接入
+本人安全中心；轮换 / 旧记录明确区分，不猜城市或设备信任。接口、身份 v18、
+保留和故障 / 升级边界见[登录记录说明](docs/account-login-history.md)。
+
 - `GET /api/v1/account` 返回当前用户资料、`password_change_enabled` 和
   `csrf_token`，仅接受本租户的人类 Session，API Key 不可访问。
 - `PATCH /api/v1/account` 仅接受可选的 `display_name` 与 `email`，不接受用户

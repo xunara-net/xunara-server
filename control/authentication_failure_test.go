@@ -31,6 +31,13 @@ func (store *failingAuthenticationStore) GetSessionByToken(token string) (identi
 	return store.Store.GetSessionByToken(token)
 }
 
+func (store *failingAuthenticationStore) UseSession(ctx context.Context, token string) (identity.Session, error) {
+	if store.sessionError != nil && (store.faultToken == "" || store.faultToken == token) {
+		return identity.Session{}, store.sessionError
+	}
+	return store.Store.UseSession(ctx, token)
+}
+
 func (store *failingAuthenticationStore) LookupUser(ctx context.Context, userID tailcfg.UserID) (identity.User, error) {
 	if store.userError != nil {
 		return identity.User{}, store.userError

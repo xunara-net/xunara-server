@@ -23,6 +23,7 @@ type ExternalAuthenticationOptions struct {
 	MaxUsers    int
 	LoginName   string
 	SessionTTL  time.Duration
+	ClientInfo  SessionClientInfo
 }
 
 type ExternalAuthentication struct {

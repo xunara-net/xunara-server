@@ -185,7 +185,7 @@ func TestPasswordAdmissionCancellationDoesNotWrite(t *testing.T) {
 	server := newTestServer(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	result, err := server.signInWithPassword(ctx, "127.0.0.1", state.DefaultUserProfile(state.DefaultUserID).LoginName, testLocalPassword)
+	result, err := server.signInWithPassword(ctx, "127.0.0.1", state.DefaultUserProfile(state.DefaultUserID).LoginName, testLocalPassword, identity.SessionClientInfo{})
 	if !errors.Is(err, context.Canceled) || result.token != "" || result.session.ID != "" || result.user.ID != 0 {
 		t.Fatal("cancelled password sign-in returned an identity or lost cancellation")
 	}

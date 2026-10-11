@@ -31,7 +31,7 @@ func (server *Server) localSetupRequired(ctx context.Context) (bool, error) {
 
 // signInWithPassword 是 JSON 与旧 HTML 共用的业务路径，适配层只处理载荷、CSRF 与响应。
 // 任何存储错误都中止认证；不能因限流失效而继续验证，也不能将读取故障解释为密码错误。
-func (server *Server) signInWithPassword(ctx context.Context, address, login, password string) (passwordSignInResult, error) {
+func (server *Server) signInWithPassword(ctx context.Context, address, login, password string, clientInfo identity.SessionClientInfo) (passwordSignInResult, error) {
 	if err := ctx.Err(); err != nil {
 		return passwordSignInResult{}, err
 	}
@@ -81,7 +81,7 @@ func (server *Server) signInWithPassword(ctx context.Context, address, login, pa
 	}
 
 	// 慢哈希完成后再次在事务中核对原密码，避免并发改密后签发旧密码登录。
-	session, token, err := server.identity.CreateLocalSession(ctx, user.ID, credential.PasswordHash, server.sessionTTL)
+	session, token, err := server.identity.CreateLocalSession(ctx, user.ID, credential.PasswordHash, server.sessionTTL, clientInfo)
 	if errors.Is(err, identity.ErrCredentialChanged) || errors.Is(err, identity.ErrUserDisabled) {
 		return reject("credential changed during sign-in")
 	}

@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -42,6 +43,8 @@ type Session struct {
 
 	// RotatedFrom is the ID of the session this one replaced, if any.
 	RotatedFrom string
+
+	ClientInfo SessionClientInfo
 }
 
 // NewSessionOptions are the inputs to [SessionStore.CreateSession].
@@ -50,6 +53,7 @@ type NewSessionOptions struct {
 	AuthMethod  string
 	TTL         time.Duration
 	RotatedFrom string
+	ClientInfo  SessionClientInfo
 }
 
 // DefaultSessionTTL is how long a browser session stays valid.
@@ -64,6 +68,9 @@ type SessionStore interface {
 	// GetSessionByToken resolves a token to a live session. Expired and
 	// revoked sessions return ErrSessionNotFound.
 	GetSessionByToken(token string) (Session, error)
+
+	// UseSession 验证有效人类会话并记录分钟粒度活动，不延长有效期。
+	UseSession(ctx context.Context, token string) (Session, error)
 
 	// GetSessionByID returns a session by its public ID, including revoked
 	// ones, for auditing and administration.

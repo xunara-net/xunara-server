@@ -19,6 +19,9 @@ type accountSessionView struct {
 	Status        string     `json:"status"`
 	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
 	RevokedReason string     `json:"revoked_reason,omitempty"`
+	LastSeenAt    *time.Time `json:"last_seen_at,omitempty"`
+	ClientIP      string     `json:"client_ip,omitempty"`
+	UserAgent     string     `json:"user_agent,omitempty"`
 }
 
 func (server *Server) handleAPIAccountSessions(writer http.ResponseWriter, request *http.Request) {
@@ -33,23 +36,29 @@ func (server *Server) handleAPIAccountSessions(writer http.ResponseWriter, reque
 	now := time.Now().UTC()
 	views := make([]accountSessionView, 0, len(sessions))
 	for _, session := range sessions {
-		view := accountSessionView{
-			ID: session.ID, AuthMethod: session.AuthMethod,
-			CreatedAt: session.CreatedAt, ExpiresAt: session.ExpiresAt, Status: "active",
-		}
-		if !session.RevokedAt.IsZero() {
-			view.Status = "revoked"
-			view.RevokedAt = &session.RevokedAt
-			view.RevokedReason = session.RevokedReason
-		} else if !session.ExpiresAt.After(now) {
-			view.Status = "expired"
-		}
-		views = append(views, view)
+		views = append(views, viewAccountSession(session, now))
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"sessions": views, "current_session_id": principal.Session.ID,
 		"csrf_token": csrfTokenFor(server.accountSessionToken(request)), "generated_at": now,
 	})
+}
+
+func viewAccountSession(session identity.Session, now time.Time) accountSessionView {
+	view := accountSessionView{
+		ID: session.ID, AuthMethod: session.AuthMethod,
+		CreatedAt: session.CreatedAt, ExpiresAt: session.ExpiresAt, Status: "active",
+		ClientIP: session.ClientInfo.IP, UserAgent: session.ClientInfo.UserAgent,
+	}
+	if !session.LastSeenAt.IsZero() {
+		view.LastSeenAt = &session.LastSeenAt
+	}
+	if !session.RevokedAt.IsZero() {
+		view.Status, view.RevokedAt, view.RevokedReason = "revoked", &session.RevokedAt, session.RevokedReason
+	} else if !session.ExpiresAt.After(now) {
+		view.Status = "expired"
+	}
+	return view
 }
 
 func (server *Server) handleAPIRevokeAccountSessions(writer http.ResponseWriter, request *http.Request) {

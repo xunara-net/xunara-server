@@ -48,9 +48,13 @@ func (store *SQLiteStore) UpdateUserProfile(ctx context.Context, userID tailcfg.
 	return user, nil
 }
 
-func (store *SQLiteStore) CreateLocalSession(ctx context.Context, userID tailcfg.UserID, expectedHash []byte, ttl time.Duration) (Session, string, error) {
+func (store *SQLiteStore) CreateLocalSession(ctx context.Context, userID tailcfg.UserID, expectedHash []byte, ttl time.Duration, infos ...SessionClientInfo) (Session, string, error) {
 	if userID == 0 || len(expectedHash) == 0 {
 		return Session{}, "", ErrCredentialChanged
+	}
+	clientInfo, err := singleSessionClientInfo(infos)
+	if err != nil {
+		return Session{}, "", err
 	}
 	token, err := newSecret()
 	if err != nil {
@@ -78,7 +82,7 @@ func (store *SQLiteStore) CreateLocalSession(ctx context.Context, userID tailcfg
 	}
 
 	session, err := store.createSession(ctx, tx, NewSessionOptions{
-		UserID: userID, AuthMethod: LocalProviderID, TTL: ttl,
+		UserID: userID, AuthMethod: LocalProviderID, TTL: ttl, ClientInfo: clientInfo,
 	}, token)
 	if err != nil {
 		return Session{}, "", err

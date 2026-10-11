@@ -85,7 +85,11 @@ func (store *SQLiteStore) DeleteAccountPasskey(ctx context.Context, userID tailc
 
 // CreatePasskeySession 防止签名验证期间凭据被删除后，仍以旧验证结果签发新会话。
 // 凭据删除和会话签发通过同一数据库写锁串行化，而不是依赖单实例内存锁。
-func (store *SQLiteStore) CreatePasskeySession(ctx context.Context, userID tailcfg.UserID, passkeyID string, ttl time.Duration) (Session, string, error) {
+func (store *SQLiteStore) CreatePasskeySession(ctx context.Context, userID tailcfg.UserID, passkeyID string, ttl time.Duration, infos ...SessionClientInfo) (Session, string, error) {
+	clientInfo, err := singleSessionClientInfo(infos)
+	if err != nil {
+		return Session{}, "", err
+	}
 	token, err := newSecret()
 	if err != nil {
 		return Session{}, "", err
@@ -107,7 +111,7 @@ func (store *SQLiteStore) CreatePasskeySession(ctx context.Context, userID tailc
 	if affected != 1 {
 		return Session{}, "", ErrPasskeyNotFound
 	}
-	session, err := store.createSession(ctx, tx, NewSessionOptions{UserID: userID, AuthMethod: "passkey", TTL: ttl}, token)
+	session, err := store.createSession(ctx, tx, NewSessionOptions{UserID: userID, AuthMethod: "passkey", TTL: ttl, ClientInfo: clientInfo}, token)
 	if err != nil {
 		return Session{}, "", err
 	}

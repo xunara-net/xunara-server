@@ -172,7 +172,7 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.signInWithPassword(r.Context(), s.clientIP(r), login, password)
+	result, err := s.signInWithPassword(r.Context(), s.clientIP(r), login, password, s.sessionClientInfo(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, errPasswordRejected):
@@ -297,6 +297,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 	completed, err := s.identity.CompleteExternalAuthentication(ctx, tx.ID, *result, identity.ExternalAuthenticationOptions{
 		AllowCreate: s.memberRegistrationMode() == RegistrationOpen && s.selfServiceInfo() == nil,
 		MaxUsers:    s.Plan().MaxUsers, LoginName: sanitizeLoginName(base), SessionTTL: s.sessionTTL,
+		ClientInfo: s.sessionClientInfo(r),
 	})
 	if err != nil {
 		status, message := http.StatusServiceUnavailable, "Your sign-in or binding could not be committed. Please try again."

@@ -63,7 +63,8 @@ type localSignupRequest struct {
 	Password string
 	// Confirm is the repeated password. The JSON API sets it equal to
 	// Password, since an API client has no second form field to typo.
-	Confirm string
+	Confirm    string
+	ClientInfo identity.SessionClientInfo
 }
 
 // signupRejection is a registration failure that is safe to show the person
@@ -169,6 +170,7 @@ func (s *Server) signupLocalUser(ctx context.Context, req localSignupRequest) (i
 		LoginName: login, DisplayName: display, Email: email, PasswordHash: hash,
 		InviteToken: admission.token, MaxUsers: s.Plan().MaxUsers, SessionTTL: s.sessionTTL,
 		AuthenticationRevision: revision,
+		ClientInfo:             req.ClientInfo,
 	})
 	switch {
 	case errors.Is(err, identity.ErrAuthenticationConfigChanged):
@@ -226,12 +228,13 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, session, sessionToken, err := s.signupLocalUser(r.Context(), localSignupRequest{
-		Invite:   r.PostFormValue("invite"),
-		Login:    r.PostFormValue("login"),
-		Display:  r.PostFormValue("display_name"),
-		Email:    r.PostFormValue("email"),
-		Password: r.PostFormValue("password"),
-		Confirm:  r.PostFormValue("confirm"),
+		Invite:     r.PostFormValue("invite"),
+		Login:      r.PostFormValue("login"),
+		Display:    r.PostFormValue("display_name"),
+		Email:      r.PostFormValue("email"),
+		Password:   r.PostFormValue("password"),
+		Confirm:    r.PostFormValue("confirm"),
+		ClientInfo: s.sessionClientInfo(r),
 	})
 	if err != nil {
 		var rejection signupRejection

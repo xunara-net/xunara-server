@@ -24,6 +24,7 @@ type LocalAccountClaim struct {
 	Email        string
 	PasswordHash []byte
 	SessionTTL   time.Duration
+	ClientInfo   SessionClientInfo
 }
 
 type BootstrapStore interface {

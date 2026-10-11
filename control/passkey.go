@@ -70,7 +70,7 @@ func (server *Server) handlePasskeyLoginFinish(writer http.ResponseWriter, reque
 		writeAPIError(writer, http.StatusBadRequest, "PASSKEY_LOGIN_FAILED: verification failed; start sign-in again")
 		return
 	}
-	session, token, err := server.identity.CreatePasskeySession(request.Context(), user.ID, used.ID, server.sessionTTL)
+	session, token, err := server.identity.CreatePasskeySession(request.Context(), user.ID, used.ID, server.sessionTTL, server.sessionClientInfo(request))
 	if err != nil {
 		if errors.Is(err, identity.ErrUserDisabled) {
 			writeAPIError(writer, http.StatusUnauthorized, "PASSKEY_LOGIN_FAILED: sign-in is not available for this credential")

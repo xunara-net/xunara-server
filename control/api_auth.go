@@ -349,7 +349,7 @@ func (s *Server) handleAPIAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	login := strings.TrimSpace(req.Login)
 	password := req.Password
-	result, err := s.signInWithPassword(r.Context(), s.clientIP(r), login, password)
+	result, err := s.signInWithPassword(r.Context(), s.clientIP(r), login, password, s.sessionClientInfo(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, errPasswordRejected):
@@ -413,12 +413,13 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, session, token, err := s.signupLocalUser(r.Context(), localSignupRequest{
-		Invite:   req.Invite,
-		Login:    req.Login,
-		Display:  req.DisplayName,
-		Email:    req.Email,
-		Password: req.Password,
-		Confirm:  req.Password,
+		Invite:     req.Invite,
+		Login:      req.Login,
+		Display:    req.DisplayName,
+		Email:      req.Email,
+		Password:   req.Password,
+		Confirm:    req.Password,
+		ClientInfo: s.sessionClientInfo(r),
 	})
 	if err != nil {
 		var rejection signupRejection

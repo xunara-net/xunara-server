@@ -170,7 +170,7 @@ func (server *Server) resolveCookieSession(request *http.Request) (identity.Sess
 		if cookie.Name != sessionCookieName || cookie.Value == "" {
 			continue
 		}
-		session, err := server.identity.GetSessionByToken(cookie.Value)
+		session, err := server.identity.UseSession(request.Context(), cookie.Value)
 		if err == nil {
 			return session, cookie.Value, nil
 		}

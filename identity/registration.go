@@ -19,6 +19,7 @@ type LocalRegistration struct {
 	MaxUsers               int
 	SessionTTL             time.Duration
 	AuthenticationRevision uint64
+	ClientInfo             SessionClientInfo
 }
 
 type RegistrationStore interface {

@@ -93,7 +93,7 @@ func (s *Server) principalForToken(ctx context.Context, token string) (apiPrinci
 		}, nil
 	}
 
-	session, err := s.identity.GetSessionByToken(token)
+	session, err := s.identity.UseSession(ctx, token)
 	if err != nil {
 		return apiPrincipal{}, err
 	}
@@ -236,6 +236,7 @@ func (s *Server) apiRouter() http.Handler {
 	r.Post("/account/identities/begin", s.handleAPIAccountIdentityBegin)
 	r.Delete("/account/identities/{id}", s.handleAPIUnlinkAccountIdentity)
 	r.Get("/account/sessions", s.handleAPIAccountSessions)
+	r.Get("/account/login-history", s.handleAPIAccountLoginHistory)
 	r.Post("/account/sessions/revoke", s.handleAPIRevokeAccountSessions)
 	r.Delete("/account/sessions/{id}", s.handleAPIRevokeAccountSession)
 	r.Get("/account/passkeys", s.handleAPIAccountPasskeys)

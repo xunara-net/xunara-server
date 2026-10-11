@@ -88,7 +88,7 @@ func (store *SQLiteStore) ClaimLocalAccount(ctx context.Context, claim LocalAcco
 		return User{}, Session{}, "", fmt.Errorf("identity: initializing local password: %w", err)
 	}
 	session, err := store.createSession(ctx, tx, NewSessionOptions{
-		UserID: user.ID, AuthMethod: LocalProviderID, TTL: claim.SessionTTL,
+		UserID: user.ID, AuthMethod: LocalProviderID, TTL: claim.SessionTTL, ClientInfo: claim.ClientInfo,
 	}, token)
 	if err != nil {
 		return User{}, Session{}, "", err
