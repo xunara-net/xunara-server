@@ -68,7 +68,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.renderPublicPage(w, r, signInPageTemplate, data)
 }
 
-// startExternalLogin starts an OIDC authorization for one provider.
+// startExternalLogin 复用持久事务发起 OIDC 或原生 OAuth2，不能在这里直接审批设备。
 func (s *Server) startExternalLogin(w http.ResponseWriter, r *http.Request, providerID, returnTo string) {
 	provider, ok := s.providers.Get(providerID)
 	if !ok {
@@ -76,6 +76,7 @@ func (s *Server) startExternalLogin(w http.ResponseWriter, r *http.Request, prov
 			"The requested identity provider is not configured on this server.")
 		return
 	}
+	// 沿用持久限流键，让升级和混合提供方共享同一 IP 预算，不重置既有计数。
 	allowed, retryAfter, err := s.store.AllowRate("login-oidc-ip:"+s.clientIP(r), loginAddressLimit, loginAddressWindow, time.Now())
 	if err != nil {
 		s.renderError(w, r, http.StatusServiceUnavailable, "Sign-in unavailable", "Please try again later.")
@@ -189,7 +190,7 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, returnTo, http.StatusFound)
 }
 
-// handleCallback implements GET /oidc/callback/{providerID}.
+// handleCallback 共用 OIDC/OAuth2 的持久认证链，适配器分别验证各自协议。
 //
 // The provider is taken from the path and cross-checked against the one the
 // transaction was created for, so a callback can never be replayed onto a
@@ -202,6 +203,13 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusNotFound, "Unknown provider",
 			"The requested identity provider is not configured on this server.")
 		return
+	}
+	if _, nativeOAuth2 := provider.(*identity.OAuth2Provider); nativeOAuth2 {
+		// 别名路由不能绕过回调 allowlist；精确路径与换码时的固定 redirect_uri 保持一致。
+		if r.URL.Path != "/oauth2/callback/"+providerID {
+			s.renderError(w, r, http.StatusBadRequest, "Sign-in rejected", "Start again from the configured sign-in page.")
+			return
+		}
 	}
 
 	txID, browserSecret, ok := authCookieValue(r)
@@ -278,7 +286,11 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, tx identity
 		return
 	}
 	base := result.Email
-	if base == "" {
+	if protocol, typed := provider.(interface{ Protocol() string }); typed && protocol.Protocol() == "oauth2" {
+		// OAuth2 邮箱只是展示属性，不能隐式成为 ACL principal；摘要也避免公开 raw subject。
+		reference := identity.IdentityReference(identity.ExternalIdentity{ProviderID: result.ProviderID, Subject: result.Subject})
+		base = result.ProviderID + "_" + reference[:16]
+	} else if base == "" {
 		base = result.ProviderID + "_" + result.Subject
 	}
 	completed, err := s.identity.CompleteExternalAuthentication(ctx, tx.ID, *result, identity.ExternalAuthenticationOptions{
@@ -402,6 +414,12 @@ func loginFailureReason(err error) string {
 	switch {
 	case errors.Is(err, identity.ErrStateMismatch):
 		return "oauth state mismatch"
+	case errors.Is(err, identity.ErrOAuth2Exchange):
+		return "oauth2 exchange rejected"
+	case errors.Is(err, identity.ErrOAuth2Token):
+		return "oauth2 token rejected"
+	case errors.Is(err, identity.ErrOAuth2Profile):
+		return "oauth2 profile rejected"
 	case errors.Is(err, identity.ErrNonceMismatch):
 		return "oidc nonce mismatch"
 	case errors.Is(err, identity.ErrTokenFromFuture):

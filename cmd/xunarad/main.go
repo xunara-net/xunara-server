@@ -49,8 +49,10 @@ func main() {
 			"OIDC redirect URL (default <server-url>/oidc/callback/<oidc-id>)")
 		oidcScopes = flag.String("oidc-scopes", "",
 			"comma-separated OIDC scopes (default openid,profile,email)")
+		oauth2Config = flag.String("oauth2-config", "",
+			"JSON array of OAuth2 providers; secrets must reference environment variables or private 0600 files")
 		allowLocalLogin = flag.Bool("allow-local-login", false,
-			"offer the built-in local login even when OIDC is configured")
+			"offer password login even when OIDC or OAuth2 is configured")
 		trustedProxy = flag.Bool("trusted-proxy", false,
 			"trust the reverse proxy in front of this service (nginx in the shipped units) and take the client address from the last X-Forwarded-For hop for rate limiting; keep it off when the control plane is reachable directly")
 		registration = flag.String("registration", string(control.DefaultRegistrationMode),
@@ -192,6 +194,11 @@ func main() {
 	}
 
 	var webhooks []webhook.Endpoint
+	oauth2Providers, err := loadOAuth2ConfigFile(*oauth2Config)
+	if err != nil {
+		logger.Error("configuring OAuth2 providers", "err", err)
+		os.Exit(1)
+	}
 	if *webhookURL != "" {
 		secret := os.Getenv(*webhookSecretEnv)
 		if secret == "" {
@@ -261,6 +268,7 @@ func main() {
 		ClientVersionURL:    *clientVerURL,
 		ConsoleTimezone:     *consoleTimezone,
 		OIDCProviders:       oidcProviders,
+		OAuth2Providers:     oauth2Providers,
 		AllowLocalLogin:     *allowLocalLogin,
 		Registration:        registrationMode,
 		TrustedProxy:        *trustedProxy,
@@ -343,6 +351,7 @@ var orgScopedFlags = []string{
 	"state-dir", "server-url", "domain", "policy", "nameserver", "dns-route",
 	"derp-map", "derp-policy", "derp-regions", "client-version", "client-version-url",
 	"oidc-issuer", "oidc-id", "oidc-client-id", "oidc-redirect-url", "oidc-scopes",
+	"oauth2-config",
 	"allow-local-login", "registration", "cert-domain",
 	"passkey", "passkey-rpid", "passkey-origin", "passkey-display-name",
 	"services-health-ttl", "id-token-rate-limit", "reach",

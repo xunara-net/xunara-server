@@ -103,16 +103,32 @@ func (s *Server) apiPlanView() map[string]any {
 // ask before rendering a surface, so adding a capability never requires
 // teaching every client a new version (AGENTS.md section 13).
 func (s *Server) apiCapabilities() []string {
-	caps := []string{"auth.password"}
+	caps := []string{}
+	if s.localLogin {
+		caps = append(caps, "auth.password")
+	}
 	p := s.Plan()
 	if s.passkeys != nil {
 		caps = append(caps, "auth.passkey")
 	}
+	protocols := make(map[string]bool)
 	for _, providerID := range s.providers.IDs() {
-		if providerID != identity.LocalProviderID {
-			caps = append(caps, "auth.oidc", "account.identity_binding")
-			break
+		if providerID == identity.LocalProviderID {
+			continue
 		}
+		provider, _ := s.providers.Get(providerID)
+		if typed, ok := provider.(interface{ Protocol() string }); ok {
+			protocols[typed.Protocol()] = true
+		}
+		protocols["external"] = true
+	}
+	for _, protocol := range []string{"oidc", "oauth2", "external"} {
+		if protocols[protocol] {
+			caps = append(caps, "auth."+protocol)
+		}
+	}
+	if protocols["external"] {
+		caps = append(caps, "account.identity_binding")
 	}
 	// Which self-service path this deployment accepts is a capability, not a
 	// guess: a console that offers an invitation field on an open deployment

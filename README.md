@@ -121,6 +121,11 @@ go run ./cmd/xunarad \
 
 ## 第三方登录与成员邀请
 
+原生 OAuth2 现支持 GitHub、GitLab、Gitea 和严格 S256 的通用提供方，可与 OIDC
+并存并共用绑定、邀请、会话和审计。配置只引用环境变量/私密文件，不接受明文
+secret；详见 [OAuth2 登录配置与验收边界](docs/oauth2-login.md)。不改数据库或
+官方客户端协议；没有真实应用与 HTTPS 时不会展示假入口。
+
 正式 Web 的提供方入口从 `/api/v1/auth/providers` 获取，浏览器整页导航到
 `/api/v1/auth/start`，不再把 GET `/login` 的 SPA 页面当成认证 API。
 `return_to` 只接受本站路径；OIDC callback URI 仍来自服务配置而非请求输入。

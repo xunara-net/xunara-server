@@ -1,0 +1,9 @@
+[
+  {
+    "id": "github",
+    "type": "github",
+    "display_name": "GitHub",
+    "client_id": "replace-with-your-registered-client-id",
+    "client_secret_env": "XUNARA_GITHUB_CLIENT_SECRET"
+  }
+]

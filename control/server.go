@@ -103,6 +103,8 @@ type Config struct {
 	// <ServerURL>/oidc/callback/<provider-id> unless RedirectURL says
 	// otherwise.
 	OIDCProviders []identity.OIDCConfig
+	// OAuth2Providers 复用账户级认证事务，不将 OAuth2 access token 当成 OIDC ID Token。
+	OAuth2Providers []identity.OAuth2Config
 	// Providers are additional identity providers registered as-is (custom
 	// adapters and tests). Prefer OIDCProviders for OIDC issuers.
 	Providers []identity.IdentityProvider
@@ -398,9 +400,6 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	providers := identity.NewRegistry()
-	redirects := make(map[string]string)
-
 	// The built-in local provider is the single-user mode's login method; it
 	// is offered by default when no external provider exists. It never
 	// authenticates anyone by itself: the password is checked against the
@@ -408,43 +407,13 @@ func New(cfg Config) (*Server, error) {
 	// first (see initSetupToken).
 	registration, err := ParseRegistrationMode(string(cfg.Registration))
 	if err != nil {
+		store.Close()
 		return nil, err
 	}
-
-	localLogin := len(cfg.OIDCProviders) == 0 && len(cfg.Providers) == 0 || cfg.AllowLocalLogin
-	// OIDC-only 网络也支持邀请注册；密码入口仍由 localLogin 单独决定。
-	if localLogin {
-		local := identity.LocalLogin{}
-		providers.Register(local)
-	}
-	for _, p := range cfg.Providers {
-		if p == nil {
-			store.Close()
-			return nil, fmt.Errorf("control: nil identity provider")
-		}
-		providers.Register(p)
-		if rp, ok := p.(interface{ RedirectURL() string }); ok {
-			redirects[p.ID()] = rp.RedirectURL()
-		}
-	}
-	for _, oc := range cfg.OIDCProviders {
-		if oc.ID == "" {
-			oc.ID = "oidc"
-		}
-		if oc.RedirectURL == "" && cfg.ServerURL != "" {
-			oc.RedirectURL = cfg.ServerURL + "/oidc/callback/" + oc.ID
-		}
-		provider, err := identity.NewOIDCProvider(oc)
-		if err != nil {
-			store.Close()
-			return nil, fmt.Errorf("control: %w", err)
-		}
-		providers.Register(provider)
-		redirects[provider.ID()] = provider.RedirectURL()
-	}
-	if len(providers.IDs()) == 0 {
+	providers, redirects, localLogin, err := configureIdentityProviders(cfg)
+	if err != nil {
 		store.Close()
-		return nil, fmt.Errorf("control: no identity provider configured")
+		return nil, err
 	}
 
 	sessionTTL := cfg.SessionTTL
@@ -816,6 +785,7 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/passkey/login/finish", s.handlePasskeyLoginFinish)
 	}
 	r.Get("/oidc/callback/{providerID}", s.handleCallback)
+	r.Get("/oauth2/callback/{providerID}", s.handleCallback)
 	r.Get("/register/{authID}", s.handleRegisterPage)
 	r.Post("/register/{authID}/approve", s.handleApproveDevice)
 	r.Post("/register/{authID}/deny", s.handleDenyDevice)

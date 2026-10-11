@@ -44,33 +44,34 @@ type orgSelfServiceConfig struct {
 // each secret field names the environment variable that holds it (AGENTS.md
 // section 8).
 type orgConfig struct {
-	ID                  string              `json:"id"`
-	Name                string              `json:"name"`
-	Domains             []string            `json:"domains"`
-	ServerURL           string              `json:"server_url"`
-	StateDir            string              `json:"state_dir"`
-	Domain              string              `json:"domain"`
-	Policy              string              `json:"policy"`
-	Nameservers         []string            `json:"nameservers"`
-	DNSRoutes           map[string][]string `json:"dns_routes"`
-	DERPMapFile         string              `json:"derp_map"`
-	DERPPolicy          *orgDERPPolicy      `json:"derp_policy"`
-	LatestClientVersion string              `json:"client_version"`
-	ClientVersionURL    string              `json:"client_version_url"`
-	NodeKeyExpiry       string              `json:"node_key_expiry"`
-	ServiceHealthTTL    string              `json:"service_health_ttl"`
-	IDTokenRateLimit    int                 `json:"id_token_rate_limit"`
-	ReachEnabled        bool                `json:"reach_enabled"`
-	FluxEnabled         bool                `json:"flux_enabled"`
-	FluxDir             string              `json:"flux_dir"`
-	FluxMaxSize         int64               `json:"flux_max_size"`
-	FluxTTL             string              `json:"flux_ttl"`
-	CertDomains         []string            `json:"cert_domains"`
-	DNS                 *orgDNSConfig       `json:"dns"`
-	OIDC                *orgOIDCConfig      `json:"oidc"`
-	Webhooks            []orgWebhookConfig  `json:"webhooks"`
-	AllowLocalLogin     bool                `json:"allow_local_login"`
-	Registration        string              `json:"registration"`
+	ID                  string                 `json:"id"`
+	Name                string                 `json:"name"`
+	Domains             []string               `json:"domains"`
+	ServerURL           string                 `json:"server_url"`
+	StateDir            string                 `json:"state_dir"`
+	Domain              string                 `json:"domain"`
+	Policy              string                 `json:"policy"`
+	Nameservers         []string               `json:"nameservers"`
+	DNSRoutes           map[string][]string    `json:"dns_routes"`
+	DERPMapFile         string                 `json:"derp_map"`
+	DERPPolicy          *orgDERPPolicy         `json:"derp_policy"`
+	LatestClientVersion string                 `json:"client_version"`
+	ClientVersionURL    string                 `json:"client_version_url"`
+	NodeKeyExpiry       string                 `json:"node_key_expiry"`
+	ServiceHealthTTL    string                 `json:"service_health_ttl"`
+	IDTokenRateLimit    int                    `json:"id_token_rate_limit"`
+	ReachEnabled        bool                   `json:"reach_enabled"`
+	FluxEnabled         bool                   `json:"flux_enabled"`
+	FluxDir             string                 `json:"flux_dir"`
+	FluxMaxSize         int64                  `json:"flux_max_size"`
+	FluxTTL             string                 `json:"flux_ttl"`
+	CertDomains         []string               `json:"cert_domains"`
+	DNS                 *orgDNSConfig          `json:"dns"`
+	OIDC                *orgOIDCConfig         `json:"oidc"`
+	OAuth2              []oauth2ProviderConfig `json:"oauth2"`
+	Webhooks            []orgWebhookConfig     `json:"webhooks"`
+	AllowLocalLogin     bool                   `json:"allow_local_login"`
+	Registration        string                 `json:"registration"`
 }
 
 // orgDERPPolicy restricts the DERP regions this organization serves. Mode is
@@ -279,6 +280,10 @@ func (o orgConfig) controlConfig(logger *slog.Logger) (control.Config, error) {
 		})
 	}
 
+	oauth2Providers, err := buildOAuth2Configs(o.OAuth2)
+	if err != nil {
+		return control.Config{}, err
+	}
 	var webhooks []webhook.Endpoint
 	for _, wh := range o.Webhooks {
 		secretEnv := wh.SecretEnv
@@ -316,6 +321,7 @@ func (o orgConfig) controlConfig(logger *slog.Logger) (control.Config, error) {
 		CertDomains:         o.CertDomains,
 		DNSProvider:         dnsProvider,
 		OIDCProviders:       oidcProviders,
+		OAuth2Providers:     oauth2Providers,
 		Webhooks:            webhooks,
 		AllowLocalLogin:     o.AllowLocalLogin,
 		Registration:        registration,

@@ -16,7 +16,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// OIDC-specific rejection reasons. They exist so a login handler can audit the
+// External authentication rejection reasons. They exist so a login handler can audit the
 // cause without ever telling the browser which check failed.
 var (
 	// ErrStateMismatch means the callback's state does not match the
@@ -139,6 +139,8 @@ func NewOIDCProvider(cfg OIDCConfig) (*OIDCProvider, error) {
 
 // ID implements [IdentityProvider].
 func (p *OIDCProvider) ID() string { return p.cfg.ID }
+
+func (provider *OIDCProvider) Protocol() string { return "oidc" }
 
 // DisplayName returns the human-readable provider name.
 func (p *OIDCProvider) DisplayName() string { return p.cfg.DisplayName }
