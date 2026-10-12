@@ -120,7 +120,7 @@ func (s *Server) handleRegister(ctx context.Context, req tailcfg.RegisterRequest
 	if err != nil {
 		return nil, err
 	}
-	s.storeRegistrationKeys(req)
+	s.storeRegistrationKeys(ctx, req, machineKey)
 	return resp, nil
 }
 
@@ -199,36 +199,21 @@ func (s *Server) rotationSignatureHint(req tailcfg.RegisterRequest, machineKey k
 // once the node they belong to exists. A pending interactive registration
 // keeps them in its device authorization instead, and applies them at
 // approval.
-func (s *Server) storeRegistrationKeys(req tailcfg.RegisterRequest) {
+func (s *Server) storeRegistrationKeys(ctx context.Context, req tailcfg.RegisterRequest, machineKey key.MachinePublic) {
 	if req.NLKey.IsZero() && len(req.NodeKeySignature) == 0 {
 		return
 	}
-	node, ok := s.store.GetNodeByNodeKey(req.NodeKey)
-	if !ok {
+	node, changed, err := s.networkConfig.RegistrationKeys(ctx, machineKey, req.NodeKey, req.NLKey, req.NodeKeySignature)
+	if errors.Is(err, state.ErrRouteNodeNotFound) {
 		return
 	}
-
-	changed := false
-	if !req.NLKey.IsZero() && node.NLKey != req.NLKey {
-		node.NLKey = req.NLKey
-		changed = true
-	}
-	signed := len(req.NodeKeySignature) > 0 && !slices.Equal(node.KeySignature, req.NodeKeySignature)
-	if signed {
-		node.KeySignature = slices.Clone(req.NodeKeySignature)
-		changed = true
-	}
-	if !changed {
+	if err != nil {
+		s.log.Error("storing registration keys", "err", err)
 		return
 	}
-	if err := s.store.UpdateNode(node); err != nil {
-		s.log.Error("storing registration keys", "node", node.StableID, "err", err)
-		return
+	if changed {
+		s.notifyNodePeers(node)
 	}
-	if signed {
-		s.audit(nodeActor(node), identity.AuditTailnetLockNodeSigned, nodeTarget(node), "node key signed at registration")
-	}
-	s.notifyNodePeers(node)
 }
 
 // decideRegistration applies the registration state machine.
@@ -262,7 +247,7 @@ func (s *Server) decideRegistration(ctx context.Context, req tailcfg.RegisterReq
 		// A non-zero expiry on an existing node is the client asking for its
 		// key to expire sooner (upstream LocalBackend.SetExpirySooner).
 		if !req.Expiry.IsZero() {
-			shortened, err := s.shortenNodeExpiry(node, req.Expiry)
+			shortened, err := s.shortenNodeExpiry(ctx, node, req.Expiry)
 			if err != nil {
 				return nil, err
 			}
@@ -277,18 +262,14 @@ func (s *Server) decideRegistration(ctx context.Context, req tailcfg.RegisterReq
 		return s.waitForFollowup(ctx, req, machineKey)
 	}
 
-	// From here on every branch creates a device, so the tenant's plan is
-	// consulted once, before the first one: re-registrations, logouts and
-	// follow-ups returned above and must keep working when the tenant is at
-	// its limit (the limit is on devices, not on talking to the control
-	// plane).
-	if err := s.assertDeviceQuota(); err != nil {
-		return nil, err
-	}
-
 	// 4. Pre-authentication key: the client can be authorized synchronously.
 	if req.Auth != nil && req.Auth.AuthKey != "" {
-		return s.registerWithAuthKey(req, machineKey)
+		return s.registerWithAuthKey(ctx, req, machineKey)
+	}
+
+	// 预授权路径在写事务内区分新建与轮换；满额不能阻止现有机器重新认证。
+	if err := s.assertDeviceQuota(); err != nil {
+		return nil, err
 	}
 
 	// 5. Interactive login: create a pending registration and hand the client a
@@ -302,7 +283,7 @@ func (s *Server) decideRegistration(ctx context.Context, req tailcfg.RegisterReq
 // (that is an administrator decision), and a value in the past is a logout,
 // which the caller handles before reaching here. Both refusals are explicit so
 // a client never believes an extension took effect.
-func (s *Server) shortenNodeExpiry(node state.Node, requested time.Time) (state.Node, error) {
+func (s *Server) shortenNodeExpiry(ctx context.Context, node state.Node, requested time.Time) (state.Node, error) {
 	now := time.Now()
 	if !requested.After(now) {
 		return node, NewHTTPError(http.StatusBadRequest, "an expiry in the past is a logout", nil)
@@ -317,14 +298,13 @@ func (s *Server) shortenNodeExpiry(node state.Node, requested time.Time) (state.
 		return node, NewHTTPError(http.StatusBadRequest, "extending the node key expiry is not allowed", nil)
 	}
 
-	updated := node
-	updated.Expiry = requested
-	if err := s.store.UpdateNode(updated); err != nil {
+	updated, err := s.networkConfig.ShortenNodeExpiry(ctx, node, requested)
+	if err != nil {
+		if errors.Is(err, state.ErrExpiryNotEarlier) || errors.Is(err, state.ErrDeviceChanged) {
+			return node, NewHTTPError(http.StatusBadRequest, "node key expiry may only be shortened; refresh the node state", nil)
+		}
 		return node, fmt.Errorf("updating node expiry: %w", err)
 	}
-
-	s.audit(nodeActor(node), identity.AuditNodeExpiryShortened, nodeTarget(node),
-		"node key expiry shortened to "+requested.UTC().Format(time.RFC3339))
 	// Peers see the new expiry in the netmap, so wake the streaming sessions.
 	s.notifyNodePeers(updated)
 	return updated, nil
@@ -334,100 +314,26 @@ func (s *Server) shortenNodeExpiry(node state.Node, requested time.Time) (state.
 //
 // The key authorizes a *machine*; the resulting node is still an independent
 // identity. A key is single-use unless it was created reusable.
-func (s *Server) registerWithAuthKey(req tailcfg.RegisterRequest, machineKey key.MachinePublic) (*tailcfg.RegisterResponse, error) {
-	now := time.Now().UTC()
-
-	preauth, ok := s.store.GetPreAuthKey(req.Auth.AuthKey)
-	if !ok {
-		return nil, NewHTTPError(http.StatusUnauthorized, "invalid pre-auth key", nil)
-	}
-	if !preauth.Usable(now) {
-		return nil, NewHTTPError(http.StatusUnauthorized, "expired or already used pre-auth key", nil)
-	}
-
-	var (
-		hostname string
-		hostinfo *tailcfg.Hostinfo
-	)
+func (s *Server) registerWithAuthKey(ctx context.Context, req tailcfg.RegisterRequest, machineKey key.MachinePublic) (*tailcfg.RegisterResponse, error) {
+	want := state.Node{MachineKey: machineKey, NodeKey: req.NodeKey, Hostinfo: req.Hostinfo,
+		Ephemeral: req.Ephemeral, RequestedExpiry: req.Expiry, NLKey: req.NLKey, KeySignature: slices.Clone(req.NodeKeySignature)}
 	if req.Hostinfo != nil {
-		hostinfo = req.Hostinfo
-		hostname = hostinfo.Hostname
+		want.Hostname = req.Hostinfo.Hostname
 	}
-
-	userID := preauth.UserID
-	if userID == 0 {
-		userID = state.DefaultUserID
-	}
-
-	node := state.Node{
-		MachineKey:      machineKey,
-		NodeKey:         req.NodeKey,
-		UserID:          userID,
-		Hostname:        hostname,
-		Hostinfo:        hostinfo,
-		Method:          state.RegisterMethodAuthKey,
-		Ephemeral:       preauth.Ephemeral || req.Ephemeral,
-		RequestedExpiry: req.Expiry,
-	}
-	// Tags are part of the key's authority: the key's creator authorized them
-	// against the policy's tagOwners. Re-validate the format defensively, since
-	// a row written by a future or older build could hold anything.
-	if tags, err := state.NormalizeTags(preauth.Tags); err != nil {
-		s.log.Warn("ignoring malformed pre-auth key tags", "key_id", preauth.ID, "err", err)
-	} else {
-		node.Tags = tags
-	}
-	s.applyRegistrationDefaults(&node, now)
-
-	actor := fmt.Sprintf("preauthkey:%d", preauth.ID)
-
-	// The machine key may already have a node whose node key changed (client
-	// re-authorization, node key expiry). Rotate it in place instead of
-	// registering a duplicate peer for the same machine (see rotation.go).
-	// A tags-only key may convert a user-owned node, so it matches any node of
-	// the machine, as upstream does.
-	existing, rotate, err := s.rotationCandidate(machineKey, userID, len(node.Tags) > 0)
+	node, err := s.networkConfig.EnrollAuthKey(ctx, req.Auth.AuthKey, want, s.Plan().MaxDevices, s.applyRegistrationDefaults)
 	if err != nil {
-		return nil, err
-	}
-	if rotate {
-		// Rotating replaces a device the tenant already has, so the device
-		// quota does not apply; it was checked by the caller for the paths
-		// that create one.
-		rotated, err := s.rotateNodeKey(existing, node, false, actor)
-		if err != nil {
-			return nil, err
+		switch {
+		case errors.Is(err, state.ErrPreAuthKeyNotUsable):
+			return nil, NewHTTPError(http.StatusUnauthorized, "invalid pre-auth key", nil)
+		case errors.Is(err, state.ErrDeviceLimit):
+			return nil, planGateError(MsgDeviceLimitReached)
+		case errors.Is(err, state.ErrNodeKeyExists), errors.Is(err, state.ErrAmbiguousMachine):
+			return nil, NewHTTPError(http.StatusConflict, "machine or node key is already bound", nil)
+		default:
+			return nil, NewHTTPError(http.StatusServiceUnavailable, "device enrollment could not be committed", err)
 		}
-		// Mark the key used only after the rotation is durable, for the same
-		// reason as the creation path below.
-		if err := s.store.MarkPreAuthKeyUsed(preauth.Key, now); err != nil {
-			s.log.Warn("marking pre-auth key used", "key_id", preauth.ID, "err", err)
-		}
-		return s.nodeToRegisterResponse(rotated), nil
 	}
-
-	// The caller checks the quota before choosing this path; checking again
-	// here keeps the invariant local to the code that creates the node.
-	if err := s.assertDeviceQuota(); err != nil {
-		return nil, err
-	}
-	if err := s.store.CreateNode(&node); err != nil {
-		if errors.Is(err, state.ErrNodeKeyExists) {
-			return nil, NewHTTPError(http.StatusConflict, "node key already registered", nil)
-		}
-		return nil, fmt.Errorf("creating node: %w", err)
-	}
-
-	// Mark the key used only after the node is durable: a failure between the
-	// two must not burn a single-use key without registering a node.
-	if err := s.store.MarkPreAuthKeyUsed(preauth.Key, now); err != nil {
-		s.log.Warn("marking pre-auth key used", "key_id", preauth.ID, "err", err)
-	}
-
-	s.audit(actor, identity.AuditNodeRegistered, nodeTarget(node),
-		"authorized with a pre-auth key")
 	s.notifyNodePeers(node)
-
 	return s.nodeToRegisterResponse(node), nil
 }
 

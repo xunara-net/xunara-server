@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -91,30 +90,7 @@ func (s *Server) rotateNodeKey(existing, want state.Node, applyTags bool, actor 
 		return state.Node{}, NewHTTPError(http.StatusConflict, "node key already registered", nil)
 	}
 
-	updated := existing
-	updated.NodeKey = want.NodeKey
-	updated.Method = want.Method
-	// A signature (or its absence) always moves with the node key: a signature
-	// naming the old key is worthless for the new one, and publishing it would
-	// only make peers treat the node as unsigned.
-	updated.KeySignature = slices.Clone(want.KeySignature)
-	// The network-lock key belongs to the machine and outlives rotations; only
-	// replace it when the client reported a new one.
-	if !want.NLKey.IsZero() {
-		updated.NLKey = want.NLKey
-	}
-	if want.Hostname != "" {
-		updated.Hostname = want.Hostname
-	}
-	if want.Hostinfo != nil {
-		updated.Hostinfo = want.Hostinfo
-	}
-	updated.Expiry = want.Expiry
-	updated.Ephemeral = existing.Ephemeral || want.Ephemeral
-	if applyTags || len(want.Tags) > 0 {
-		updated.Tags = want.Tags
-		updated.UserID = want.UserID
-	}
+	updated := state.RotatedNode(existing, want, applyTags)
 
 	if err := s.store.UpdateNodeWithDNS(&updated); err != nil {
 		if errors.Is(err, state.ErrNodeKeyExists) {

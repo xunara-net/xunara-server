@@ -533,7 +533,7 @@ func (s *Server) handleAPIAuthKeys(w http.ResponseWriter, r *http.Request) {
 
 // handleAPICreateAuthKey implements POST /api/v1/auth-keys.
 func (s *Server) handleAPICreateAuthKey(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireNetworkWriter(w, r)
 	if !ok {
 		return
 	}
@@ -586,14 +586,11 @@ func (s *Server) handleAPICreateAuthKey(w http.ResponseWriter, r *http.Request) 
 		}
 		key.Expiry = time.Now().Add(ttl).UTC()
 	}
-	if err := s.store.CreatePreAuthKey(&key); err != nil {
-		s.log.Error("storing pre-auth key", "err", err)
-		writeAPIError(w, http.StatusInternalServerError, "could not create key")
+	key, err = s.networkConfig.CreateAuthKey(r.Context(), key, s.Plan().MaxAuthKeys, networkWriter(principal))
+	if err != nil {
+		s.writeAuthKeyManagementError(w, err)
 		return
 	}
-
-	s.audit(principal.actor(), identity.AuditPreAuthKeyCreated,
-		fmt.Sprintf("preauthkey:%d", key.ID), "created through the platform API")
 
 	// The secret is returned exactly once.
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -609,7 +606,7 @@ func (s *Server) handleAPICreateAuthKey(w http.ResponseWriter, r *http.Request) 
 
 // handleAPIDeleteAuthKey implements DELETE /api/v1/auth-keys/{id}.
 func (s *Server) handleAPIDeleteAuthKey(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireNetworkWriter(w, r)
 	if !ok {
 		return
 	}
@@ -620,25 +617,10 @@ func (s *Server) handleAPIDeleteAuthKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var secret string
-	for _, k := range s.store.ListPreAuthKeys() {
-		if k.ID == id {
-			secret = k.Key
-			break
-		}
-	}
-	if secret == "" {
-		writeAPIError(w, http.StatusNotFound, "key not found")
+	if err := s.networkConfig.DeleteAuthKey(r.Context(), id, networkWriter(principal)); err != nil {
+		s.writeNetworkError(w, err)
 		return
 	}
-
-	if err := s.store.DeletePreAuthKey(secret); err != nil {
-		s.log.Error("deleting pre-auth key", "key", id, "err", err)
-		writeAPIError(w, http.StatusInternalServerError, "could not delete key")
-		return
-	}
-	s.audit(principal.actor(), identity.AuditPreAuthKeyDeleted,
-		fmt.Sprintf("preauthkey:%d", id), "deleted through the platform API")
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
 }
 

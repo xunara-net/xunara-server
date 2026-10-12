@@ -67,7 +67,7 @@ func TestAPIRoleGatesWrites(t *testing.T) {
 	adminID := seedRoleUser(t, s, "admin@example.com", identity.RoleAdmin)
 
 	memberCookie, _ := seedUserSession(t, s, memberID)
-	adminCookie, _ := seedUserSession(t, s, adminID)
+	adminCookie, adminSessionToken := seedUserSession(t, s, adminID)
 
 	// Both roles may read.
 	for name, cookie := range map[string]*http.Cookie{"member": memberCookie, "admin": adminCookie} {
@@ -101,6 +101,7 @@ func TestAPIRoleGatesWrites(t *testing.T) {
 	req, _ = http.NewRequest(http.MethodPost, hs.URL+"/api/v1/auth-keys",
 		newJSONBody(map[string]any{"ttl": "1h"}))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrfTokenFor(adminSessionToken))
 	req.AddCookie(adminCookie)
 	resp, err = client.Do(req)
 	if err != nil {

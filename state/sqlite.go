@@ -770,6 +770,21 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
+	if err := CreateNodeTx(ctx, tx, n); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	*original = candidate
+	return nil
+}
+
+// CreateNodeTx 复用地址及 DNS 分配；调用方负责写锁、授权、审计和提交。
+func CreateNodeTx(ctx context.Context, tx *sql.Tx, n *Node) error {
+	if n == nil || n.NodeKey.IsZero() {
+		return errors.New("state: node key is required")
+	}
 	if n.StableID == "" {
 		n.StableID = newStableID()
 	}
@@ -827,7 +842,7 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 		return err
 	}
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO nodes (`+nodeColumns+`)
+	result, err := tx.ExecContext(ctx, `INSERT INTO nodes (`+nodeColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		int64(n.ID),
 		n.StableID,
@@ -860,11 +875,7 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 		return fmt.Errorf("state: inserting node: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	*original = candidate
-	return nil
+	return requireSingleRow(result)
 }
 
 func (s *SQLiteStore) UpdateNode(n Node) error {
@@ -883,6 +894,29 @@ func (store *SQLiteStore) updateNodeWithDNS(node *Node, telemetry bool) error {
 	if node == nil {
 		return fmt.Errorf("state: nil node")
 	}
+	ctx := context.Background()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	updated := *node
+	if err := updateNodeWithDNSTx(ctx, tx, &updated, telemetry); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	*node = updated
+	return nil
+}
+
+// UpdateNodeWithDNSTx 用于已授权的节点轮换，不另开事务或覆盖现有地址。
+func UpdateNodeWithDNSTx(ctx context.Context, tx *sql.Tx, node *Node) error {
+	return updateNodeWithDNSTx(ctx, tx, node, false)
+}
+
+func updateNodeWithDNSTx(ctx context.Context, tx *sql.Tx, node *Node, telemetry bool) error {
 	updatedNode := *node
 	endpoints, err := encodeEndpoints(updatedNode)
 	if err != nil {
@@ -897,12 +931,6 @@ func (store *SQLiteStore) updateNodeWithDNS(node *Node, telemetry bool) error {
 		return err
 	}
 
-	ctx := context.Background()
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	previous, err := scanNode(tx.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE id = ?", int64(updatedNode.ID)))
 	if err != nil {
 		return fmt.Errorf("state: reading node %d before update: %w", updatedNode.ID, err)
@@ -985,9 +1013,6 @@ func (store *SQLiteStore) updateNodeWithDNS(node *Node, telemetry bool) error {
 	}
 	if affected == 0 {
 		return fmt.Errorf("state: node %d not found", updatedNode.ID)
-	}
-	if err := tx.Commit(); err != nil {
-		return err
 	}
 	*node = updatedNode
 	return nil

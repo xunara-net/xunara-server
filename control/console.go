@@ -728,10 +728,6 @@ func (s *Server) handleConsoleCreateAuthKey(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if !s.planGateOrRender(w, r, s.assertAuthKeyQuota(), "Create failed") {
-		return
-	}
-
 	secret, err := state.NewPreAuthKeySecret()
 	if err != nil {
 		s.log.Error("generating pre-auth key", "err", err)
@@ -759,13 +755,15 @@ func (s *Server) handleConsoleCreateAuthKey(w http.ResponseWriter, r *http.Reque
 		}
 		key.Expiry = time.Now().Add(ttl).UTC()
 	}
-	if err := s.store.CreatePreAuthKey(&key); err != nil {
-		s.log.Error("storing pre-auth key", "err", err)
-		s.renderError(w, r, http.StatusInternalServerError, "Create failed", "Please try again.")
+	key, err = s.networkConfig.CreateAuthKey(r.Context(), key, s.Plan().MaxAuthKeys,
+		networkconfig.Writer{UserID: session.UserID, SessionID: session.ID})
+	if err != nil {
+		if errors.Is(err, state.ErrAuthKeyLimit) {
+			err = planGateError(MsgAuthKeyLimitReached)
+		}
+		s.planGateOrRender(w, r, err, "Create failed")
 		return
 	}
-	s.audit(fmt.Sprintf("user:%d", session.UserID), identity.AuditPreAuthKeyCreated,
-		fmt.Sprintf("preauthkey:%d", key.ID), "created through the console")
 
 	// The secret is shown exactly once.
 	data["CreatedKey"] = key.Key
@@ -789,24 +787,14 @@ func (s *Server) handleConsoleDeleteAuthKey(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var secret string
-	for _, k := range s.store.ListPreAuthKeys() {
-		if k.ID == id {
-			secret = k.Key
-			break
+	if err := s.networkConfig.DeleteAuthKey(r.Context(), id, networkconfig.Writer{UserID: session.UserID, SessionID: session.ID}); err != nil {
+		if errors.Is(err, networkconfig.ErrNotFound) {
+			s.renderError(w, r, http.StatusNotFound, "Unknown key", "This pre-auth key does not exist.")
+			return
 		}
-	}
-	if secret == "" {
-		s.renderError(w, r, http.StatusNotFound, "Unknown key", "This pre-auth key does not exist.")
-		return
-	}
-	if err := s.store.DeletePreAuthKey(secret); err != nil {
-		s.log.Error("deleting pre-auth key", "key", id, "err", err)
 		s.renderError(w, r, http.StatusInternalServerError, "Delete failed", "Please try again.")
 		return
 	}
-	s.audit(fmt.Sprintf("user:%d", session.UserID), identity.AuditPreAuthKeyDeleted,
-		fmt.Sprintf("preauthkey:%d", id), "deleted through the console")
 
 	data["Notice"] = "Key revoked."
 	data["AuthKeys"] = s.consoleAuthKeyViews()

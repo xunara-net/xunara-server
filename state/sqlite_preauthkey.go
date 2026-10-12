@@ -30,13 +30,36 @@ func (s *SQLiteStore) CreatePreAuthKey(k *PreAuthKey) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
+	candidate := *k
+	if err := CreatePreAuthKeyTx(ctx, tx, &candidate, -1, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	*k = candidate
+	return nil
+}
+
+// CreatePreAuthKeyTx 在租户写事务内计数，已消费或到期的密钥不占额度。
+func CreatePreAuthKeyTx(ctx context.Context, tx *sql.Tx, k *PreAuthKey, limit int, now time.Time) error {
+	if k == nil || k.Key == "" {
+		return errPreAuthKeyRequired
+	}
+	used, err := UsablePreAuthKeyCount(ctx, tx, now)
+	if err != nil {
+		return err
+	}
+	if limit >= 0 && used >= limit {
+		return ErrAuthKeyLimit
+	}
 	id, err := nextCounter(ctx, tx, counterNextPreAuthKeyID, 1)
 	if err != nil {
 		return err
 	}
 	k.ID = uint64(id)
 	if k.Created.IsZero() {
-		k.Created = time.Now().UTC()
+		k.Created = now
 	}
 
 	tags, err := encodeStringList(k.Tags)
@@ -44,7 +67,7 @@ func (s *SQLiteStore) CreatePreAuthKey(k *PreAuthKey) error {
 		return err
 	}
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO preauthkeys (`+preAuthKeyColumns+`)
+	result, err := tx.ExecContext(ctx, `INSERT INTO preauthkeys (`+preAuthKeyColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		int64(k.ID),
 		k.Key,
@@ -64,7 +87,14 @@ func (s *SQLiteStore) CreatePreAuthKey(k *PreAuthKey) error {
 		return fmt.Errorf("state: inserting pre-auth key: %w", err)
 	}
 
-	return tx.Commit()
+	return requireSingleRow(result)
+}
+
+func UsablePreAuthKeyCount(ctx context.Context, query addressQuery, now time.Time) (int, error) {
+	var count int
+	err := query.QueryRowContext(ctx, `SELECT COUNT(*) FROM preauthkeys WHERE
+		(expiry IS NULL OR expiry > ?) AND (reusable = 1 OR used = 0)`, now.UnixNano()).Scan(&count)
+	return count, err
 }
 
 // GetPreAuthKey implements [PreAuthKeyStore].
