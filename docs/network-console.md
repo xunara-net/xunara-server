@@ -40,6 +40,7 @@
 | `/api/v2/derp` | GET 客户端实际下发地图；`control/api_v2_derp.go` |
 | `/api/v2/network/addresses`、`/validate` | GET 实际/期望网段，PUT 带版本保存，POST 仅校验预览；`control/address_management.go` |
 | `/api/v2/machines/{ref}/ipv4` | PUT 带旧 IP 基准显式修改单设备地址；`networkconfig/addresses.go`、`state/addresses.go` |
+| `/api/v2/routes/configuration`、`/api/v2/machines/{ref}/routes` | GET 有界总览/单设备、POST 版本保护审批；`control/route_management.go`、`networkconfig/routes.go` |
 | `/api/v2/derp/configuration`、`/history` | GET / PUT 非托管地图与 GET 版本历史；`control/external_derp.go` |
 | `/api/v2/derp/import-official` | POST 固定官方 HTTPS 地图预览，不自动保存；`control/external_derp.go` |
 
@@ -51,6 +52,12 @@
 服务密钥还要求 write Scope 与 API 授权。策略和 DNS 同事务复查持久凭据/角色，
 提交配置、历史、审计、配置通知；策略发布同时撤销旧 SSH check 批准。
 更新前端按钮状态不能代替后端校验，普通成员只读。不扩大 Human / Machine / Service 信任。
+
+## 路由与出口
+
+路由/出口在独立页直接审批，设备详情复用同一确认流程。审批、审计和通知同事务，
+冲突保留草稿，旧遥测不撤销批准；匹配仍不等于访问授权或数据面可达。
+新旧门禁、客户端选择说明与界限以[路由手册](route-management.md)为准。
 
 ## 中继配置与历史
 

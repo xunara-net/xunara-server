@@ -872,6 +872,14 @@ func (s *SQLiteStore) UpdateNode(n Node) error {
 }
 
 func (store *SQLiteStore) UpdateNodeWithDNS(node *Node) error {
+	return store.updateNodeWithDNS(node, false)
+}
+
+func (store *SQLiteStore) UpdateNodeTelemetryWithDNS(node *Node) error {
+	return store.updateNodeWithDNS(node, true)
+}
+
+func (store *SQLiteStore) updateNodeWithDNS(node *Node, telemetry bool) error {
 	if node == nil {
 		return fmt.Errorf("state: nil node")
 	}
@@ -898,6 +906,24 @@ func (store *SQLiteStore) UpdateNodeWithDNS(node *Node) error {
 	previous, err := scanNode(tx.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE id = ?", int64(updatedNode.ID)))
 	if err != nil {
 		return fmt.Errorf("state: reading node %d before update: %w", updatedNode.ID, err)
+	}
+	if telemetry {
+		if previous.StableID != updatedNode.StableID || previous.NodeKey != updatedNode.NodeKey || previous.MachineKey != updatedNode.MachineKey {
+			return errors.New("state: telemetry identity has changed")
+		}
+		updatedNode.ApprovedRoutes = append([]netip.Prefix(nil), previous.ApprovedRoutes...)
+		updatedNode.Tags = append([]string(nil), previous.Tags...)
+		updatedNode.UserID, updatedNode.Expiry = previous.UserID, previous.Expiry
+		updatedNode.Method, updatedNode.Ephemeral, updatedNode.Created = previous.Method, previous.Ephemeral, previous.Created
+		updatedNode.KeySignature, updatedNode.NLKey = previous.KeySignature, previous.NLKey
+		approved, err = encodeRoutes(updatedNode.ApprovedRoutes)
+		if err != nil {
+			return err
+		}
+		tags, err = encodeStringList(updatedNode.Tags)
+		if err != nil {
+			return err
+		}
 	}
 	domain, _, err := dnsDomainTx(ctx, tx)
 	if err != nil {

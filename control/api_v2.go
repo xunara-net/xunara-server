@@ -75,6 +75,9 @@ func (s *Server) apiV2Router() http.Handler {
 	r.Delete("/dns/records/{id}", s.handleAPIV2DeleteDNSRecord)
 	r.Get("/security", s.handleAPIV2Security)
 	r.Get("/exit-nodes", s.handleAPIV2ExitNodes)
+	r.Get("/routes/configuration", s.handleAPIV2RouteConfiguration)
+	r.Get("/machines/{ref}/routes", s.handleAPIV2NodeRoutes)
+	r.Post("/machines/{ref}/routes", s.handleAPIV2SaveNodeRoutes)
 	r.Get("/relays", s.handleAPIV2Relays)
 
 	// Enrolled relays and their one-time enrollment tokens. The read-only

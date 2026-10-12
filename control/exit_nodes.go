@@ -11,11 +11,8 @@ import (
 	"github.com/xunara-net/xunara-server/state"
 )
 
-// Xunara Horizon (PROJECT_SPEC section 40): the read-only exit-node
-// management plane. It joins the two halves of the feature — nodes approved
-// to serve the default route, and the clients that told control which exit
-// node they selected (Hostinfo.ExitNodeID) — without ever changing either:
-// approval stays on the machines page and selection stays client-local.
+// 出口总览只合并审批与客户端自报选择，不替用户修改客户端本地偏好。
+// 路由审批由独立的事务写入流程完成，自报选择不证明实时流量。
 
 // exitNodeClientView is one client of an exit node.
 type exitNodeClientView struct {
@@ -71,7 +68,10 @@ type exitNodesView struct {
 // exitNodesView builds the snapshot. Exit nodes are ordered by node ID and
 // clients by node ID, like every other management list.
 func (s *Server) exitNodesView() exitNodesView {
-	nodes := s.store.ListNodes()
+	return s.exitNodesViewFor(s.store.ListNodes())
+}
+
+func (s *Server) exitNodesViewFor(nodes []state.Node) exitNodesView {
 
 	byStableID := make(map[string]state.Node, len(nodes))
 	for _, node := range nodes {
@@ -155,8 +155,19 @@ func nodeHasApprovedExitRoute(node state.Node) bool {
 
 // handleAPIV2ExitNodes implements GET /api/v2/exit-nodes (spec section 40.2).
 func (s *Server) handleAPIV2ExitNodes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if _, ok := s.requireScope(w, r, identity.ScopeRead); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.exitNodesView())
+	nodes, err := s.networkNodes(r.Context())
+	if err != nil {
+		s.writeNetworkError(w, err)
+		return
+	}
+	view := s.exitNodesViewFor(nodes)
+	if len(view.ExitNodes) > routeOverviewLimit || len(view.Clients) > routeOverviewLimit*2 {
+		s.writeRouteManagementError(w, errRouteViewLarge)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }

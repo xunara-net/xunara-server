@@ -1,0 +1,73 @@
+# 路由与出口管理
+
+## 使用与真实状态
+
+「路由与出口」直接搜索、按子网/出口和状态筛选、分页并打开审批弹窗；设备
+详情复用同一弹窗。勾选增删只形成草稿，先预览、再确认。成员只读，owner/admin
+才能按 Entitlement 新增批准，降级仍可取消旧批准。出口和子网能力独立，
+IPv4/IPv6 默认路由各占一条额度，不按套餐名称分支。
+
+区分待批准、已停止宣告、密钥过期、离线及「宣告与批准匹配」。匹配只描述
+配置条件，不证明真实可达、正在转发或主路由选举成功；审批不修改 ACL、
+防火墙、IP 转发或其它客户端偏好。出口列表保留最后一次自报选择与失效目标，
+自报客户端数不等于活跃流量；读取失败不冒充空列表。
+
+出口选择/停止命令只改变执行命令的本机，不含 Auth Key、登录重置或平台令牌。
+手机在 APP 选择。离线、过期或状态未知只提供带警告的排查说明，不建议立即切换。
+
+## 新管理 API
+
+均为 Host 实际选中的租户，同源 Human Session 或 read/write API Scope。
+
+| 路径 | 操作 |
+|---|---|
+| `/api/v2/routes/configuration` | GET 有界设备白名单、版本、CSRF、管理能力与实际额度 |
+| `/api/v2/machines/{ref}/routes` | GET 单设备；POST revision 与 approve/unapprove 差量 |
+| `/api/v2/exit-nodes` | GET 已批准出口与自报选择，既有 JSON 结构不变 |
+
+定义/测试为 `control/route_management.go`、`networkconfig/routes.go`、
+`state/route_approval.go` 及相应测试。ref 支持租户内数字 ID 或 stable ID。
+版本绑定稳定身份、MachineKey/NodeKey、归属、宣告和批准，只输出不可逆摘要；
+普通在线时间、名称或无关 NetInfo 不制造假冲突，不返回原始报告/密钥。
+
+POST 要求当前 64 字符小写十六进制 revision；新增批准必须仍宣告，同一项不能
+同时增删。每设备宣告/批准各限 256，单次差量限 256，总览合计限 2048；
+超限 413 不截断，事务提交前校验响应上限。出口总览限 2048 节点/4096 条选择。
+超大旧配置由管理员分批整理，不改客户端协议配额。缺设备 404、旧版本/宣告
+变化 409、数据库故障 503；读写 no-store。
+
+写入同 SQLite 事务取得写锁、复查持久角色/会话/服务 key，提交路由差量、
+必需审计及配置通知版本。节点、审计或计数更新被拒绝/忽略均回滚；无差量
+不新建审计/版本。提交后才通知 watchers。Cookie 要求 CSRF；服务 key 受 API
+Entitlement 与 write Scope 约束，不通过菜单状态代替后端校验。
+
+## 兼容与并发
+
+旧 v1 API 与 HTML 表单委托同一流程，保留响应、差量顺序和预批准语义；不再
+先读后覆盖或忽略审计失败。旧 Cookie v1 调用必须带 CSRF Header，服务写入
+必须符合现有 API Entitlement；新 Web 不再混用旧审批入口。
+
+MapRequest 遥测在事务内保留当前批准、标签、归属、有效期等管理事实，并核对
+MachineKey/NodeKey/稳定身份；旧报告不能恢复批准或替换后的密钥。流断开只更新
+last_seen，时间不倒退，不用整行旧节点快照覆盖审批或 Hostinfo。
+Web 冲突/结果未知保留草稿，不自动重试；读取最新状态只重放明确增删意图，
+保留其它管理员的新增批准，再要求用户重新预览确认。
+
+不新增迁移，不改 TS2021/Noise/Map/DNS/DERP wire、AllowedIPs/PrimaryRoutes、
+路由选举/故障转移算法。全 OS 出口现场验收、实时数据面与自动故障转移未交付。
+
+## 验证
+
+执行目录：`xunara-server` 根目录，Go 版本按 `go.mod`。
+
+```sh
+go build ./...
+go vet ./...
+go test ./... -count=1
+go test -race ./... -count=1 -timeout=30m
+```
+
+包含审计 ABORT/IGNORE、计数更新忽略、两连接 CAS/旧差量合并、撤销/降权、
+跨租户/Scope、新旧入口一致、套餐独立门禁/降级清理、有界读写及真实 DB 故障。
+官方 Noise 验证批准/撤销 AllowedIPs/PrimaryRoutes 与旧遥测；Web 验证真实 API、
+手机审批、失败/冲突草稿及只读成员。线上不创建测试人类账号或替换正式凭据。

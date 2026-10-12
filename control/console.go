@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/networkconfig"
 	"github.com/xunara-net/xunara-server/state"
 )
 
@@ -321,50 +322,43 @@ func (s *Server) handleConsoleMachineRoutes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var (
-		before = node.ApprovedRoutes
-		after  []netip.Prefix
-		notice string
-	)
+	var approve, unapprove []netip.Prefix
+	var notice string
 	switch r.PostFormValue("action") {
 	case "approve-all":
-		after = state.ApplyRouteApproval(before, node.AnnouncedRoutes(), nil)
+		approve = node.AnnouncedRoutes()
 		notice = "All announced routes approved."
 	case "unapprove-all":
-		after = nil
+		unapprove = node.ApprovedRoutes
 		notice = "All route approvals withdrawn."
 	default:
 		s.renderError(w, r, http.StatusBadRequest, "Unknown action", "The form action is not recognised.")
 		return
 	}
 
-	if added, _ := state.RouteDelta(before, after); len(added) > 0 {
-		if !s.planGateOrRender(w, r, s.assertRouteApprovalAllowed(after), "Route approval rejected") {
+	_, err := s.networkConfig.SaveNodeRoutes(r.Context(), node.StableID,
+		state.RouteApprovalUpdate{Revision: state.RouteApprovalRevision(node), Approve: approve, Unapprove: unapprove},
+		networkconfig.Writer{UserID: session.UserID, SessionID: session.ID}, s.assertRouteApprovalAllowed)
+	if err != nil {
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, identity.ErrNetworkWriterForbidden) || errors.Is(err, identity.ErrSessionRevoked) {
+			status = http.StatusForbidden
+		}
+		if errors.Is(err, state.ErrRouteConflict) {
+			status = http.StatusConflict
+		}
+		if errors.Is(err, state.ErrRouteNodeNotFound) {
+			status = http.StatusNotFound
+		}
+		var gate HTTPError
+		if errors.As(err, &gate) {
+			s.planGateOrRender(w, r, gate, "Route approval rejected")
 			return
 		}
+		s.renderError(w, r, status, "Route approval not saved", "Refresh before confirming again.")
+		return
 	}
-
-	added, removed := state.RouteDelta(before, after)
-	if len(added) == 0 && len(removed) == 0 {
-		notice = "No change."
-	} else {
-		if err := s.store.SetNodeApprovedRoutes(node.ID, after); err != nil {
-			s.log.Error("setting approved routes", "node", int(node.ID), "err", err)
-			s.renderError(w, r, http.StatusInternalServerError, "Update failed", "Please try again.")
-			return
-		}
-		if err := s.store.BumpConfigRevision(); err != nil {
-			s.log.Error("bumping config revision", "err", err)
-		}
-		actor := fmt.Sprintf("user:%d", session.UserID)
-		for _, p := range added {
-			s.audit(actor, identity.AuditRouteApproved, nodeTarget(node), p.String())
-		}
-		for _, p := range removed {
-			s.audit(actor, identity.AuditRouteUnapproved, nodeTarget(node), p.String())
-		}
-		s.notifyWatchers()
-	}
+	s.notifyWatchers()
 
 	data["Notice"] = notice
 	s.handleConsoleMachinesNotice(w, data)

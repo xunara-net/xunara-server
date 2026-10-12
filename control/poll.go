@@ -489,7 +489,7 @@ func (s *Server) recordMapRequest(node state.Node, req tailcfg.MapRequest) state
 	if !changed {
 		return node
 	}
-	if err := s.store.UpdateNodeWithDNS(&node); err != nil {
+	if err := s.store.UpdateNodeTelemetryWithDNS(&node); err != nil {
 		s.log.Warn("updating node from map request", "node_id", int(node.ID), "err", err)
 		return previous
 	}

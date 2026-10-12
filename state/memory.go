@@ -244,6 +244,14 @@ func (s *MemoryStore) UpdateNode(n Node) error {
 }
 
 func (store *MemoryStore) UpdateNodeWithDNS(node *Node) error {
+	return store.updateNodeWithDNS(node, false)
+}
+
+func (store *MemoryStore) UpdateNodeTelemetryWithDNS(node *Node) error {
+	return store.updateNodeWithDNS(node, true)
+}
+
+func (store *MemoryStore) updateNodeWithDNS(node *Node, telemetry bool) error {
 	if node == nil {
 		return fmt.Errorf("state: nil node")
 	}
@@ -254,6 +262,16 @@ func (store *MemoryStore) UpdateNodeWithDNS(node *Node) error {
 	old, ok := store.byID[updatedNode.ID]
 	if !ok {
 		return fmt.Errorf("state: node %d not found", updatedNode.ID)
+	}
+	if telemetry {
+		if old.StableID != updatedNode.StableID || old.NodeKey != updatedNode.NodeKey || old.MachineKey != updatedNode.MachineKey {
+			return fmt.Errorf("state: telemetry identity has changed")
+		}
+		updatedNode.ApprovedRoutes = append([]netip.Prefix(nil), old.ApprovedRoutes...)
+		updatedNode.Tags = append([]string(nil), old.Tags...)
+		updatedNode.UserID, updatedNode.Expiry = old.UserID, old.Expiry
+		updatedNode.Method, updatedNode.Ephemeral, updatedNode.Created = old.Method, old.Ephemeral, old.Created
+		updatedNode.KeySignature, updatedNode.NLKey = old.KeySignature, old.NLKey
 	}
 	owners, err := store.dnsNameOwnersLocked(updatedNode.ID, 0)
 	if err != nil {

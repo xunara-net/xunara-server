@@ -644,12 +644,10 @@ func (s *Server) markOffline(node state.Node) {
 	}
 	s.sessMu.Unlock()
 
+	if err := s.store.RecordNodeLastSeen(node, time.Now().UTC()); err != nil {
+		s.log.Warn("recording last seen", "node_id", int(node.ID), "err", err)
+	}
 	if stored, ok := s.store.GetNodeByID(node.ID); ok {
-		now := time.Now().UTC()
-		stored.LastSeen = &now
-		if err := s.store.UpdateNode(stored); err != nil {
-			s.log.Warn("recording last seen", "node_id", int(node.ID), "err", err)
-		}
 		node = stored
 	}
 

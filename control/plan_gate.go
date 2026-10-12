@@ -167,17 +167,15 @@ func (s *Server) assertAuditLogAllowed() error {
 // unless the plan includes subnet routers.
 func (s *Server) assertRouteApprovalAllowed(routes []netip.Prefix) error {
 	p := s.Plan()
-	if len(routes) > 0 && !p.AllowSubnetRouter {
-		return planGateError(MsgSubnetRouterDisabled)
-	}
 	if p.MaxRoutes != plan.Unlimited && len(routes) > p.MaxRoutes {
 		return planGateError(MsgRouteLimitReached)
 	}
-	if !p.AllowExitNode {
-		for _, route := range routes {
-			if isExitRoute(route) {
-				return planGateError(MsgExitNodeDisabled)
-			}
+	for _, route := range routes {
+		if isExitRoute(route) && !p.AllowExitNode {
+			return planGateError(MsgExitNodeDisabled)
+		}
+		if !isExitRoute(route) && !p.AllowSubnetRouter {
+			return planGateError(MsgSubnetRouterDisabled)
 		}
 	}
 	return nil

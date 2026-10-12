@@ -168,7 +168,14 @@ func commitChange(ctx context.Context, tx *sql.Tx, actor, action, target, detail
 	if err != nil || count != 1 {
 		return errors.New("network configuration required audit did not persist")
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO counters (name, value) VALUES ('config_revision', 1)
+	result, err = tx.ExecContext(ctx, `INSERT INTO counters (name, value) VALUES ('config_revision', 1)
 		ON CONFLICT(name) DO UPDATE SET value = value + 1`)
+	if err != nil {
+		return err
+	}
+	count, err = result.RowsAffected()
+	if err != nil || count != 1 {
+		return errors.New("network configuration revision did not persist")
+	}
 	return err
 }

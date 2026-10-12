@@ -220,7 +220,7 @@ func (s *Server) handleAPIDeleteMachine(w http.ResponseWriter, r *http.Request) 
 
 // handleAPIMachineRoutes implements POST /api/v1/machines/{ref}/routes.
 func (s *Server) handleAPIMachineRoutes(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireNetworkWriter(w, r)
 	if !ok {
 		return
 	}
@@ -250,37 +250,11 @@ func (s *Server) handleAPIMachineRoutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	before := node.ApprovedRoutes
-	after := state.ApplyRouteApproval(before, approve, unapprove)
-	if pending, _ := state.RouteDelta(before, after); len(pending) > 0 {
-		if err := s.assertRouteApprovalAllowed(after); err != nil {
-			writeAPIError(w, http.StatusForbidden, err.Error())
-			return
-		}
-	}
-	added, removed := state.RouteDelta(before, after)
-	if len(added) == 0 && len(removed) == 0 {
-		writeJSON(w, http.StatusOK, s.apiMachineView(node))
+	updated, err := s.saveRouteApprovals(r, node.StableID, state.RouteApprovalUpdate{Approve: approve, Unapprove: unapprove}, principal)
+	if err != nil {
+		s.writeRouteManagementError(w, err)
 		return
 	}
-
-	if err := s.store.SetNodeApprovedRoutes(node.ID, after); err != nil {
-		s.log.Error("setting approved routes", "node", int(node.ID), "err", err)
-		writeAPIError(w, http.StatusInternalServerError, "could not update routes")
-		return
-	}
-	if err := s.store.BumpConfigRevision(); err != nil {
-		s.log.Error("bumping config revision", "err", err)
-	}
-	for _, p := range added {
-		s.audit(principal.actor(), identity.AuditRouteApproved, nodeTarget(node), p.String())
-	}
-	for _, p := range removed {
-		s.audit(principal.actor(), identity.AuditRouteUnapproved, nodeTarget(node), p.String())
-	}
-	s.notifyWatchers()
-
-	updated, _ := s.store.GetNodeByID(node.ID)
 	writeJSON(w, http.StatusOK, s.apiMachineView(updated))
 }
 

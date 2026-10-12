@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"time"
 
 	"tailscale.com/types/key"
 )
@@ -49,6 +50,10 @@ type Store interface {
 	UpdateNode(n Node) error
 	// UpdateNodeWithDNS 同一事务更新事实并返回实际分配名；失败不改写输入。
 	UpdateNodeWithDNS(node *Node) error
+	// 客户端遥测只更新自报事实，不能回写旧审批、身份归属或密钥有效期。
+	UpdateNodeTelemetryWithDNS(node *Node) error
+	// 断开连接只更新活动时间，不能用整行旧快照覆盖管理或客户端事实。
+	RecordNodeLastSeen(node Node, seen time.Time) error
 	// ConfigureDNSDomain 补录旧名称并绑定租户域名，禁止实例之间的命名空间漂移。
 	ConfigureDNSDomain(ctx context.Context, domain string) error
 	// DeleteNode removes a node. It is a no-op if the node is unknown.
