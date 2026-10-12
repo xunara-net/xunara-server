@@ -12,15 +12,50 @@ import (
 )
 
 type deviceLifecycleView struct {
-	Machine   apiMachine `json:"machine"`
-	Revision  string     `json:"revision"`
-	CSRFToken string     `json:"csrf_token"`
-	CanExpire bool       `json:"can_expire"`
+	Machine      apiMachine         `json:"machine"`
+	Revision     string             `json:"revision"`
+	CSRFToken    string             `json:"csrf_token"`
+	CanExpire    bool               `json:"can_expire"`
+	ServerTime   time.Time          `json:"server_time"`
+	ExpiryPolicy deviceExpiryPolicy `json:"expiry_policy"`
+}
+
+type deviceExpiryPolicy struct {
+	MaxDurationSeconds int64 `json:"max_duration_seconds"`
+	ExtensionSeconds   int64 `json:"extension_seconds"`
 }
 
 func (server *Server) deviceLifecycleView(node state.Node, principal apiPrincipal, request *http.Request) deviceLifecycleView {
 	csrf, canManage, _ := server.routeManagementCapabilities(principal, request)
-	return deviceLifecycleView{server.apiMachineView(node), state.NodeExpiryRevision(node), csrf, canManage}
+	return deviceLifecycleView{Machine: server.apiMachineView(node), Revision: state.NodeExpiryRevision(node),
+		CSRFToken: csrf, CanExpire: canManage, ServerTime: time.Now().UTC(),
+		ExpiryPolicy: deviceExpiryPolicy{int64(state.MaxDeviceExpiry / time.Second), int64(state.DeviceExpiryExtension / time.Second)}}
+}
+
+func (server *Server) handleAPIUpdateDeviceExpiry(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := server.requireNetworkWriter(writer, request)
+	if !ok {
+		return
+	}
+	var update state.DeviceExpiryUpdate
+	if !decodeAPIBody(writer, request, &update) {
+		return
+	}
+	if !validDeviceExpiryRevision(update.Revision) {
+		writeAPIError(writer, http.StatusBadRequest, "DEVICE_REVISION_REQUIRED: refresh and confirm the current device first")
+		return
+	}
+	node, err := server.networkConfig.UpdateNodeExpiry(request.Context(), chi.URLParam(request, "ref"), update, networkWriter(principal))
+	if err != nil {
+		server.writeDeviceLifecycleError(writer, err)
+		return
+	}
+	server.notifyWatchers()
+	writeJSON(writer, http.StatusOK, server.deviceLifecycleView(node, principal, request))
+}
+
+func validDeviceExpiryRevision(revision string) bool {
+	return len(revision) == 64 && strings.Trim(revision, "0123456789abcdef") == ""
 }
 
 func (server *Server) handleAPIDeviceLifecycle(writer http.ResponseWriter, request *http.Request) {
@@ -48,7 +83,7 @@ func (server *Server) handleAPIExpireDevice(writer http.ResponseWriter, request 
 	if !decodeAPIBody(writer, request, &body) {
 		return
 	}
-	if len(body.Revision) != 64 || strings.Trim(body.Revision, "0123456789abcdef") != "" {
+	if !validDeviceExpiryRevision(body.Revision) {
 		writeAPIError(writer, http.StatusBadRequest, "DEVICE_REVISION_REQUIRED: refresh and confirm the current device first")
 		return
 	}
@@ -67,6 +102,12 @@ func (server *Server) writeDeviceLifecycleError(writer http.ResponseWriter, err 
 		writeAPIError(writer, http.StatusNotFound, "DEVICE_NOT_FOUND: device not found")
 	case errors.Is(err, state.ErrDeviceChanged):
 		writeAPIError(writer, http.StatusConflict, "DEVICE_CHANGED: device identity or expiry changed; refresh and confirm again")
+	case errors.Is(err, state.ErrDeviceExpiryInvalid):
+		writeAPIError(writer, http.StatusBadRequest, "DEVICE_EXPIRY_INVALID: choose a future time within 180 days; do not mix modes or time fields")
+	case errors.Is(err, state.ErrDeviceExpired):
+		writeAPIError(writer, http.StatusConflict, "DEVICE_EXPIRED: temporarily extend the expired device before changing expiry")
+	case errors.Is(err, state.ErrDeviceNotExpired):
+		writeAPIError(writer, http.StatusConflict, "DEVICE_NOT_EXPIRED: only expired devices can be temporarily extended")
 	default:
 		server.writeNetworkError(writer, err)
 	}

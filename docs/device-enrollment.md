@@ -50,15 +50,44 @@ CLI Token 接入；私有中继安装流程不受这次设备弹窗简化影响�
 
 ## 平台契约
 
+### 单设备有效期设置（2026-10-13）
+
+列表/详情提供「有效期设置」：有效设备可选择 1/7/30/90/180 天后、指定日期
+时间（未来 180 天以内）、永不过期或立即过期。指定日期按浏览器本地时区
+显示、以 UTC 保存；相对天数从服务器事务内计算，不依赖手机时钟。未修改
+日期时保留原精确时间。只有网络 owner/admin 可修改，成员只读。
+
+已过期设备先显式「临时续期 30 分钟」，窗口内重新认证或关闭过期；不允许
+普通客户端自行恢复、不自动续期。关闭过期仅建议可信服务器/路由设备。
+只影响当前节点密钥；保留设备、IP、路由和额度，不撤销网页登录，也不修改
+加入设备的 Auth Key TTL、租户默认认证周期或重新认证的既有有效期策略。
+
+与官方区别：官方网络默认认证周期设置影响之后登录的设备；本次是每台
+现有设备的日期管理，不宣称已经增加全网络默认周期配置。
+设计见 [Proposal](proposals/2026-10-13-device-expiry-settings.md) 和
+[ADR-0039](adr/ADR-0039-device-expiry-settings.md)。
+
+### 接口
+
 下列接口均位于当前租户：GET 需要 read，Cookie 写需要 write + CSRF，服务写
 另外要求 API Entitlement；写事务内复查持久凭据、启用用户及 owner/admin。
 读写均 no-store，存储失败不冒充不存在或无额度。
 
 - `GET /api/v2/machines/{ref}/lifecycle` 返回白名单 machine、身份/有效期摘要
-  revision、csrf_token、can_expire；numeric/stable ID，普通在线活动不制造假冲突。
+  revision、csrf_token、can_expire 以及新增 server_time/expiry_policy；后者确认
+  max_duration_seconds=15552000、extension_seconds=1800。numeric/stable ID，
+  普通在线活动不制造假冲突。旧响应保留兼容，新 Web 不猜缺失的设置策略。
 - `POST /api/v2/machines/{ref}/expire` 只收 revision。当前身份/归属/有效期不匹配
   返回 `409 DEVICE_CHANGED`，缺设备 `404 DEVICE_NOT_FOUND`，未确认版本 400。
   只改 expiry，必需 `node.expired` 审计和配置通知同事务，提交后才通知客户端。
+- `POST /api/v2/machines/{ref}/expiry` 收 revision 与 mode：schedule 必须且只能
+  携带 expires_at（RFC3339）或 duration_seconds（整数 1～15552000）；disable、
+  extend、expire 不能携带时间字段。相对时间与 30 分钟恢复在服务器写事务计算。
+  非法设置 `400 DEVICE_EXPIRY_INVALID`；已过期直接 schedule/disable 返回
+  `409 DEVICE_EXPIRED`，未过期 extend 返回 `409 DEVICE_NOT_EXPIRED`。
+  权限、身份/有效期 CAS、只改 expiry、必需审计/通知共享同一写路径。
+  审计为 node.expiry_updated/disabled/extended 或 node.expired；未改变原时间
+  不追加重复审计或通知版本。失败/未知结果必须重新读取确认，不重放请求。
 - `GET /api/v2/auth-keys/enrollment` 返回 csrf_token、can_manage、可用密钥 used
   和 Entitlement max_auth_keys（-1 为不限），不返回秘密。
 - `POST /api/v2/auth-keys/enrollment` 收 ttl_seconds（900～86400），创建成功

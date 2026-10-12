@@ -55,6 +55,7 @@ func (s *Server) apiV2Router() http.Handler {
 	r.Put("/machines/{ref}/ipv4", s.handleAPIChangeNodeIPv4)
 	r.Get("/machines/{ref}/lifecycle", s.handleAPIDeviceLifecycle)
 	r.Post("/machines/{ref}/expire", s.handleAPIExpireDevice)
+	r.Post("/machines/{ref}/expiry", s.handleAPIUpdateDeviceExpiry)
 	r.Get("/auth-keys/enrollment", s.handleAPIEnrollmentCapabilities)
 	r.Post("/auth-keys/enrollment", s.handleAPICreateEnrollmentKey)
 	r.Get("/tka", s.handleAPIV2TKA)

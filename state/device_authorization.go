@@ -62,25 +62,7 @@ func NodeExpiryRevision(node Node) string {
 
 // ExpireNodeTx 只使节点密钥到期，不删除地址、路由、机器身份或人类会话。
 func ExpireNodeTx(ctx context.Context, tx *sql.Tx, reference, revision string, now time.Time) (Node, bool, error) {
-	node, err := ReadRouteNode(ctx, tx, reference)
-	if err != nil {
-		return Node{}, false, err
-	}
-	if NodeExpiryRevision(node) != revision {
-		return Node{}, false, ErrDeviceChanged
-	}
-	if node.Expired(now) {
-		return node, false, nil
-	}
-	result, err := tx.ExecContext(ctx, "UPDATE nodes SET expiry = ? WHERE id = ?", now.UnixNano(), int64(node.ID))
-	if err != nil {
-		return Node{}, false, err
-	}
-	if err := requireSingleRow(result); err != nil {
-		return Node{}, false, err
-	}
-	node.Expiry = now
-	return node, true, nil
+	return UpdateNodeExpiryTx(ctx, tx, reference, DeviceExpiryUpdate{Revision: revision, Mode: DeviceExpiryExpire}, now)
 }
 
 // RotatedNode 保留稳定身份及网络事实，授权密钥只更新它被允许更新的字段。

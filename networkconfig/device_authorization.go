@@ -27,6 +27,10 @@ func (store *SQLiteStore) deviceWriteTransaction(ctx context.Context) (*sql.Tx, 
 }
 
 func (store *SQLiteStore) ExpireNode(ctx context.Context, reference, revision string, writer Writer) (state.Node, error) {
+	return store.UpdateNodeExpiry(ctx, reference, state.DeviceExpiryUpdate{Revision: revision, Mode: state.DeviceExpiryExpire}, writer)
+}
+
+func (store *SQLiteStore) UpdateNodeExpiry(ctx context.Context, reference string, update state.DeviceExpiryUpdate, writer Writer) (state.Node, error) {
 	transaction, err := store.deviceWriteTransaction(ctx)
 	if err != nil {
 		return state.Node{}, err
@@ -36,12 +40,21 @@ func (store *SQLiteStore) ExpireNode(ctx context.Context, reference, revision st
 	if err := identity.CheckNetworkWriter(ctx, transaction, writer.UserID, writer.SessionID, writer.APIKeyID, now); err != nil {
 		return state.Node{}, err
 	}
-	node, changed, err := state.ExpireNodeTx(ctx, transaction, reference, revision, now)
+	node, changed, err := state.UpdateNodeExpiryTx(ctx, transaction, reference, update, now)
 	if err != nil {
 		return state.Node{}, err
 	}
 	if changed {
-		if err := commitChange(ctx, transaction, writer.Actor(), identity.AuditNodeExpired, "node:"+node.StableID, "device key expired by administrator", now); err != nil {
+		action, detail := identity.AuditNodeExpiryUpdated, "device key expiry set to "+node.Expiry.Format(time.RFC3339Nano)
+		switch update.Mode {
+		case state.DeviceExpiryExpire:
+			action, detail = identity.AuditNodeExpired, "device key expired by administrator"
+		case state.DeviceExpiryDisable:
+			action, detail = identity.AuditNodeExpiryDisabled, "device key expiry disabled by administrator"
+		case state.DeviceExpiryExtend:
+			action, detail = identity.AuditNodeExpiryExtended, "expired device key temporarily extended for 30 minutes"
+		}
+		if err := commitChange(ctx, transaction, writer.Actor(), action, "node:"+node.StableID, detail, now); err != nil {
 			return state.Node{}, err
 		}
 	}
