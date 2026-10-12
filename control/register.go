@@ -641,13 +641,15 @@ func (s *Server) approveDevice(authID string, userID tailcfg.UserID, actor strin
 		if _, err := s.rotateNodeKey(existing, node, true, actor); err != nil {
 			return da, err
 		}
-	} else if err := s.assertDeviceQuota(); err != nil {
-		// The tenant may have reached its limit while the device waited for
-		// approval; the pending registration stays pending so an upgrade can
-		// approve it later instead of losing it.
-		return da, err
-	} else if err := s.store.CreateNode(&node); err != nil && !errors.Is(err, state.ErrNodeKeyExists) {
-		return da, fmt.Errorf("creating node: %w", err)
+	} else {
+		if err := s.createApprovedNode(&node); err != nil {
+			if errors.Is(err, state.ErrDeviceLimit) {
+				return da, planGateError(MsgDeviceLimitReached)
+			}
+			if !errors.Is(err, state.ErrNodeKeyExists) {
+				return da, fmt.Errorf("creating node: %w", err)
+			}
+		}
 	}
 
 	approved, err := s.identity.ApproveDeviceAuthorization(authID, userID)

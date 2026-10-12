@@ -750,6 +750,15 @@ func encodeEndpoints(n Node) (string, error) {
 }
 
 func (s *SQLiteStore) CreateNode(n *Node) error {
+	return s.createNode(context.Background(), n, -1)
+}
+
+// CreateNodeLimited 供已授权的审批新建使用，与预授权注册共享数据库额度边界。
+func (s *SQLiteStore) CreateNodeLimited(ctx context.Context, node *Node, limit int) error {
+	return s.createNode(ctx, node, limit)
+}
+
+func (s *SQLiteStore) createNode(ctx context.Context, n *Node, limit int) error {
 	if n == nil {
 		return fmt.Errorf("state: nil node")
 	}
@@ -763,13 +772,20 @@ func (s *SQLiteStore) CreateNode(n *Node) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("state: beginning create: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
+	if limit >= 0 {
+		if _, err := tx.ExecContext(ctx, "UPDATE counters SET value = value WHERE name = 'config_revision'"); err != nil {
+			return err
+		}
+		if err := CheckDeviceLimitTx(ctx, tx, limit); err != nil {
+			return err
+		}
+	}
 	if err := CreateNodeTx(ctx, tx, n); err != nil {
 		return err
 	}

@@ -33,6 +33,20 @@ func requireSingleRow(result sql.Result) error {
 	return nil
 }
 
+func CheckDeviceLimitTx(ctx context.Context, tx *sql.Tx, limit int) error {
+	if limit < 0 {
+		return nil
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes").Scan(&count); err != nil {
+		return err
+	}
+	if count >= limit {
+		return ErrDeviceLimit
+	}
+	return nil
+}
+
 // NodeExpiryRevision 绑定设备身份和有效期，在线活动或重命名不会产生假冲突。
 func NodeExpiryRevision(node Node) string {
 	facts := struct {
@@ -202,12 +216,8 @@ func EnrollPreAuthKeyTx(ctx context.Context, tx *sql.Tx, secret string, want Nod
 		want = RotatedNode(candidates[0], want, false)
 		err = UpdateNodeWithDNSTx(ctx, tx, &want)
 	} else {
-		var count int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes").Scan(&count); err != nil {
+		if err := CheckDeviceLimitTx(ctx, tx, limit); err != nil {
 			return Node{}, 0, false, err
-		}
-		if limit >= 0 && count >= limit {
-			return Node{}, 0, false, ErrDeviceLimit
 		}
 		err = CreateNodeTx(ctx, tx, &want)
 	}

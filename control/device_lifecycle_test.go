@@ -3,7 +3,9 @@ package control
 import (
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,5 +127,49 @@ func TestTS2021EnrollmentManualExpiryAndReauthorization(test *testing.T) {
 	updated, _ := server.store.GetNodeByNodeKey(freshKey)
 	if updated.ID != original.ID || updated.StableID != original.StableID || updated.IPv4 != original.IPv4 || updated.IPv6 != original.IPv6 || len(server.store.ListNodes()) != 1 {
 		test.Fatal("reauthentication duplicated device")
+	}
+}
+
+func TestFreeDeviceQuotaMixedApprovalAndAuthKey(test *testing.T) {
+	server := planServer(test, freePlan(test))
+	for range 9 {
+		node := state.Node{MachineKey: key.NewMachine().Public(), NodeKey: key.NewNode().Public(), UserID: state.DefaultUserID}
+		if err := server.store.CreateNode(&node); err != nil {
+			test.Fatal(err)
+		}
+	}
+	secret := seedPreAuthKey(test, server, state.PreAuthKey{Reusable: true})
+	request := tailcfg.RegisterRequest{Version: tailcfg.CurrentCapabilityVersion, NodeKey: key.NewNode().Public()}
+	registration, err := server.handleRegister(test.Context(), request, key.NewMachine().Public())
+	if err != nil {
+		test.Fatal(err)
+	}
+	authID := path.Base(registration.AuthURL)
+	if !strings.Contains(registration.AuthURL, "/register/") {
+		test.Fatal("missing pending registration")
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	workers.Go(func() { <-start; results <- server.ApproveRegistration(authID) })
+	workers.Go(func() {
+		<-start
+		_, err := server.handleRegister(test.Context(), tailcfg.RegisterRequest{Version: tailcfg.CurrentCapabilityVersion,
+			NodeKey: key.NewNode().Public(), Auth: &tailcfg.RegisterResponseAuth{AuthKey: secret}}, key.NewMachine().Public())
+		results <- err
+	})
+	close(start)
+	workers.Wait()
+	close(results)
+	success := 0
+	for err := range results {
+		if err == nil {
+			success++
+		} else if !strings.Contains(err.Error(), "DEVICE_LIMIT_REACHED") {
+			test.Fatal(err)
+		}
+	}
+	if success != 1 || len(server.store.ListNodes()) != freePlan(test).MaxDevices {
+		test.Fatal("mixed Free paths exceeded ten devices")
 	}
 }
