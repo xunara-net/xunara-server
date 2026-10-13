@@ -49,7 +49,7 @@ func openPlatformAuthentication(ctx context.Context, config PlatformAuthConfig) 
 	if config.Path == "" {
 		return nil, errors.New("control: platform identity needs a dedicated database path")
 	}
-	passkeyConfig := identity.PasskeyConfig{RPID: origin.Hostname(), Origins: []string{strings.TrimSuffix(config.Origin, "/")}, DisplayName: "玄序平台管理员"}
+	passkeyConfig := identity.PasskeyConfig{RPID: origin.Hostname(), Origins: []string{strings.TrimSuffix(config.Origin, "/")}, DisplayName: "玄序平台管理员", UserHandleNamespace: identity.PlatformPasskeyNamespace}
 	if err := passkeyConfig.Validate(); err != nil {
 		return nil, err
 	}

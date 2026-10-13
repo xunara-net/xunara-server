@@ -118,7 +118,8 @@ func platformPasskeyLogin(test *testing.T, router *Router, key identity.Passkey,
 		test.Fatal(err)
 	}
 	cookie := recorder.Result().Cookies()[0]
-	body := authenticator.assertionBody(test, "admin.test", platformTestOrigin, &result.Options, userHandle(key.UserID))
+	handle := append(append([]byte(identity.PlatformPasskeyNamespace), 0), userHandle(key.UserID)...)
+	body := authenticator.assertionBody(test, "admin.test", platformTestOrigin, &result.Options, handle)
 	return platformAuthRequest(test, router.Handler(), "POST", platformAuthPath+"/passkey/finish", "", json.RawMessage(body), cookie), body, cookie
 }
 
@@ -247,6 +248,31 @@ func TestPlatformPasskeyRegistrationInitiatingSessionAndReplay(test *testing.T) 
 	if answer := platformAuthRequest(test, router.Handler(), "POST", platformAuthPath+"/passkeys/finish", token, body, cookie); answer.Code != 400 {
 		test.Fatal("registration replay accepted")
 	}
+}
+
+func TestPlatformPasskeyRejectsTenantUserHandle(test *testing.T) {
+	router := platformAuthRouter(test)
+	token := platformLoginToken(test, router)
+	authenticator := newSoftwareAuthenticator(test)
+	key := registerPlatformKey(test, router, token, "平台", authenticator)
+	begin := platformAuthRequest(test, router.Handler(), "POST", platformAuthPath+"/passkey/begin", "", nil, nil)
+	if begin.Code != 200 {
+		test.Fatal(begin.Body.String())
+	}
+	var options struct {
+		Options protocol.CredentialAssertion `json:"options"`
+	}
+	if err := json.Unmarshal(begin.Body.Bytes(), &options); err != nil {
+		test.Fatal(err)
+	}
+	// 即使签名和 credential ID 都正确，旧租户八字节 handle 也不能成为平台身份。
+	assertion := authenticator.assertionBody(test, "admin.test", platformTestOrigin, &options.Options, userHandle(key.UserID))
+	answer := platformAuthRequest(test, router.Handler(), "POST", platformAuthPath+"/passkey/finish", "", json.RawMessage(assertion), begin.Result().Cookies()[0])
+	if answer.Code != 400 {
+		test.Fatal("tenant user handle accepted for platform credential", answer.Code)
+	}
+	valid, _, _ := platformPasskeyLogin(test, router, key, authenticator)
+	platformSessionToken(test, valid)
 }
 
 func TestPlatformCreateUserRolesAndIsolation(test *testing.T) {

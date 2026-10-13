@@ -8,6 +8,7 @@ import (
 )
 
 const PlatformLoginName = "platform-admin"
+const PlatformPasskeyNamespace = "xunara:platform:v1"
 
 // 平台创建成员不兑换邀请、不代登录；角色与额度只由已授权的平台处理器传入。
 type PlatformLocalAccount struct {

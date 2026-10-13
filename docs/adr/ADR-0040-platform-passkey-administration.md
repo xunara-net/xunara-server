@@ -24,3 +24,9 @@ Passkey 登录者。沿用 go-webauthn 与已有持久挑战验证，固定管�
 关闭平台 Passkey 或回退旧二进制，保留文件供未来重新启用。
 本决策不交付多运营者 RBAC/TOTP/完整恢复；跨数据库授权与套餐变更不声称原子，
 现有跨租户审计尚不包含独立平台凭据日志。虚拟认证器不代表所有真实平台已验收。
+
+## 实施补充：认证器身份域（2026-10-13）
+
+平台使用稳定 WebAuthn handle 身份域，避免同 RP 下与租户数字 ID 重合导致
+认证器替换旧驻留凭据；不改变已发布租户 handle。依据
+[WebAuthn user handle](https://www.w3.org/TR/webauthn-3/#user-handle) 的 RP/handle 对映射。

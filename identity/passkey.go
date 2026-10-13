@@ -27,6 +27,9 @@ var residentKeyRequired = true
 
 // PasskeyConfig configures passkey (WebAuthn) sign-in.
 type PasskeyConfig struct {
+	// 身份域前缀防止同 RP 下不同账户库的数字 ID 在认证器中互相覆盖。
+	// 空值保留已发布租户的八字节 handle；最多 55 字节，使完整 handle 不超过 64。
+	UserHandleNamespace string
 	// DisplayName is what authenticators show as the relying party. Empty
 	// falls back to the RP ID.
 	DisplayName string
@@ -47,18 +50,20 @@ type PasskeyConfig struct {
 
 // PasskeyService performs passkey registration and login.
 type PasskeyService struct {
-	store            Store
-	wa               *webauthn.WebAuthn
-	userVerification protocol.UserVerificationRequirement
+	store               Store
+	wa                  *webauthn.WebAuthn
+	userVerification    protocol.UserVerificationRequirement
+	userHandleNamespace string
 }
 
 // normalizedPasskeyConfig is a validated configuration with defaults applied.
 type normalizedPasskeyConfig struct {
-	rpID             string
-	origins          []string
-	displayName      string
-	timeout          time.Duration
-	userVerification protocol.UserVerificationRequirement
+	rpID                string
+	origins             []string
+	displayName         string
+	timeout             time.Duration
+	userVerification    protocol.UserVerificationRequirement
+	userHandleNamespace string
 }
 
 // Validate reports whether the configuration can serve passkey ceremonies. It
@@ -73,6 +78,9 @@ func (cfg PasskeyConfig) Validate() error {
 // A configuration mistake must be fatal at startup: a wrong relying party
 // would otherwise silently refuse every ceremony.
 func (cfg PasskeyConfig) normalize() (normalizedPasskeyConfig, error) {
+	if len(cfg.UserHandleNamespace) > 55 {
+		return normalizedPasskeyConfig{}, errors.New("identity: passkey namespace exceeds the 64-byte user handle limit")
+	}
 	rpID := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(cfg.RPID), "."))
 	if rpID == "" {
 		return normalizedPasskeyConfig{}, errors.New("identity: passkey sign-in needs an RP ID")
@@ -122,11 +130,12 @@ func (cfg PasskeyConfig) normalize() (normalizedPasskeyConfig, error) {
 	}
 
 	return normalizedPasskeyConfig{
-		rpID:             rpID,
-		origins:          origins,
-		displayName:      displayName,
-		timeout:          timeout,
-		userVerification: userVerification,
+		userHandleNamespace: cfg.UserHandleNamespace,
+		rpID:                rpID,
+		origins:             origins,
+		displayName:         displayName,
+		timeout:             timeout,
+		userVerification:    userVerification,
 	}, nil
 }
 
@@ -154,7 +163,7 @@ func NewPasskeyService(store Store, cfg PasskeyConfig) (*PasskeyService, error) 
 		return nil, fmt.Errorf("identity: configuring passkey sign-in: %w", err)
 	}
 
-	return &PasskeyService{store: store, wa: wa, userVerification: norm.userVerification}, nil
+	return &PasskeyService{store: store, wa: wa, userVerification: norm.userVerification, userHandleNamespace: norm.userHandleNamespace}, nil
 }
 
 // validatePasskeyOrigin enforces that an allowed origin is a plain https (or
@@ -367,8 +376,9 @@ func decodeCeremonySession(ceremony PasskeyCeremony) (webauthn.SessionData, erro
 // webauthnUser adapts an identity user and its stored passkeys to the
 // library's User interface.
 type webauthnUser struct {
-	user        User
-	credentials []webauthn.Credential
+	user                User
+	credentials         []webauthn.Credential
+	userHandleNamespace string
 }
 
 // newUser 只适配已成功读取的账户凭据，不以空列表掩盖存储读取错误。
@@ -377,7 +387,7 @@ func (s *PasskeyService) newUser(user User, passkeys []Passkey) webauthnUser {
 	for _, passkey := range passkeys {
 		credentials = append(credentials, passkey.Credential)
 	}
-	return webauthnUser{user: user, credentials: credentials}
+	return webauthnUser{user: user, credentials: credentials, userHandleNamespace: s.userHandleNamespace}
 }
 
 // WebAuthnID is the opaque, stable user handle. It is an account handle for
@@ -386,6 +396,9 @@ func (s *PasskeyService) newUser(user User, passkeys []Passkey) webauthnUser {
 func (u webauthnUser) WebAuthnID() []byte {
 	var handle [8]byte
 	binary.BigEndian.PutUint64(handle[:], uint64(u.user.ID))
+	if u.userHandleNamespace != "" {
+		return append(append([]byte(u.userHandleNamespace), 0), handle[:]...)
+	}
 	return handle[:]
 }
 

@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
@@ -413,5 +414,36 @@ func TestPasskeyHandleIsStable(t *testing.T) {
 	}
 	if new(big.Int).SetBytes(first).Int64() <= 0 {
 		t.Error("handle is not a positive opaque value")
+	}
+}
+
+func TestPasskeyHandleSeparatesIdentityRealms(t *testing.T) {
+	store := openTestStore(t)
+	config := PasskeyConfig{RPID: "login.example.com", Origins: []string{"https://login.example.com"}}
+	legacy, err := NewPasskeyService(store, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := User{ID: 1, LoginName: "same-numeric-id"}
+	legacyHandle := legacy.newUser(user, nil).WebAuthnID()
+	if !bytes.Equal(legacyHandle, userHandle(user)) || len(legacyHandle) != 8 {
+		t.Fatal("existing tenant handle changed")
+	}
+	config.UserHandleNamespace = PlatformPasskeyNamespace
+	platform, err := NewPasskeyService(store, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformHandle := platform.newUser(user, nil).WebAuthnID()
+	if bytes.Equal(legacyHandle, platformHandle) || len(platformHandle) > 64 || !bytes.Equal(platformHandle, platform.newUser(user, nil).WebAuthnID()) {
+		t.Fatal("platform handle collides or is unstable")
+	}
+	config.UserHandleNamespace = strings.Repeat("x", 55)
+	if maximum, err := NewPasskeyService(store, config); err != nil || len(maximum.newUser(user, nil).WebAuthnID()) != 64 {
+		t.Fatal("valid maximum handle rejected", err)
+	}
+	config.UserHandleNamespace += "x"
+	if _, err := NewPasskeyService(store, config); err == nil {
+		t.Fatal("oversized handle accepted")
 	}
 }
