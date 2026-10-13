@@ -201,6 +201,18 @@ func validatePasskeyOrigin(raw, rpID string) (string, error) {
 // BeginRegistration starts a registration ceremony for user and returns the
 // browser options plus the ceremony and browser-binding secrets.
 func (s *PasskeyService) BeginRegistration(user User) (options *protocol.CredentialCreation, ceremonyID, browserSecret string, err error) {
+	return s.beginRegistration(user, "")
+}
+
+// 管理员挑战的发起会话必须持久记录，不能只依靠客户端可改写的 Cookie 摘要。
+func (s *PasskeyService) BeginRegistrationForSession(user User, initiatingID string) (options *protocol.CredentialCreation, ceremonyID, browserSecret string, err error) {
+	if initiatingID == "" {
+		return nil, "", "", ErrSessionRevoked
+	}
+	return s.beginRegistration(user, initiatingID)
+}
+
+func (s *PasskeyService) beginRegistration(user User, initiatingID string) (options *protocol.CredentialCreation, ceremonyID, browserSecret string, err error) {
 	if user.ID == 0 {
 		return nil, "", "", errors.New("identity: passkey registration needs a user")
 	}
@@ -221,7 +233,7 @@ func (s *PasskeyService) BeginRegistration(user User) (options *protocol.Credent
 	if err != nil {
 		return nil, "", "", fmt.Errorf("identity: starting passkey registration: %w", err)
 	}
-	ceremonyID, browserSecret, err = s.saveCeremony(PasskeyCeremonyRegister, user.ID, session)
+	ceremonyID, browserSecret, err = s.saveCeremony(PasskeyCeremonyRegister, user.ID, session, initiatingID)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -238,6 +250,15 @@ func (s *PasskeyService) FinishRegistration(ceremonyID, browserSecret string, us
 	if ceremony.UserID != user.ID {
 		// A ceremony belongs to the account that started it; never let one
 		// user finish another's registration.
+		return Passkey{}, ErrPasskeyCeremonyNotFound
+	}
+	var binding struct {
+		InitiatingID string `json:"xunara_initiating_session_id"`
+	}
+	if err := json.Unmarshal(ceremony.Session, &binding); err != nil {
+		return Passkey{}, err
+	}
+	if binding.InitiatingID != "" && binding.InitiatingID != initiatingID {
 		return Passkey{}, ErrPasskeyCeremonyNotFound
 	}
 	session, err := decodeCeremonySession(ceremony)
@@ -331,8 +352,18 @@ func (s *PasskeyService) FinishLogin(ceremonyID, browserSecret string, finish *h
 
 // saveCeremony persists a started ceremony and returns its ID plus the browser
 // secret the caller sets as a cookie.
-func (s *PasskeyService) saveCeremony(kind PasskeyCeremonyKind, userID tailcfg.UserID, session *webauthn.SessionData) (string, string, error) {
-	raw, err := json.Marshal(session)
+func (s *PasskeyService) saveCeremony(kind PasskeyCeremonyKind, userID tailcfg.UserID, session *webauthn.SessionData, initiatingIDs ...string) (string, string, error) {
+	if len(initiatingIDs) > 1 {
+		return "", "", errors.New("identity: multiple initiating sessions")
+	}
+	initiatingID := ""
+	if len(initiatingIDs) == 1 {
+		initiatingID = initiatingIDs[0]
+	}
+	raw, err := json.Marshal(struct {
+		*webauthn.SessionData
+		InitiatingID string `json:"xunara_initiating_session_id,omitempty"`
+	}{session, initiatingID})
 	if err != nil {
 		return "", "", fmt.Errorf("identity: encoding passkey ceremony: %w", err)
 	}

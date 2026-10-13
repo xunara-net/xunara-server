@@ -254,7 +254,7 @@ func (router *Router) handlePlatformPasskeyRegisterBegin(writer http.ResponseWri
 		writeAPIError(writer, 503, "PLATFORM_AUTH_UNAVAILABLE: could not read administrator account")
 		return
 	}
-	options, id, secret, err := router.platformAuth.passkeys.BeginRegistration(user)
+	options, id, secret, err := router.platformAuth.passkeys.BeginRegistrationForSession(user, session.ID)
 	if err != nil {
 		writeAPIError(writer, 503, "PLATFORM_AUTH_UNAVAILABLE: could not begin registration")
 		return

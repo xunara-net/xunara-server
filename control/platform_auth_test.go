@@ -275,6 +275,38 @@ func TestPlatformPasskeyRejectsTenantUserHandle(test *testing.T) {
 	platformSessionToken(test, valid)
 }
 
+func TestPlatformRegistrationRejectsRewrittenSessionCookie(test *testing.T) {
+	router := platformAuthRouter(test)
+	first, second := platformLoginToken(test, router), platformLoginToken(test, router)
+	begin := platformAuthRequest(test, router.Handler(), "POST", platformAuthPath+"/passkeys/begin", first, nil, nil)
+	if begin.Code != 200 {
+		test.Fatal(begin.Body.String())
+	}
+	var options struct {
+		Options protocol.CredentialCreation `json:"options"`
+	}
+	if err := json.Unmarshal(begin.Body.Bytes(), &options); err != nil {
+		test.Fatal(err)
+	}
+	cookie := begin.Result().Cookies()[0]
+	session, err := router.platformAuth.store.GetSessionByToken(second)
+	if err != nil {
+		test.Fatal(err)
+	}
+	parts := strings.Split(cookie.Value, ".")
+	parts[2] = identity.HashSecret(session.ID)
+	cookie.Value = strings.Join(parts, ".")
+	credential := newSoftwareAuthenticator(test).creationBody(test, "admin.test", platformTestOrigin, &options.Options)
+	finish := platformAuthRequest(test, router.Handler(), "POST", platformAuthPath+"/passkeys/finish", second, map[string]any{"name": "改写 Cookie", "credential": json.RawMessage(credential)}, cookie)
+	if finish.Code != 400 {
+		test.Fatal("rewritten cookie adopted another session's challenge", finish.Code)
+	}
+	keys, err := router.platformAuth.store.ListAccountPasskeys(test.Context(), session.UserID)
+	if err != nil || len(keys) != 0 {
+		test.Fatal("rejected challenge saved a credential", err)
+	}
+}
+
 func TestPlatformCreateUserRolesAndIsolation(test *testing.T) {
 	router := platformAuthRouter(test)
 	token := platformLoginToken(test, router)
