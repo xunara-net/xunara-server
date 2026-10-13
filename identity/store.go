@@ -129,4 +129,5 @@ type Store interface {
 	RegistrationInviteStore
 	RegistrationStore
 	BootstrapStore
+	PlatformAccountStore
 }

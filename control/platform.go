@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 // This file implements /api/platform: the cross-organization platform API a
@@ -16,8 +18,8 @@ import (
 // reachable with an organization's own credentials (session cookie or
 // organization API key): those are tenant-scoped, and letting one tenant
 // enumerate the others would be a tenant-boundary violation (AGENTS.md
-// section 12). The only credential accepted is the platform admin token from
-// the process environment; when unset, the API is disabled.
+// section 12). Accepted credentials are the deployment recovery token or a
+// human session from the dedicated platform database, never a tenant session.
 
 // PlatformOrg is the platform API's view of one organization.
 type PlatformOrg struct {
@@ -90,6 +92,12 @@ func (r *Router) mountPlatform(pr chi.Router) {
 	pr.Delete("/v1/organizations/{orgID}/relays/{relayID}", r.handlePlatformDeleteRelay)
 
 	pr.Get("/v1/users", r.handlePlatformUsers)
+	pr.Post("/v1/organizations/{orgID}/users", r.handlePlatformCreateUser)
+	pr.Get("/v1/auth/passkeys", r.handlePlatformPasskeys)
+	pr.Post("/v1/auth/passkeys/begin", r.handlePlatformPasskeyRegisterBegin)
+	pr.Post("/v1/auth/passkeys/finish", r.handlePlatformPasskeyRegisterFinish)
+	pr.Delete("/v1/auth/passkeys/{id}", r.handlePlatformDeletePasskey)
+	pr.Post("/v1/auth/logout", r.handlePlatformLogout)
 	pr.Post("/v1/organizations/{orgID}/users/{userID}/revoke", r.handlePlatformRevokeUserSessions)
 	pr.Patch("/v1/organizations/{orgID}/users/{userID}/status", r.handlePlatformUserStatus)
 	pr.Post("/v1/organizations/{orgID}/users/{userID}/password-reset", r.handlePlatformPasswordReset)
@@ -99,7 +107,7 @@ func (r *Router) mountPlatform(pr chi.Router) {
 // requirePlatformToken enforces bearer-token auth on the platform API. It is
 // fail closed: no configured token means no platform API.
 func (r *Router) requirePlatformToken(next http.Handler) http.Handler {
-	enabled := r.cfg.PlatformAdminToken != ""
+	enabled := r.cfg.PlatformAdminToken != "" || r.platformAuth != nil
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if !enabled {
@@ -107,12 +115,30 @@ func (r *Router) requirePlatformToken(next http.Handler) http.Handler {
 			return
 		}
 		token, ok := bearerToken(req)
-		if !ok || !constantTimeTokenEqual(r.platformTokenHash, token) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="xunara-platform"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		if ok && r.cfg.PlatformAdminToken != "" && constantTimeTokenEqual(r.platformTokenHash, token) {
+			next.ServeHTTP(w, req)
 			return
 		}
-		next.ServeHTTP(w, req)
+		if ok && r.platformAuth != nil && strings.EqualFold(req.Host, r.platformAuth.host) {
+			session, err := r.platformAuth.store.UseSession(req.Context(), token)
+			if err != nil && !errors.Is(err, identity.ErrSessionNotFound) {
+				writeAPIError(w, http.StatusServiceUnavailable, "PLATFORM_AUTH_UNAVAILABLE: could not verify administrator session")
+				return
+			}
+			if err == nil && (session.AuthMethod == "platform-token" || session.AuthMethod == "passkey") {
+				user, err := r.platformAuth.store.LookupUser(req.Context(), session.UserID)
+				if err != nil {
+					writeAPIError(w, http.StatusServiceUnavailable, "PLATFORM_AUTH_UNAVAILABLE: could not verify administrator")
+					return
+				}
+				if user.LoginName == identity.PlatformLoginName && user.Role.IsOwner() && user.DisabledAt.IsZero() {
+					next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), platformSessionContextKey{}, session)))
+					return
+				}
+			}
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="xunara-platform"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 }
 

@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/xunara-net/xunara-server/identity"
 	"google.golang.org/grpc"
 	"tailscale.com/tailcfg"
 )
@@ -56,6 +60,7 @@ type RouterConfig struct {
 	// constant time with the request's bearer token. Empty disables the
 	// platform API (fail closed).
 	PlatformAdminToken string
+	PlatformAuth       *PlatformAuthConfig
 	// Registry, when non-nil, enables platform-managed organizations: the
 	// platform API can create, retarget and delete organizations at runtime,
 	// and the registry's rows are served alongside the configured ones.
@@ -110,6 +115,7 @@ type Router struct {
 	// equalizes lengths so the constant-time comparison does not leak the
 	// token's length.
 	platformTokenHash [32]byte
+	platformAuth      *platformAuthentication
 
 	startOnce sync.Once
 }
@@ -183,6 +189,45 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 		// mu is still held here: the desk is attached to the organization
 		// table the caller just built.
 		if err := r.enableSelfServiceLocked(); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.PlatformAuth != nil {
+		config := *cfg.PlatformAuth
+		if config.Path == "" {
+			config.Path = filepath.Join(r.orgs[0].site.Server.cfg.StateDir, "platform-identity.db")
+		}
+		if config.Origin == "" {
+			origin, err := url.Parse(r.orgs[0].site.Server.cfg.ServerURL)
+			if err == nil {
+				config.Origin = origin.Scheme + "://" + origin.Host
+				candidate := identity.PasskeyConfig{RPID: origin.Hostname(), Origins: []string{config.Origin}}
+				if candidate.Validate() != nil {
+					config.Origin = ""
+				}
+			}
+			if config.Origin == "" {
+				r.log.Warn("platform passkey sign-in disabled: configure an HTTPS administrator origin")
+				return r, nil
+			}
+		}
+		path, err := filepath.Abs(config.Path)
+		if err != nil {
+			return nil, err
+		}
+		for _, org := range r.orgs {
+			tenantPath, err := filepath.Abs(org.site.Server.cfg.DBPath)
+			if err != nil {
+				return nil, err
+			}
+			platformInfo, platformErr := os.Stat(path)
+			tenantInfo, tenantErr := os.Stat(tenantPath)
+			if path == tenantPath || (platformErr == nil && tenantErr == nil && os.SameFile(platformInfo, tenantInfo)) {
+				return nil, errors.New("control: platform identity must not share a tenant database")
+			}
+		}
+		r.platformAuth, err = openPlatformAuthentication(context.Background(), config)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -482,6 +527,11 @@ func (r *Router) Close() error {
 	r.mu.Unlock()
 
 	var errs []error
+	if r.platformAuth != nil {
+		if err := r.platformAuth.database.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	for _, org := range orgs {
 		if err := org.site.Server.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", org.site.ID, err))
@@ -589,6 +639,7 @@ func (r *Router) Handler() http.Handler {
 		})
 	})
 
+	r.mountPlatformAuthentication(mux)
 	mux.Route("/api/platform", func(pr chi.Router) {
 		r.mountPlatform(pr)
 	})

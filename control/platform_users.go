@@ -3,8 +3,12 @@ package control
 import (
 	"errors"
 	"net/http"
+	"net/mail"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -35,6 +39,74 @@ type platformUser struct {
 	DisabledReason         string     `json:"disabledReason"`
 	PasswordResetAvailable bool       `json:"passwordResetAvailable"`
 	PasswordResetExpiresAt *time.Time `json:"passwordResetExpiresAt,omitempty"`
+}
+
+// 明确选定已有租户，只创建人类成员，不新建网络、签发会话或批准设备。
+func (router *Router) handlePlatformCreateUser(writer http.ResponseWriter, request *http.Request) {
+	server := router.serverFor(chi.URLParam(request, "orgID"))
+	if server == nil {
+		writeAPIError(writer, 404, "USER_NOT_FOUND: unknown tenant")
+		return
+	}
+	if !server.localLogin {
+		writeAPIError(writer, 403, "LOCAL_LOGIN_DISABLED: tenant does not allow local password login")
+		return
+	}
+	var body struct {
+		Login       string `json:"login"`
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		Role        string `json:"role"`
+	}
+	if !decodeAccountBodyLimit(writer, request, &body, 8<<10) {
+		return
+	}
+	login := strings.ToLower(strings.TrimSpace(body.Login))
+	display, email := strings.TrimSpace(body.DisplayName), strings.TrimSpace(body.Email)
+	role, err := identity.ParseRole(body.Role)
+	if err != nil || login == "" || len(login) > 128 || sanitizeLoginName(login) != login || !utf8.ValidString(display) || utf8.RuneCountInString(display) > 100 || strings.ContainsFunc(display, unicode.IsControl) {
+		writeAPIError(writer, 400, "USER_CREATE_INVALID: invalid login, display name or role")
+		return
+	}
+	if email != "" {
+		address, err := mail.ParseAddress(email)
+		if err != nil || address.Name != "" || address.Address != email || len(email) > 254 || strings.ContainsFunc(email, unicode.IsControl) {
+			writeAPIError(writer, 400, "USER_CREATE_INVALID: invalid contact email")
+			return
+		}
+	}
+	if err := identity.CheckPassword(login, body.Password); err != nil {
+		writeAPIError(writer, 400, "USER_CREATE_INVALID: "+passwordPolicyMessage(err))
+		return
+	}
+	hash, err := identity.HashPassword(body.Password)
+	if err != nil {
+		writeAPIError(writer, 503, "USER_CREATE_UNAVAILABLE: could not prepare credential")
+		return
+	}
+	actor := "platform-token"
+	if session, ok := request.Context().Value(platformSessionContextKey{}).(identity.Session); ok {
+		actor = "platform-user:" + strconv.FormatUint(uint64(session.UserID), 10)
+	}
+	user, err := server.identity.CreateLocalAccountByPlatform(request.Context(), identity.PlatformLocalAccount{
+		LoginName: login, DisplayName: display, Email: email, PasswordHash: hash, Role: role,
+		MaxUsers: server.Plan().MaxUsers, AuthenticationRevision: server.authenticationRevision(), Actor: actor,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, identity.ErrLoginNameTaken):
+			writeAPIError(writer, 409, "LOGIN_NAME_TAKEN: this tenant already has that login")
+		case errors.Is(err, identity.ErrMemberLimitReached):
+			writeAPIError(writer, 403, MsgUserLimitReached)
+		case errors.Is(err, identity.ErrAuthenticationConfigChanged):
+			writeAPIError(writer, 409, "AUTH_CONFIG_CHANGED: refresh tenant authentication settings")
+		default:
+			writeAPIError(writer, 503, "USER_CREATE_UNAVAILABLE: could not commit account; refresh the list to check")
+		}
+		return
+	}
+	writeJSON(writer, 201, map[string]any{"org": server.TenantID(), "id": uint64(user.ID), "login": user.LoginName, "role": user.Role})
 }
 
 // handlePlatformUsers implements GET /api/platform/v1/users: every account on

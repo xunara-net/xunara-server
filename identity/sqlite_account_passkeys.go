@@ -53,6 +53,14 @@ func (store *SQLiteStore) CreateAccountPasskey(ctx context.Context, initiatingID
 }
 
 func (store *SQLiteStore) DeleteAccountPasskey(ctx context.Context, userID tailcfg.UserID, initiatingID, passkeyID string) error {
+	return store.deleteAccountPasskey(ctx, userID, initiatingID, passkeyID, false, true)
+}
+
+func (store *SQLiteStore) DeletePlatformPasskey(ctx context.Context, userID tailcfg.UserID, initiatingID, passkeyID string, recoveryAvailable bool) error {
+	return store.deleteAccountPasskey(ctx, userID, initiatingID, passkeyID, true, recoveryAvailable)
+}
+
+func (store *SQLiteStore) deleteAccountPasskey(ctx context.Context, userID tailcfg.UserID, initiatingID, passkeyID string, revokeSessions, allowLast bool) error {
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("identity: starting passkey deletion: %w", err)
@@ -61,6 +69,15 @@ func (store *SQLiteStore) DeleteAccountPasskey(ctx context.Context, userID tailc
 	now := time.Now().UTC()
 	if err := lockAccountSession(ctx, tx, userID, initiatingID, now); err != nil {
 		return err
+	}
+	if !allowLast {
+		var count int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM webauthn_credentials WHERE user_id = ?", int64(userID)).Scan(&count); err != nil {
+			return err
+		}
+		if count <= 1 {
+			return ErrLastLoginMethod
+		}
 	}
 	// 公共 ID 不能代替所有权；未知 ID 和其他账户的 ID 均返回同一种错误。
 	result, err := tx.ExecContext(ctx, "DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?", passkeyID, int64(userID))
@@ -73,6 +90,16 @@ func (store *SQLiteStore) DeleteAccountPasskey(ctx context.Context, userID tailc
 	}
 	if affected != 1 {
 		return ErrPasskeyNotFound
+	}
+	if revokeSessions {
+		// 无法将旧会话归属某一把密钥时，保守撤销全部 Passkey 会话；恢复令牌会话不受影响。
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET revoked_at = ?, revoked_reason = 'platform passkey unbound'
+			WHERE user_id = ? AND auth_method = 'passkey' AND revoked_at IS NULL`, now.UnixNano(), int64(userID)); err != nil {
+			return err
+		}
+		if err := insertAccountAudit(ctx, tx, userID, AuditSessionRevoked, "platform passkey unbound; revoked passkey sessions", now); err != nil {
+			return err
+		}
 	}
 	if err := insertAccountAudit(ctx, tx, userID, AuditPasskeyDeleted, "deleted passkey:"+passkeyID, now); err != nil {
 		return err

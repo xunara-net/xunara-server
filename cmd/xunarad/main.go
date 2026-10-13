@@ -78,7 +78,9 @@ func main() {
 			"address for the platform gRPC API (xunara.v2); empty disables gRPC")
 		platformStateDir = flag.String("platform-state-dir", "",
 			"directory holding the platform registry and platform-managed organizations; empty disables runtime organization CRUD")
-		plansFile = flag.String("plans", "",
+		platformPasskeys    = flag.Bool("platform-passkey", true, "enable independent platform administrator passkeys on a trusted origin")
+		platformAdminOrigin = flag.String("platform-admin-origin", "", "fixed administrator WebAuthn origin; defaults to the primary configured server URL")
+		plansFile           = flag.String("plans", "",
 			"JSON file with the plans this deployment sells, or 'builtin' for the shipped free/pro/business catalog; empty disables plan quotas")
 		networkPool = flag.String("network-pool", "100.100.0.0/16",
 			"range tenant tailnet blocks are allocated from, carved into /24s; 'none' disables automatic allocation")
@@ -133,16 +135,18 @@ func main() {
 			os.Exit(1)
 		}
 		runRouter(routerOptions{
-			path:               *orgConfigPath,
-			listen:             *listen,
-			grpcListen:         *grpcListen,
-			platformTokenEnv:   *platformTokenEnv,
-			platformStateDir:   *platformStateDir,
-			trustedProxy:       *trustedProxy,
-			consoleTimezone:    *consoleTimezone,
-			plansFile:          *plansFile,
-			networkPool:        *networkPool,
-			managedDERPMapPath: *managedDERPMapPath,
+			path:                *orgConfigPath,
+			listen:              *listen,
+			grpcListen:          *grpcListen,
+			platformTokenEnv:    *platformTokenEnv,
+			platformStateDir:    *platformStateDir,
+			trustedProxy:        *trustedProxy,
+			consoleTimezone:     *consoleTimezone,
+			plansFile:           *plansFile,
+			networkPool:         *networkPool,
+			managedDERPMapPath:  *managedDERPMapPath,
+			platformPasskeys:    *platformPasskeys,
+			platformAdminOrigin: *platformAdminOrigin,
 		}, logger)
 		return
 	}
@@ -306,7 +310,11 @@ func main() {
 	// routes exist only in multi-tenant mode, which would leave a self-hosted
 	// installation unable to use the administrator console at all.
 	if platformToken := os.Getenv(*platformTokenEnv); platformToken != "" {
-		if err := serveSingleTenantPlatform(srv, plans, platformToken, *listen, *grpcListen, *domain, logger, ctx); err != nil {
+		var platformAuth *control.PlatformAuthConfig
+		if *platformPasskeys {
+			platformAuth = &control.PlatformAuthConfig{Origin: *platformAdminOrigin}
+		}
+		if err := serveSingleTenantPlatform(srv, plans, platformToken, *listen, *grpcListen, *domain, platformAuth, logger, ctx); err != nil {
 			logger.Error("server error", "err", err)
 			os.Exit(1)
 		}
@@ -322,7 +330,7 @@ func main() {
 // serveSingleTenantPlatform serves one organization through a [control.Router]
 // so that /api/platform/v1 and /admin exist. The router owns the site from
 // here on: it starts its background workers and closes it when serving stops.
-func serveSingleTenantPlatform(srv *control.Server, plans *control.PlanRegistry, platformToken, listen, grpcListen, domain string, logger *slog.Logger, ctx context.Context) error {
+func serveSingleTenantPlatform(srv *control.Server, plans *control.PlanRegistry, platformToken, listen, grpcListen, domain string, platformAuth *control.PlatformAuthConfig, logger *slog.Logger, ctx context.Context) error {
 	name := strings.TrimSpace(domain)
 	if name == "" {
 		name = srv.TenantID()
@@ -334,6 +342,7 @@ func serveSingleTenantPlatform(srv *control.Server, plans *control.PlanRegistry,
 		// which is exactly how a single-tenant deployment is addressed.
 		Orgs:               []control.OrgSite{{ID: srv.TenantID(), Name: name, Server: srv}},
 		PlatformAdminToken: platformToken,
+		PlatformAuth:       platformAuth,
 		Plans:              plans,
 		Logger:             logger,
 	})
@@ -391,16 +400,18 @@ func checkOrgScopedFlags(visited []string) error {
 // organizations at runtime; their control planes live under that directory.
 // routerOptions are the multi-tenant deployment's process-level settings.
 type routerOptions struct {
-	path               string
-	listen             string
-	grpcListen         string
-	platformTokenEnv   string
-	platformStateDir   string
-	trustedProxy       bool
-	consoleTimezone    string
-	plansFile          string
-	networkPool        string
-	managedDERPMapPath string
+	path                string
+	listen              string
+	grpcListen          string
+	platformTokenEnv    string
+	platformStateDir    string
+	trustedProxy        bool
+	consoleTimezone     string
+	plansFile           string
+	networkPool         string
+	managedDERPMapPath  string
+	platformPasskeys    bool
+	platformAdminOrigin string
 }
 
 // planSourceFor turns a plan registry into the control plane's plan source.
@@ -519,11 +530,19 @@ func runRouter(opts routerOptions, logger *slog.Logger) {
 		}
 	}
 
+	var platformAuth *control.PlatformAuthConfig
+	if opts.platformPasskeys && platformToken != "" {
+		platformAuth = &control.PlatformAuthConfig{Origin: opts.platformAdminOrigin}
+		if platformStateDir != "" {
+			platformAuth.Path = filepath.Join(platformStateDir, "platform-identity.db")
+		}
+	}
 	router, err := control.NewRouter(control.RouterConfig{
 		ListenAddr:         listen,
 		GRPCListenAddr:     grpcListen,
 		Orgs:               sites,
 		PlatformAdminToken: platformToken,
+		PlatformAuth:       platformAuth,
 		Registry:           registry,
 		Shares:             shares,
 		Plans:              plans,
