@@ -3,9 +3,11 @@ package state
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 
 	"github.com/xunara-net/xunara-server/netspace"
 )
@@ -23,6 +25,25 @@ type AddressConfiguration struct {
 	IPv4           netip.Prefix
 	IPv6           netip.Prefix
 	SourceRevision uint64
+	ExtraIPv4      []netip.Prefix
+}
+
+func (configuration AddressConfiguration) IPv4Ranges() []netip.Prefix {
+	return append([]netip.Prefix{configuration.IPv4}, configuration.ExtraIPv4...)
+}
+
+func (configuration AddressConfiguration) ContainsIPv4(address netip.Addr) bool {
+	for _, prefix := range configuration.IPv4Ranges() {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+
+func (configuration AddressConfiguration) Equal(other AddressConfiguration) bool {
+	return configuration.IPv4 == other.IPv4 && configuration.IPv6 == other.IPv6 &&
+		configuration.SourceRevision == other.SourceRevision && slices.Equal(configuration.ExtraIPv4, other.ExtraIPv4)
 }
 
 type addressQuery interface {
@@ -31,8 +52,8 @@ type addressQuery interface {
 
 func AddressConfigurationTx(ctx context.Context, query addressQuery) (AddressConfiguration, error) {
 	var configuration AddressConfiguration
-	var ipv4, ipv6 string
-	if err := query.QueryRowContext(ctx, "SELECT ipv4, ipv6, source_revision FROM address_configuration WHERE id=1").Scan(&ipv4, &ipv6, &configuration.SourceRevision); err != nil {
+	var ipv4, ipv6, extra string
+	if err := query.QueryRowContext(ctx, "SELECT ipv4, ipv6, source_revision, extra_ipv4 FROM address_configuration WHERE id=1").Scan(&ipv4, &ipv6, &configuration.SourceRevision, &extra); err != nil {
 		return configuration, err
 	}
 	var err error
@@ -43,6 +64,13 @@ func AddressConfigurationTx(ctx context.Context, query addressQuery) (AddressCon
 	configuration.IPv6, err = netip.ParsePrefix(ipv6)
 	if err != nil || !configuration.IPv6.Addr().Is6() || configuration.IPv6 != configuration.IPv6.Masked() || configuration.IPv6.Bits() == 0 || configuration.SourceRevision > MaxAddressRevision {
 		return AddressConfiguration{}, errors.New("stored IPv6 allocation range is invalid")
+	}
+	if err := json.Unmarshal([]byte(extra), &configuration.ExtraIPv4); err != nil {
+		return AddressConfiguration{}, errors.New("stored additional IPv4 ranges are invalid")
+	}
+	normalized, err := netspace.NormalizeAdditionalPrefixes(configuration.IPv4, configuration.ExtraIPv4, nil)
+	if err != nil || !slices.Equal(normalized, configuration.ExtraIPv4) {
+		return AddressConfiguration{}, errors.New("stored additional IPv4 ranges are invalid")
 	}
 	return configuration, nil
 }
@@ -60,7 +88,7 @@ func ApplyAddressConfigurationTx(ctx context.Context, transaction *sql.Tx, next 
 	if next.SourceRevision > MaxAddressRevision || next.SourceRevision < current.SourceRevision {
 		return false, ErrAddressConflict
 	}
-	if current.SourceRevision > 0 && next.SourceRevision == current.SourceRevision && (next.IPv4 != current.IPv4 || next.IPv6 != current.IPv6) {
+	if current.SourceRevision > 0 && next.SourceRevision == current.SourceRevision && !next.Equal(current) {
 		return false, ErrAddressConflict
 	}
 	for _, entry := range []struct {
@@ -71,7 +99,11 @@ func ApplyAddressConfigurationTx(ctx context.Context, transaction *sql.Tx, next 
 			return false, err
 		}
 	}
-	if current == next {
+	next.ExtraIPv4, err = netspace.NormalizeAdditionalPrefixes(next.IPv4, next.ExtraIPv4, nil)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrAddressInvalid, err)
+	}
+	if current.Equal(next) {
 		return false, nil
 	}
 	for _, entry := range []struct {
@@ -86,8 +118,18 @@ func ApplyAddressConfigurationTx(ctx context.Context, transaction *sql.Tx, next 
 			}
 		}
 	}
-	_, err = transaction.ExecContext(ctx, "UPDATE address_configuration SET ipv4=?,ipv6=?,source_revision=? WHERE id=1", next.IPv4.String(), next.IPv6.String(), next.SourceRevision)
-	return err == nil, err
+	extra, err := json.Marshal(next.ExtraIPv4)
+	if err != nil {
+		return false, err
+	}
+	result, err := transaction.ExecContext(ctx, "UPDATE address_configuration SET ipv4=?,ipv6=?,source_revision=?,extra_ipv4=? WHERE id=1", next.IPv4.String(), next.IPv6.String(), next.SourceRevision, string(extra))
+	if err != nil {
+		return false, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return false, ErrAddressConflict
+	}
+	return true, nil
 }
 
 // ChangeNodeIPv4Tx 只改地址列，避免覆盖同时上报的 endpoints、密钥或路由。
@@ -106,8 +148,15 @@ func ChangeNodeIPv4Tx(ctx context.Context, transaction *sql.Tx, id NodeID, stabl
 	if err != nil {
 		return Node{}, err
 	}
-	if err := netspace.ValidateNodeIPv4(address, configuration.IPv4); err != nil {
-		return Node{}, fmt.Errorf("%w: %v", ErrAddressInvalid, err)
+	valid := false
+	for _, prefix := range configuration.IPv4Ranges() {
+		if netspace.ValidateNodeIPv4(address, prefix) == nil {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return Node{}, fmt.Errorf("%w: IPv4 must belong to a configured address pool", ErrAddressInvalid)
 	}
 	var occupied int
 	err = transaction.QueryRowContext(ctx, "SELECT 1 FROM nodes WHERE ipv4=? AND id<>? LIMIT 1", address.String(), id).Scan(&occupied)

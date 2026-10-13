@@ -38,6 +38,7 @@ type orgSelfServiceConfig struct {
 	Port         string `json:"port"`
 	CookieDomain string `json:"cookie_domain"`
 	Plan         string `json:"plan"`
+	ConsoleURL   string `json:"console_url"`
 }
 
 // orgConfig describes one organization. Secrets are never read from the file:
@@ -148,6 +149,7 @@ func loadOrgConfig(path string, logger *slog.Logger, trustedProxy bool) ([]contr
 			Port:         doc.SelfService.Port,
 			CookieDomain: doc.SelfService.CookieDomain,
 			Plan:         doc.SelfService.Plan,
+			ConsoleURL:   doc.SelfService.ConsoleURL,
 		}
 	}
 

@@ -42,7 +42,7 @@ func (store *SQLiteStore) SaveAllocation(ctx context.Context, writer *Writer, se
 		return before, err
 	}
 	if changed {
-		detail := fmt.Sprintf("IPv4 %s -> %s; source revision %d; existing device addresses retained", before.IPv4, update.Configuration.IPv4, update.Configuration.SourceRevision)
+		detail := fmt.Sprintf("IPv4 %v -> %v; source revision %d; existing device addresses retained", before.IPv4Ranges(), update.Configuration.IPv4Ranges(), update.Configuration.SourceRevision)
 		if err := commitChange(ctx, transaction, update.Actor, "network.prefix_changed", "network", detail, now); err != nil {
 			return before, err
 		}

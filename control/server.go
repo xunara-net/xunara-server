@@ -42,6 +42,8 @@ type Config struct {
 	// used to build login URLs handed to clients (e.g.
 	// "https://login.example.com"). It has no trailing slash.
 	ServerURL string
+	// ConsoleURL 只用于独立的浏览器入口；不会改变官方客户端的控制面地址。
+	ConsoleURL string
 	// ListenAddr is the address the HTTP server binds to.
 	ListenAddr string
 	// GRPCListenAddr is the address the platform gRPC API binds to. The API

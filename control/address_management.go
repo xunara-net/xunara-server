@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -16,8 +17,8 @@ import (
 
 type addressSource struct {
 	Load     func(context.Context) (networkVersion, error)
-	Change   func(context.Context, netip.Prefix, *uint64, string) (networkVersion, error)
-	Validate func(context.Context, netip.Prefix) error
+	Change   func(context.Context, netip.Prefix, *[]netip.Prefix, *uint64, string) (networkVersion, error)
+	Validate func(context.Context, netip.Prefix, []netip.Prefix) error
 	Reserved []netip.Prefix
 }
 
@@ -31,6 +32,7 @@ func (server *Server) actualAllocation(ctx context.Context) (state.AddressConfig
 
 func allocationFromVersion(current state.AddressConfiguration, version networkVersion) (state.AddressConfiguration, error) {
 	current.SourceRevision = version.Revision
+	current.ExtraIPv4 = slices.Clone(version.ExtraIPv4)
 	if version.Prefix == "" {
 		current.IPv4 = netip.MustParsePrefix("100.64.0.0/10")
 		return current, nil
@@ -82,7 +84,7 @@ func (server *Server) addressView(request *http.Request) (map[string]any, error)
 	}
 	outside := 0
 	for _, node := range nodes {
-		if node.IPv4.IsValid() && !allocation.IPv4.Contains(node.IPv4) {
+		if node.IPv4.IsValid() && !allocation.ContainsIPv4(node.IPv4) {
 			outside++
 		}
 	}
@@ -100,8 +102,10 @@ func (server *Server) addressView(request *http.Request) (map[string]any, error)
 	return map[string]any{
 		"ipv4_cidr": allocation.IPv4.String(), "ipv6_cidr": allocation.IPv6.String(),
 		"revision": allocation.SourceRevision, "desired_revision": desired.SourceRevision,
-		"desired_ipv4_cidr": desired.IPv4.String(), "pending": allocation != desired,
-		"can_edit": server.Plan().AllowCustomCIDR, "can_edit_ips": true,
+		"desired_ipv4_cidr": desired.IPv4.String(), "pending": !allocation.Equal(desired),
+		"extra_ipv4_cidrs": allocation.ExtraIPv4, "desired_extra_ipv4_cidrs": desired.ExtraIPv4,
+		"supports_multi_ipv4": true,
+		"can_edit":            server.Plan().AllowCustomCIDR, "can_edit_ips": true,
 		"devices_total": len(nodes), "devices_outside_range": outside,
 		"reserved_ranges": reserved, "csrf_token": csrfTokenFor(server.accountSessionToken(request)),
 	}, nil
@@ -130,8 +134,9 @@ func (server *Server) handleAPISaveAddressConfiguration(writer http.ResponseWrit
 		return
 	}
 	var body struct {
-		IPv4CIDR string  `json:"ipv4_cidr"`
-		Revision *uint64 `json:"revision"`
+		IPv4CIDR  string          `json:"ipv4_cidr"`
+		Revision  *uint64         `json:"revision"`
+		ExtraIPv4 *[]netip.Prefix `json:"extra_ipv4_cidrs"`
 	}
 	if !decodeAPIBody(writer, request, &body) {
 		return
@@ -151,6 +156,20 @@ func (server *Server) handleAPISaveAddressConfiguration(writer http.ResponseWrit
 		reserved = source.Reserved
 	}
 	prefix, err = netspace.ValidateTailnetPrefix(prefix, reserved)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "ADDRESS_INVALID: "+err.Error())
+		return
+	}
+	allocation, err := server.actualAllocation(request.Context())
+	if err != nil {
+		server.writeAddressError(writer, err)
+		return
+	}
+	extra := allocation.ExtraIPv4
+	if body.ExtraIPv4 != nil {
+		extra = *body.ExtraIPv4
+	}
+	extra, err = netspace.NormalizeAdditionalPrefixes(prefix, extra, reserved)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "ADDRESS_INVALID: "+err.Error())
 		return
@@ -175,7 +194,7 @@ func (server *Server) handleAPISaveAddressConfiguration(writer http.ResponseWrit
 				server.writeAddressError(writer, state.ErrAddressConflict)
 				return
 			}
-			if err := source.Validate(request.Context(), prefix); err != nil {
+			if err := source.Validate(request.Context(), prefix, extra); err != nil {
 				server.writeAddressError(writer, err)
 				return
 			}
@@ -187,11 +206,11 @@ func (server *Server) handleAPISaveAddressConfiguration(writer http.ResponseWrit
 		}
 		outside := 0
 		for _, node := range nodes {
-			if !prefix.Contains(node.IPv4) {
+			if !(state.AddressConfiguration{IPv4: prefix, ExtraIPv4: extra}).ContainsIPv4(node.IPv4) {
 				outside++
 			}
 		}
-		writeJSON(writer, http.StatusOK, map[string]any{"ipv4_cidr": prefix.String(), "devices_retained": len(nodes), "devices_outside_range": outside})
+		writeJSON(writer, http.StatusOK, map[string]any{"ipv4_cidr": prefix.String(), "extra_ipv4_cidrs": extra, "devices_retained": len(nodes), "devices_outside_range": outside})
 		return
 	}
 	server.networkMu.Lock()
@@ -202,13 +221,14 @@ func (server *Server) handleAPISaveAddressConfiguration(writer http.ResponseWrit
 			return networkconfig.AllocationUpdate{}, state.ErrAddressConflict
 		}
 		if source == nil {
-			if current.IPv4 != prefix {
+			if current.IPv4 != prefix || !slices.Equal(current.ExtraIPv4, extra) {
 				current.IPv4 = prefix
+				current.ExtraIPv4 = slices.Clone(extra)
 				current.SourceRevision++
 			}
 			return networkconfig.AllocationUpdate{Configuration: current, Actor: human.Actor()}, nil
 		}
-		version, err := source.Change(ctx, prefix, body.Revision, human.Actor())
+		version, err := source.Change(ctx, prefix, &extra, body.Revision, human.Actor())
 		if err != nil {
 			return networkconfig.AllocationUpdate{}, err
 		}

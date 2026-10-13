@@ -46,3 +46,15 @@ func TestManagedServerConfigWithoutSharedRelay(t *testing.T) {
 		t.Fatal("a deployment without managed relay settings inherited another tenant's configuration")
 	}
 }
+
+func TestManagedServerSharedConsolePreservesControlURLAndSeparatesPasskeyHandles(t *testing.T) {
+	config := managedServerConfig(control.ManagedOrg{ID: "alice", ServerURL: "https://alice.old.example.com"}, t.TempDir(),
+		routerOptions{consoleBaseURL: "https://app.example.com:9090"}, nil, slog.Default())
+	if config.ServerURL != "https://alice.old.example.com" || config.ConsoleURL != "https://app.example.com:9090/t/alice" ||
+		config.Passkeys == nil || config.Passkeys.RPID != "app.example.com" || config.Passkeys.UserHandleNamespace != "xunara:tenant:alice" {
+		t.Fatal("shared console changed protocol routing or reused another tenant's passkey identity")
+	}
+	if err := config.Passkeys.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

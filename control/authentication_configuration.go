@@ -204,7 +204,7 @@ func (server *Server) runtimeIdentityProvider(settings runtimeIdentityProvider) 
 	if settings.Type == "oidc" {
 		callbackPath = "/oidc/callback/"
 	}
-	callback := strings.TrimRight(server.cfg.ServerURL, "/") + callbackPath + settings.ID
+	callback := server.consoleURL() + callbackPath + settings.ID
 	if err := identity.ValidatePublicIdentityEndpoint(callback); err != nil {
 		return nil, errors.New("control: runtime providers need a public HTTPS control URL")
 	}

@@ -129,6 +129,11 @@ CREATE TABLE tenant_network_history (
 );
 INSERT INTO tenant_network_history SELECT org_id, revision, prefix, actor, created FROM tenant_network_versions;
 `,
+	// v5：附加池与默认池共享同一版本；历史预留不随删除池释放。
+	`
+ALTER TABLE tenant_network_versions ADD COLUMN extra_ipv4 TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE tenant_network_history ADD COLUMN extra_ipv4 TEXT NOT NULL DEFAULT '[]';
+`,
 }
 
 // PlanRegistryConfig configures the tenant plan registry.
@@ -402,6 +407,11 @@ func (g *PlanRegistry) AssignPlan(ctx context.Context, orgID, planID string) (Te
 	if err := upsertTenantPlanTx(ctx, tx, assignment, "system:plan-assignment"); err != nil {
 		return TenantPlan{}, err
 	}
+	if !next.AllowCustomCIDR {
+		if err := updateAdditionalNetworksTx(ctx, tx, orgID, []netip.Prefix{}, "system:plan-assignment", now); err != nil {
+			return TenantPlan{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return TenantPlan{}, fmt.Errorf("control: assigning plan %q to %q: %w", planID, orgID, err)
 	}
@@ -462,6 +472,10 @@ func (g *PlanRegistry) SetNetwork(ctx context.Context, orgID string, prefix neti
 }
 
 func (g *PlanRegistry) setNetwork(ctx context.Context, orgID string, prefix netip.Prefix, expected *uint64, actor string) (TenantPlan, error) {
+	return g.setNetworks(ctx, orgID, prefix, nil, expected, actor)
+}
+
+func (g *PlanRegistry) setNetworks(ctx context.Context, orgID string, prefix netip.Prefix, additional *[]netip.Prefix, expected *uint64, actor string) (TenantPlan, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return TenantPlan{}, orgInvalidf("organization id is required")
 	}
@@ -528,7 +542,46 @@ func (g *PlanRegistry) setNetwork(ctx context.Context, orgID string, prefix neti
 		assignment.NetworkPrefix = normalized.String()
 	}
 	assignment.UpdatedAt = now
+	version, err := readNetworkVersion(ctx, tx, orgID)
+	if err != nil {
+		return TenantPlan{}, err
+	}
+	extra := version.ExtraIPv4
+	if additional != nil {
+		extra = *additional
+	}
+	if len(extra) > 0 {
+		entitlement, ok := g.catalog().Get(assignment.PlanID)
+		if !ok || !entitlement.AllowCustomCIDR {
+			return TenantPlan{}, ErrNetworkNotAllowed
+		}
+	}
+	primary := netip.MustParsePrefix("100.64.0.0/10")
+	if assignment.NetworkPrefix != "" {
+		primary, err = netip.ParsePrefix(assignment.NetworkPrefix)
+		if err != nil {
+			return TenantPlan{}, err
+		}
+	}
+	extra, err = netspace.NormalizeAdditionalPrefixes(primary, extra, g.cfg.Reserved)
+	if err != nil {
+		return TenantPlan{}, orgInvalidf("%v", err)
+	}
+	if len(extra) > 0 {
+		used, err := g.usedNetworksTx(ctx, tx, orgID)
+		if err != nil {
+			return TenantPlan{}, err
+		}
+		for _, entry := range extra {
+			if _, overlap := netspace.FirstOverlap(entry, used); overlap {
+				return TenantPlan{}, ErrNetworkConflict
+			}
+		}
+	}
 	if err := upsertTenantPlanTx(ctx, tx, assignment, actor); err != nil {
+		return TenantPlan{}, err
+	}
+	if err := updateAdditionalNetworksTx(ctx, tx, orgID, extra, actor, now); err != nil {
 		return TenantPlan{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -735,8 +788,8 @@ func upsertTenantPlanTx(ctx context.Context, tx *sql.Tx, assignment TenantPlan, 
 		assignment.OrgID, assignment.NetworkPrefix, actor, assignment.UpdatedAt.UnixNano()); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO tenant_network_history(org_id,revision,prefix,actor,created)
-		SELECT org_id,revision,prefix,actor,created FROM tenant_network_versions WHERE org_id=?`, assignment.OrgID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO tenant_network_history(org_id,revision,prefix,actor,created,extra_ipv4)
+		SELECT org_id,revision,prefix,actor,created,extra_ipv4 FROM tenant_network_versions WHERE org_id=?`, assignment.OrgID); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `

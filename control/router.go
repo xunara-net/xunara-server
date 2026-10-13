@@ -657,6 +657,7 @@ func (r *Router) Handler() http.Handler {
 	// that organization and falls through to its handler.
 	if r.selfService.Load() != nil {
 		mux.Post(selfServiceSignupPath, r.handleSelfServiceSignup)
+		mux.HandleFunc("/t/{orgID}/*", r.handleTenantConsole)
 	}
 
 	mux.NotFound(func(w http.ResponseWriter, req *http.Request) {

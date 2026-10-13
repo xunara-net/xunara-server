@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -91,6 +92,11 @@ func (s *Server) apiPlanView() map[string]any {
 	v4, v6 := s.store.AddressPrefixes()
 	if v4.IsValid() {
 		ranges := []string{v4.String()}
+		if allocation, err := s.actualAllocation(context.Background()); err == nil {
+			for _, prefix := range allocation.ExtraIPv4 {
+				ranges = append(ranges, prefix.String())
+			}
+		}
 		if v6.IsValid() {
 			ranges = append(ranges, v6.String())
 		}

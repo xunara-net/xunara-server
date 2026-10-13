@@ -78,8 +78,8 @@ func (server *Server) attachPlanRegistry(ctx context.Context, registry *PlanRegi
 	}
 	server.addressSource.Store(&addressSource{
 		Load: func(ctx context.Context) (networkVersion, error) { return registry.networkVersion(ctx, orgID) },
-		Change: func(ctx context.Context, prefix netip.Prefix, expected *uint64, actor string) (networkVersion, error) {
-			if _, err := registry.setNetwork(ctx, orgID, prefix, expected, actor); err != nil {
+		Change: func(ctx context.Context, prefix netip.Prefix, additional *[]netip.Prefix, expected *uint64, actor string) (networkVersion, error) {
+			if _, err := registry.setNetworks(ctx, orgID, prefix, additional, expected, actor); err != nil {
 				return networkVersion{}, err
 			}
 			version, err := registry.networkVersion(ctx, orgID)
@@ -88,8 +88,8 @@ func (server *Server) attachPlanRegistry(ctx context.Context, registry *PlanRegi
 			}
 			return version, err
 		},
-		Validate: func(ctx context.Context, prefix netip.Prefix) error {
-			return registry.validateNetwork(ctx, orgID, prefix)
+		Validate: func(ctx context.Context, prefix netip.Prefix, additional []netip.Prefix) error {
+			return registry.validateNetworks(ctx, orgID, prefix, additional)
 		},
 		Reserved: registry.Reserved(),
 	})

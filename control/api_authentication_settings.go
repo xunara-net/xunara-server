@@ -122,7 +122,7 @@ func (server *Server) authenticationProviderView(settings runtimeIdentityProvide
 	if settings.Type == "oidc" {
 		callback, protocol = "/oidc/callback/", "oidc"
 	}
-	callbackURL := strings.TrimRight(server.cfg.ServerURL, "/") + callback + settings.ID
+	callbackURL := server.consoleURL() + callback + settings.ID
 	if source == "deployment" && server.providerRedirects[settings.ID] != "" {
 		callbackURL = server.providerRedirects[settings.ID]
 	}

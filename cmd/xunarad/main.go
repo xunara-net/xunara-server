@@ -412,6 +412,7 @@ type routerOptions struct {
 	managedDERPMapPath  string
 	platformPasskeys    bool
 	platformAdminOrigin string
+	consoleBaseURL      string
 }
 
 // planSourceFor turns a plan registry into the control plane's plan source.
@@ -480,6 +481,9 @@ func runRouter(opts routerOptions, logger *slog.Logger) {
 	}
 
 	platformToken := os.Getenv(platformTokenEnv)
+	if selfService != nil {
+		opts.consoleBaseURL = selfService.ConsoleURL
+	}
 	if platformToken == "" {
 		logger.Warn("platform API disabled: environment variable is empty",
 			"env", platformTokenEnv)

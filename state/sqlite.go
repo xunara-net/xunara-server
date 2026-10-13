@@ -371,6 +371,10 @@ CREATE TABLE dns_namespace (
 	domain TEXT NOT NULL
 );
 `,
+	// v25：附加 IPv4 地址池；默认池与全部旧设备地址保持原语义。
+	`
+ALTER TABLE address_configuration ADD COLUMN extra_ipv4 TEXT NOT NULL DEFAULT '[]';
+`,
 }
 
 // SQLiteStore is a durable [Store] backed by SQLite.

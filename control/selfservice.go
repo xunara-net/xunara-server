@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -82,6 +83,8 @@ type SelfServiceConfig struct {
 	// Plan is the plan every new tenant starts on. Empty means the catalog's
 	// default (the free plan in the shipped catalog).
 	Plan string
+	// ConsoleURL 启用入口域名下的 /t/<org>/ 网页，避免要求浏览器使用泛域名。
+	ConsoleURL string
 }
 
 // SelfServiceInfo is what a console needs to use the sign-up desk.
@@ -89,6 +92,7 @@ type SelfServiceInfo struct {
 	Endpoint     string `json:"endpoint"`
 	DomainSuffix string `json:"domain_suffix,omitempty"`
 	Plan         string `json:"plan,omitempty"`
+	ConsoleURL   string `json:"console_url,omitempty"`
 }
 
 // selfService is the normalized configuration, or nil when the deployment
@@ -135,6 +139,13 @@ func (r *Router) enableSelfServiceLocked() error {
 		return fmt.Errorf("control: self-service domain suffix: %w", err)
 	}
 	cfg.DomainSuffix = suffix
+	if cfg.ConsoleURL != "" {
+		base, err := normalizeConsoleBase(cfg.ConsoleURL)
+		if err != nil || base != strings.TrimRight(site.site.Server.cfg.ServerURL, "/") {
+			return errors.New("control: shared console URL must be the sign-up site's canonical origin")
+		}
+		cfg.ConsoleURL = base
+	}
 
 	switch cfg.Scheme {
 	case "":
@@ -181,6 +192,7 @@ func (r *Router) enableSelfServiceLocked() error {
 		Endpoint:     selfServiceSignupPath,
 		DomainSuffix: cfg.DomainSuffix,
 		Plan:         cfg.Plan,
+		ConsoleURL:   cfg.ConsoleURL,
 	})
 	r.log.Info("self-service sign-up enabled",
 		"site", cfg.Site, "domain_suffix", cfg.DomainSuffix,
@@ -213,6 +225,13 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		// because no tenant serves it).
 		org.handler.ServeHTTP(w, req)
 		return
+	}
+	if cfg.cfg.ConsoleURL != "" {
+		base, _ := url.Parse(cfg.cfg.ConsoleURL)
+		if !strings.EqualFold(req.Host, base.Host) {
+			writeAPIError(w, http.StatusBadRequest, "REGISTRATION_ORIGIN_REQUIRED: use the canonical registration site")
+			return
+		}
 	}
 	if err := org.site.Server.refreshAuthentication(req.Context()); err != nil {
 		org.site.Server.writeAuthenticationConfigError(w, err)
@@ -370,19 +389,30 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 	// cookie stays host-only and the console asks for one sign-in instead.
 	handoff := false
 	serveDomain := ""
-	if cfg.cfg.CookieDomain != "" && hostCoveredByDomain(normalizeRouterHost(req.Host), cfg.cfg.CookieDomain) {
+	consoleURL := serverURL
+	if cfg.cfg.ConsoleURL != "" {
+		consoleURL = cfg.cfg.ConsoleURL + tenantConsolePrefix(orgID)
+		// 同源但不同租户使用不同名字和 Path，入口站的 owner Cookie 不能替代租户会话。
+		handoff = true
+		writer := &tenantConsoleWriter{ResponseWriter: w, orgID: orgID, secure: strings.HasPrefix(cfg.cfg.ConsoleURL, "https://")}
+		srv.setSessionCookie(writer, token, session.ExpiresAt)
+		writer.prepare()
+	} else if cfg.cfg.CookieDomain != "" && hostCoveredByDomain(normalizeRouterHost(req.Host), cfg.cfg.CookieDomain) {
 		handoff = true
 		serveDomain = cfg.cfg.CookieDomain
 	}
-	srv.setSessionCookieFor(w, token, session.ExpiresAt, serveDomain)
+	if cfg.cfg.ConsoleURL == "" {
+		srv.setSessionCookieFor(w, token, session.ExpiresAt, serveDomain)
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"authenticated": true,
 		"organization": map[string]any{
-			"id":     orgID,
-			"name":   display,
-			"domain": domain,
-			"url":    serverURL,
+			"id":          orgID,
+			"name":        display,
+			"domain":      domain,
+			"url":         serverURL,
+			"console_url": consoleURL,
 		},
 		"handoff": handoff,
 		"user": map[string]any{

@@ -154,6 +154,11 @@ go run ./cmd/xunarad \
 
 ## 账户自助管理
 
+主域名下的独立租户网页入口、多 IPv4 地址池与 Linux 接入前只读冲突保护见
+[注册与网络安全手册](docs/shared-console-and-address-pools.md)及
+[ADR-0041](docs/adr/ADR-0041-shared-console-and-multiple-ipv4-pools.md)。
+共享网页路径不改变官方客户端的控制面主机；Quad100 不支持由服务端自动换 IP。
+
 平台后台新增“添加用户”及独立“管理员安全”：支持多把 Passkey 绑定、登录、解绑，
 恢复令牌换取可撤销的短期会话；租户身份不能取得平台权限。配置、备份与范围见
 [平台管理员手册](docs/platform-administrator.md)。新增成员只加入明确选择的已有网络。
