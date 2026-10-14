@@ -301,6 +301,8 @@ func TestLoadOrgConfigReadsSelfService(t *testing.T) {
 			"scheme": "https",
 			"port": "9090",
 			"cookie_domain": "xunara.test",
+			"console_url": "https://app.xunara.test",
+			"native_gateway": true,
 			"plan": "pro"
 		}
 	}`)
@@ -319,12 +321,14 @@ func TestLoadOrgConfigReadsSelfService(t *testing.T) {
 		t.Fatal("self_service was not parsed")
 	}
 	want := control.SelfServiceConfig{
-		Site:         "portal",
-		DomainSuffix: "xunara.test",
-		Scheme:       "https",
-		Port:         "9090",
-		CookieDomain: "xunara.test",
-		Plan:         "pro",
+		Site:          "portal",
+		DomainSuffix:  "xunara.test",
+		Scheme:        "https",
+		Port:          "9090",
+		CookieDomain:  "xunara.test",
+		ConsoleURL:    "https://app.xunara.test",
+		NativeGateway: true,
+		Plan:          "pro",
 	}
 	if *selfService != want {
 		t.Errorf("self_service = %+v, want %+v", *selfService, want)

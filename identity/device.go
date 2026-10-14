@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -93,9 +94,12 @@ const DefaultDeviceAuthorizationTTL = 15 * time.Minute
 type DeviceAuthorizationStore interface {
 	// CreateDeviceAuthorization records a device awaiting approval.
 	CreateDeviceAuthorization(opts NewDeviceAuthorizationOptions) (DeviceAuthorization, error)
+	CreatePendingDeviceAuthorization(ctx context.Context, opts NewDeviceAuthorizationOptions) (DeviceAuthorization, error)
 
 	// GetDeviceAuthorization returns an authorization by ID.
 	GetDeviceAuthorization(id string) (DeviceAuthorization, bool)
+	LookupDeviceAuthorization(ctx context.Context, id string) (DeviceAuthorization, error)
+	LookupDeviceAuthorizationByKeys(ctx context.Context, machineKey, nodeKey string) (DeviceAuthorization, error)
 
 	// GetDeviceAuthorizationByNodeKey returns the most recent authorization
 	// for a node key, so an instance that did not create the registration can

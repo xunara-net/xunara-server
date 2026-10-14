@@ -22,6 +22,9 @@ func normalizeConsoleBase(raw string) (string, error) {
 func tenantConsolePrefix(orgID string) string { return "/t/" + orgID }
 
 func (server *Server) consoleURL() string {
+	if endpoints := server.nativeEndpoints.Load(); endpoints != nil && endpoints.ConsoleURL != "" {
+		return endpoints.ConsoleURL
+	}
 	if server.cfg.ConsoleURL != "" {
 		return strings.TrimRight(server.cfg.ConsoleURL, "/")
 	}
@@ -75,7 +78,7 @@ func (writer *tenantConsoleWriter) Write(body []byte) (int, error) {
 }
 
 // handleTenantConsole 的组织 ID 仅决定路由。每次操作仍需本租户自己的会话和 CSRF。
-// TS2021/Noise、全局后台及中继不能经此入口访问，官方协议继续按 Host 隔离。
+// TS2021/Noise、全局后台及中继不能经此路径访问；共享原生入口有独立精确键路由。
 func (router *Router) handleTenantConsole(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	config := router.selfService.Load()
@@ -96,7 +99,8 @@ func (router *Router) handleTenantConsole(writer http.ResponseWriter, request *h
 	}
 	prefix := tenantConsolePrefix(orgID)
 	path := strings.TrimPrefix(request.URL.Path, prefix)
-	if !strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/api/v2/") && !strings.HasPrefix(path, "/oidc/callback/") && !strings.HasPrefix(path, "/oauth2/callback/") {
+	devicePage := router.nativeGateway != nil && (strings.HasPrefix(path, "/register/") || strings.HasPrefix(path, "/ssh/check/"))
+	if !devicePage && !strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/api/v2/") && !strings.HasPrefix(path, "/oidc/callback/") && !strings.HasPrefix(path, "/oauth2/callback/") {
 		http.NotFound(writer, request)
 		return
 	}

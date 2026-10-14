@@ -387,12 +387,8 @@ func (s *Server) handleConsoleDevice(approve bool) http.HandlerFunc {
 		id := chi.URLParam(r, "id")
 		actor := fmt.Sprintf("user:%d", session.UserID)
 
-		var err error
-		if approve {
-			_, err = s.approveDevice(id, session.UserID, actor)
-		} else {
-			_, err = s.denyDevice(id, session.UserID, actor)
-		}
+		writer := networkconfig.Writer{UserID: session.UserID, SessionID: session.ID}
+		_, err := s.decideDevice(r.Context(), id, session.UserID, actor, &writer, approve)
 		if err != nil {
 			var he HTTPError
 			if errors.As(err, &he) {

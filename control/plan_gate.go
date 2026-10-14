@@ -1,14 +1,12 @@
 package control
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/netip"
 	"time"
 
 	"github.com/xunara-net/xunara-server/plan"
-	"github.com/xunara-net/xunara-server/state"
 )
 
 // Commercial quotas (PROJECT_SPEC section 54).
@@ -105,17 +103,6 @@ func (s *Server) assertDeviceQuota() error {
 		return nil
 	}
 	return planGateError(MsgDeviceLimitReached)
-}
-
-// 最终审批不能沿用早先的计数；Token 注册与另一实例审批可能已占用最后名额。
-func (s *Server) createApprovedNode(node *state.Node) error {
-	creator, ok := s.store.(interface {
-		CreateNodeLimited(context.Context, *state.Node, int) error
-	})
-	if !ok {
-		return errors.New("device approval requires a durable quota writer")
-	}
-	return creator.CreateNodeLimited(context.Background(), node, s.Plan().MaxDevices)
 }
 
 // assertAuthKeyQuota reports whether the tenant may mint another pre-auth key.

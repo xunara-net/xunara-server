@@ -21,10 +21,11 @@ const policyWatchInterval = 2 * time.Second
 const legacyDefaultPolicy = `{"acls":[{"action":"accept","src":["*"],"dst":["*:*"]}]}`
 
 type policyConfiguration struct {
-	Revision uint64
-	Source   string
-	Content  string
-	JSON     json.RawMessage
+	Revision   uint64
+	Source     string
+	Content    string
+	JSON       json.RawMessage
+	ControlURL string
 }
 
 func contentHash(content string) string {
@@ -33,7 +34,7 @@ func contentHash(content string) string {
 }
 
 func (server *Server) policyOptions() policy.Options {
-	return policy.Options{Domain: server.networkDomain(), LoginName: server.userLoginName, ServerURL: server.cfg.ServerURL}
+	return policy.Options{Domain: server.networkDomain(), LoginName: server.userLoginName, ServerURL: server.clientLoginURL()}
 }
 
 func (server *Server) loadPolicy() error {
@@ -48,7 +49,7 @@ func (server *Server) loadPolicyLocked(ctx context.Context, force ...bool) error
 	if err != nil {
 		return err
 	}
-	configuration := &policyConfiguration{Source: "default", Content: legacyDefaultPolicy}
+	configuration := &policyConfiguration{Source: "default", Content: legacyDefaultPolicy, ControlURL: server.clientLoginURL()}
 	if !found && server.policyConfig.Load() != nil && server.policyConfig.Load().Source == "database" {
 		return networkconfig.ErrNotFound
 	}
@@ -65,7 +66,7 @@ func (server *Server) loadPolicyLocked(ctx context.Context, force ...bool) error
 		configuration.Content = string(raw)
 	}
 	forceFileReload := len(force) != 0 && force[0] && configuration.Source == "file"
-	if current := server.policyConfig.Load(); !forceFileReload && current != nil && configuration.Revision == current.Revision && configuration.Source == current.Source && configuration.Content == current.Content {
+	if current := server.policyConfig.Load(); !forceFileReload && current != nil && configuration.Revision == current.Revision && configuration.Source == current.Source && configuration.Content == current.Content && configuration.ControlURL == current.ControlURL {
 		return nil
 	}
 	var parsed *policy.Document

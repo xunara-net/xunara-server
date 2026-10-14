@@ -23,6 +23,7 @@ import (
 
 	"github.com/xunara-net/xunara-server/control/mapper"
 	"github.com/xunara-net/xunara-server/identity"
+	"github.com/xunara-net/xunara-server/networkconfig"
 	"github.com/xunara-net/xunara-server/state"
 )
 
@@ -84,6 +85,11 @@ func (ns *noiseServer) handleRegister(w http.ResponseWriter, req *http.Request) 
 
 // handleRegister is the transport-independent registration decision.
 func (s *Server) handleRegister(ctx context.Context, req tailcfg.RegisterRequest, machineKey key.MachinePublic) (*tailcfg.RegisterResponse, error) {
+	if scope := s.deviceScope.Load(); scope != nil {
+		if err := scope.Check(ctx, machineKey, req.NodeKey); err != nil {
+			return nil, NewHTTPError(http.StatusUnauthorized, "device network unavailable", nil)
+		}
+	}
 	// Tailnet lock: a registration that presents a node-key signature claims
 	// the node key is authorized by the tailnet's key authority. Verify that
 	// claim before the request can create or rotate a node, so an
@@ -274,7 +280,7 @@ func (s *Server) decideRegistration(ctx context.Context, req tailcfg.RegisterReq
 
 	// 5. Interactive login: create a pending registration and hand the client a
 	//    URL to visit.
-	return s.startInteractiveRegistration(req, machineKey)
+	return s.startInteractiveRegistration(ctx, req, machineKey)
 }
 
 // shortenNodeExpiry applies a client-requested key expiry to an existing node.
@@ -510,34 +516,34 @@ func decodeDeviceMetadata(raw string) deviceMetadata {
 
 // startInteractiveRegistration creates a pending registration and returns the
 // login URL the client should show to the user.
-func (s *Server) startInteractiveRegistration(req tailcfg.RegisterRequest, machineKey key.MachinePublic) (*tailcfg.RegisterResponse, error) {
-	id := newAuthID()
-	now := time.Now().UTC()
-
+func (s *Server) startInteractiveRegistration(ctx context.Context, req tailcfg.RegisterRequest, machineKey key.MachinePublic) (*tailcfg.RegisterResponse, error) {
 	// The durable half of the device flow: the approval page and node
 	// creation both work from this row, so an approval can be served by any
 	// instance.
-	if _, err := s.identity.CreateDeviceAuthorization(identity.NewDeviceAuthorizationOptions{
-		ID:              id,
+	authorization, err := s.identity.CreatePendingDeviceAuthorization(ctx, identity.NewDeviceAuthorizationOptions{
+		ID:              newAuthID(),
 		MachineKey:      machineKey.String(),
 		NodeKey:         req.NodeKey.String(),
 		RequestedAction: "register",
 		ClientMetadata:  encodeDeviceMetadata(req),
 		TTL:             registrationTTL,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("recording device authorization: %w", err)
 	}
 
 	pr := &pendingRegistration{
-		id:         id,
+		id:         authorization.ID,
 		machineKey: machineKey,
 		req:        req,
-		created:    now,
+		created:    authorization.CreatedAt,
 		done:       make(chan struct{}),
 	}
 
 	s.mu.Lock()
-	s.pending[pr.id] = pr
+	if existing := s.pending[pr.id]; existing == nil {
+		s.pending[pr.id] = pr
+	}
 	s.pendingByNode[req.NodeKey] = pr.id
 	s.mu.Unlock()
 
@@ -565,15 +571,21 @@ func (s *Server) waitForFollowup(ctx context.Context, req tailcfg.RegisterReques
 			return nil, ctx.Err()
 		}
 		if node, ok := s.store.GetNodeByNodeKey(req.NodeKey); ok {
+			if node.MachineKey != machineKey {
+				return nil, NewHTTPError(http.StatusUnauthorized, "machine key does not match node", nil)
+			}
 			return s.nodeToRegisterResponse(node), nil
 		}
 	}
 
 	if node, ok := s.store.GetNodeByNodeKey(req.NodeKey); ok {
+		if node.MachineKey != machineKey {
+			return nil, NewHTTPError(http.StatusUnauthorized, "machine key does not match node", nil)
+		}
 		return s.nodeToRegisterResponse(node), nil
 	}
 
-	if da, ok := s.identity.GetDeviceAuthorizationByNodeKey(req.NodeKey.String()); ok && da.MachineKey == machineKey.String() {
+	if da, err := s.identity.LookupDeviceAuthorizationByKeys(ctx, machineKey.String(), req.NodeKey.String()); err == nil {
 		switch {
 		case da.State == identity.DeviceDenied:
 			return nil, NewHTTPError(http.StatusForbidden, "registration denied", nil)
@@ -582,12 +594,14 @@ func (s *Server) waitForFollowup(ctx context.Context, req tailcfg.RegisterReques
 			// instance and will be visible in the store.
 			return &tailcfg.RegisterResponse{AuthURL: s.authURL(da.ID)}, nil
 		}
+	} else if !errors.Is(err, identity.ErrDeviceNotFound) {
+		return nil, err
 	}
 
 	if pr != nil {
 		s.dropPending(pr.id)
 	}
-	return s.startInteractiveRegistration(req, machineKey)
+	return s.startInteractiveRegistration(ctx, req, machineKey)
 }
 
 // ApproveRegistration authorizes a pending interactive registration as the
@@ -600,106 +614,74 @@ func (s *Server) ApproveRegistration(authID string) error {
 	return err
 }
 
-// approveDevice authorizes a device and creates its node.
-//
-// It is idempotent: a retried approval returns success. The node is created
-// before the authorization is marked approved, so a crash in between leaves
-// the device pending rather than half-approved.
+// approveDevice 仅供私有内嵌管理调用；HTTP 请求传递实际会话或服务凭据。
 func (s *Server) approveDevice(authID string, userID tailcfg.UserID, actor string) (identity.DeviceAuthorization, error) {
-	s.approveMu.Lock()
-	defer s.approveMu.Unlock()
-
-	da, ok := s.identity.GetDeviceAuthorization(authID)
-	if !ok {
-		return identity.DeviceAuthorization{}, NewHTTPError(http.StatusNotFound, "unknown registration", nil)
-	}
-	now := time.Now().UTC()
-	if da.Expired(now) {
-		return da, NewHTTPError(http.StatusGone, "registration expired", nil)
-	}
-	switch da.State {
-	case identity.DeviceApproved:
-		return da, nil
-	case identity.DeviceDenied:
-		return da, NewHTTPError(http.StatusConflict, "registration was denied", nil)
-	}
-
-	node, err := s.nodeForAuthorization(da, userID, now)
-	if err != nil {
-		return da, err
-	}
-
-	// A machine key that already has a node for this user (or a tagged node)
-	// is re-authorizing: rotate the node in place so one machine stays one
-	// node, keeping its ID, addresses and history (see rotation.go). The
-	// approval decides the tag set, matching upstream's re-auth semantics.
-	existing, rotate, err := s.rotationCandidate(node.MachineKey, userID, false)
-	if err != nil {
-		return da, err
-	}
-	if rotate {
-		if _, err := s.rotateNodeKey(existing, node, true, actor); err != nil {
-			return da, err
-		}
-	} else {
-		if err := s.createApprovedNode(&node); err != nil {
-			if errors.Is(err, state.ErrDeviceLimit) {
-				return da, planGateError(MsgDeviceLimitReached)
-			}
-			if !errors.Is(err, state.ErrNodeKeyExists) {
-				return da, fmt.Errorf("creating node: %w", err)
-			}
-		}
-	}
-
-	approved, err := s.identity.ApproveDeviceAuthorization(authID, userID)
-	if err != nil {
-		return da, fmt.Errorf("approving device: %w", err)
-	}
-
-	stored, storedOK := s.store.GetNodeByNodeKey(node.NodeKey)
-	if storedOK {
-		s.audit(actor, identity.AuditNodeApproved, nodeTarget(stored),
-			"approved device registration "+authID)
-	}
-
-	s.wakePending(authID)
-
-	if storedOK {
-		// A new node changes every other node's netmap.
-		s.notifyNodePeers(stored)
-	}
-	return approved, nil
+	return s.decideDevice(context.Background(), authID, userID, actor, nil, true)
 }
 
 // denyDevice refuses a pending registration.
 func (s *Server) denyDevice(authID string, userID tailcfg.UserID, actor string) (identity.DeviceAuthorization, error) {
-	s.approveMu.Lock()
-	defer s.approveMu.Unlock()
+	return s.decideDevice(context.Background(), authID, userID, actor, nil, false)
+}
 
-	da, ok := s.identity.GetDeviceAuthorization(authID)
-	if !ok {
-		return identity.DeviceAuthorization{}, NewHTTPError(http.StatusNotFound, "unknown registration", nil)
-	}
-	now := time.Now().UTC()
-	if da.Expired(now) {
-		return da, NewHTTPError(http.StatusGone, "registration expired", nil)
-	}
-	if da.State == identity.DeviceDenied {
-		return da, nil
-	}
-	if da.State == identity.DeviceApproved {
-		return da, NewHTTPError(http.StatusConflict, "registration was already approved", nil)
-	}
-
-	denied, err := s.identity.DenyDeviceAuthorization(authID, userID)
+func (server *Server) decideDevice(ctx context.Context, authID string, userID tailcfg.UserID, actor string, writer *networkconfig.Writer, approve bool) (identity.DeviceAuthorization, error) {
+	authorization, err := server.identity.LookupDeviceAuthorization(ctx, authID)
 	if err != nil {
-		return da, fmt.Errorf("denying device: %w", err)
+		return authorization, deviceDecisionError(err)
 	}
-	s.audit(actor, identity.AuditDeviceDenied, "device:"+authID, "denied the device registration")
+	decision := networkconfig.DeviceDecision{UserID: userID, Actor: actor, Writer: writer, Approve: approve, DeviceLimit: server.Plan().MaxDevices}
+	if scope := server.deviceScope.Load(); scope != nil && approve {
+		var machine key.MachinePublic
+		var nodeKey key.NodePublic
+		if machine.UnmarshalText([]byte(authorization.MachineKey)) != nil || nodeKey.UnmarshalText([]byte(authorization.NodeKey)) != nil {
+			return authorization, NewHTTPError(http.StatusConflict, "invalid device identity", nil)
+		}
+		if err := scope.Check(ctx, machine, nodeKey); err != nil {
+			return authorization, NewHTTPError(http.StatusConflict, "DEVICE_NETWORK_REQUIRED: restart device sign-in and log in to your account", nil)
+		}
+	}
+	if approve && authorization.Pending() && !authorization.Expired(time.Now()) {
+		server.networkMu.Lock()
+		err := server.loadPolicyLocked(ctx)
+		if err == nil {
+			decision.Node, err = server.nodeForAuthorization(authorization, userID, time.Now().UTC())
+			if configuration := server.policyConfig.Load(); configuration != nil {
+				decision.PolicyRevision = configuration.Revision
+			}
+		}
+		server.networkMu.Unlock()
+		if err != nil {
+			return authorization, deviceDecisionError(err)
+		}
+	}
+	decided, node, err := server.networkConfig.DecideDevice(ctx, authorization, decision)
+	if err != nil {
+		return authorization, deviceDecisionError(err)
+	}
+	server.wakePending(authID)
+	if node.ID != 0 {
+		server.notifyNodePeers(node)
+	}
+	return decided, nil
+}
 
-	s.wakePending(authID)
-	return denied, nil
+func deviceDecisionError(err error) error {
+	switch {
+	case errors.Is(err, identity.ErrDeviceNotFound):
+		return NewHTTPError(http.StatusNotFound, "unknown registration", err)
+	case errors.Is(err, identity.ErrDeviceExpired):
+		return NewHTTPError(http.StatusGone, "registration expired", err)
+	case errors.Is(err, identity.ErrDeviceDecided):
+		return NewHTTPError(http.StatusConflict, "registration was already decided", err)
+	case errors.Is(err, identity.ErrNetworkWriterForbidden), errors.Is(err, identity.ErrSessionRevoked):
+		return NewHTTPError(http.StatusForbidden, "device approval permission is no longer valid", err)
+	case errors.Is(err, state.ErrDeviceLimit):
+		return planGateError(MsgDeviceLimitReached)
+	case errors.Is(err, state.ErrDeviceChanged), errors.Is(err, state.ErrAmbiguousMachine), errors.Is(err, networkconfig.ErrConflict):
+		return NewHTTPError(http.StatusConflict, "device identity or policy changed; refresh before approving", err)
+	default:
+		return err
+	}
 }
 
 // nodeForAuthorization builds the node an approved device authorization
@@ -771,7 +753,7 @@ func (s *Server) dropPending(id string) {
 }
 
 func (s *Server) authURL(authID string) string {
-	return fmt.Sprintf("%s/register/%s", s.cfg.ServerURL, authID)
+	return fmt.Sprintf("%s/register/%s", s.consoleURL(), authID)
 }
 
 // handleRegisterPage serves the device approval page a user opens from the
@@ -813,13 +795,16 @@ func (s *Server) handleRegisterPage(w http.ResponseWriter, req *http.Request) {
 	}
 
 	s.renderApprovePage(w, req, map[string]any{
-		"AuthID":    authID,
-		"CanWrite":  s.userCanWrite(session.UserID),
-		"Hostname":  hostname,
-		"OS":        os,
-		"Created":   s.consoleTime(da.CreatedAt),
-		"LoginName": profile.LoginName,
-		"CSRF":      csrfTokenFor(s.sessionToken(req)),
+		"AuthID":      authID,
+		"CanWrite":    s.userCanWrite(session.UserID),
+		"Hostname":    hostname,
+		"OS":          os,
+		"Created":     s.consoleTime(da.CreatedAt),
+		"LoginName":   profile.LoginName,
+		"CSRF":        csrfTokenFor(s.sessionToken(req)),
+		"ApprovalURL": s.consoleURL() + "/register/" + authID + "/approve",
+		"DenialURL":   s.consoleURL() + "/register/" + authID + "/deny",
+		"NetworkID":   s.Organization().ID,
 	})
 }
 
@@ -842,7 +827,8 @@ func (s *Server) handleApproveDevice(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if _, err := s.approveDevice(authID, session.UserID, fmt.Sprintf("user:%d", session.UserID)); err != nil {
+	writer := networkconfig.Writer{UserID: session.UserID, SessionID: session.ID}
+	if _, err := s.decideDevice(req.Context(), authID, session.UserID, writer.Actor(), &writer, true); err != nil {
 		s.renderDeviceError(w, req, err, "Approval failed")
 		return
 	}
@@ -868,7 +854,8 @@ func (s *Server) handleDenyDevice(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if _, err := s.denyDevice(authID, session.UserID, fmt.Sprintf("user:%d", session.UserID)); err != nil {
+	writer := networkconfig.Writer{UserID: session.UserID, SessionID: session.ID}
+	if _, err := s.decideDevice(req.Context(), authID, session.UserID, writer.Actor(), &writer, false); err != nil {
 		s.renderDeviceError(w, req, err, "Denial failed")
 		return
 	}

@@ -32,13 +32,14 @@ type orgConfigFile struct {
 // It lives in the config file rather than on the command line because it
 // describes the tenant model, which only a multi-tenant deployment has.
 type orgSelfServiceConfig struct {
-	Site         string `json:"site"`
-	DomainSuffix string `json:"domain_suffix"`
-	Scheme       string `json:"scheme"`
-	Port         string `json:"port"`
-	CookieDomain string `json:"cookie_domain"`
-	Plan         string `json:"plan"`
-	ConsoleURL   string `json:"console_url"`
+	Site          string `json:"site"`
+	DomainSuffix  string `json:"domain_suffix"`
+	Scheme        string `json:"scheme"`
+	Port          string `json:"port"`
+	CookieDomain  string `json:"cookie_domain"`
+	Plan          string `json:"plan"`
+	ConsoleURL    string `json:"console_url"`
+	NativeGateway bool   `json:"native_gateway"`
 }
 
 // orgConfig describes one organization. Secrets are never read from the file:
@@ -143,13 +144,14 @@ func loadOrgConfig(path string, logger *slog.Logger, trustedProxy bool) ([]contr
 	var selfService *control.SelfServiceConfig
 	if doc.SelfService != nil {
 		selfService = &control.SelfServiceConfig{
-			Site:         doc.SelfService.Site,
-			DomainSuffix: doc.SelfService.DomainSuffix,
-			Scheme:       doc.SelfService.Scheme,
-			Port:         doc.SelfService.Port,
-			CookieDomain: doc.SelfService.CookieDomain,
-			Plan:         doc.SelfService.Plan,
-			ConsoleURL:   doc.SelfService.ConsoleURL,
+			Site:          doc.SelfService.Site,
+			DomainSuffix:  doc.SelfService.DomainSuffix,
+			Scheme:        doc.SelfService.Scheme,
+			Port:          doc.SelfService.Port,
+			CookieDomain:  doc.SelfService.CookieDomain,
+			Plan:          doc.SelfService.Plan,
+			ConsoleURL:    doc.SelfService.ConsoleURL,
+			NativeGateway: doc.SelfService.NativeGateway,
 		}
 	}
 

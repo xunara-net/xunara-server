@@ -29,8 +29,7 @@ const wardenPolicy = `{
   "ssh": [{"action": "check", "src": ["autogroup:member"], "dst": ["tag:server"],
            "users": ["root"], "acceptEnv": ["LC_*"], "checkPeriod": "12h"}],
   "nodeAttrs": [{"target": ["tag:server"], "attr": ["https"]}],
-  "tests": [{"src": "tag:server", "accept": ["tag:server:22"], "deny": ["tag:server:80"]}],
-  "autoApprovers": {"routes": {"10.0.0.0/8": ["tag:server"]}}
+  "tests": [{"src": "tag:server", "accept": ["tag:server:22"], "deny": ["tag:server:80"]}]
 }`
 
 // decodePolicyView reads one GET /api/v2/policy response.
@@ -115,7 +114,7 @@ func TestAPIV2PolicyStatus(t *testing.T) {
 	if view.RuleCount != 2 {
 		t.Errorf("ruleCount = %d, want 2", view.RuleCount)
 	}
-	if want := []string{"autoApprovers"}; !reflect.DeepEqual(view.Unsupported, want) {
+	if want := []string{}; !reflect.DeepEqual(view.Unsupported, want) {
 		t.Errorf("unsupported = %v, want %v", view.Unsupported, want)
 	}
 
@@ -264,7 +263,7 @@ func TestGetPolicyStatusGRPC(t *testing.T) {
 		len(out.GetTests().GetResults()) != 1 || !out.GetTests().GetResults()[0].GetPass() {
 		t.Errorf("tests = %+v", out.GetTests())
 	}
-	if !reflect.DeepEqual(out.GetUnsupported(), []string{"autoApprovers"}) {
+	if len(out.GetUnsupported()) != 0 {
 		t.Errorf("unsupported = %v", out.GetUnsupported())
 	}
 }

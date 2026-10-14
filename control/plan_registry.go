@@ -246,22 +246,7 @@ func (g *PlanRegistry) catalog() *plan.Catalog {
 }
 
 func (g *PlanRegistry) migrate(ctx context.Context) error {
-	var version int
-	if err := g.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("control: reading plan registry schema version: %w", err)
-	}
-	if version > len(planRegistryMigrations) {
-		return fmt.Errorf("control: plan registry schema version %d is newer than this build understands", version)
-	}
-	for i := version; i < len(planRegistryMigrations); i++ {
-		if _, err := g.db.ExecContext(ctx, planRegistryMigrations[i]); err != nil {
-			return fmt.Errorf("control: applying plan registry migration %d: %w", i+1, err)
-		}
-		if _, err := g.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
-			return fmt.Errorf("control: recording plan registry migration %d: %w", i+1, err)
-		}
-	}
-	return nil
+	return migrateRegistry(ctx, g.db, planRegistryMigrations, "plan registry")
 }
 
 // Close closes the registry database.

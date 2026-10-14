@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,51 @@ import (
 
 const deviceAuthorizationColumns = "id, machine_key, node_key, user_id, approved_by, state, requested_action, " +
 	"client_metadata, created_at, expires_at, approved_at, denied_at"
+
+// 精确机器/节点对复用尚未过期的待审批记录；刷新和多实例不会生成孤立申请。
+func (store *SQLiteStore) CreatePendingDeviceAuthorization(ctx context.Context, opts NewDeviceAuthorizationOptions) (DeviceAuthorization, error) {
+	if opts.MachineKey == "" || opts.NodeKey == "" {
+		return DeviceAuthorization{}, errors.New("device authorization needs both keys")
+	}
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DeviceAuthorization{}, err
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, "UPDATE device_authorizations SET state = state WHERE machine_key = ? AND node_key = ? AND state = ?",
+		opts.MachineKey, opts.NodeKey, string(DevicePending)); err != nil {
+		return DeviceAuthorization{}, err
+	}
+	now := time.Now().UTC()
+	current, err := scanDeviceAuthorization(transaction.QueryRowContext(ctx, "SELECT "+deviceAuthorizationColumns+
+		" FROM device_authorizations WHERE machine_key = ? AND node_key = ? AND state = ? AND expires_at > ? ORDER BY created_at DESC, id DESC LIMIT 1",
+		opts.MachineKey, opts.NodeKey, string(DevicePending), now.UnixNano()))
+	if err == nil {
+		return current, transaction.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return DeviceAuthorization{}, err
+	}
+	if opts.ID == "" {
+		opts.ID, err = newSecret()
+		if err != nil {
+			return DeviceAuthorization{}, err
+		}
+	}
+	if opts.TTL <= 0 {
+		opts.TTL = DefaultDeviceAuthorizationTTL
+	}
+	authorization := DeviceAuthorization{ID: opts.ID, MachineKey: opts.MachineKey, NodeKey: opts.NodeKey,
+		State: DevicePending, RequestedAction: opts.RequestedAction, ClientMetadata: opts.ClientMetadata,
+		CreatedAt: now, ExpiresAt: now.Add(opts.TTL)}
+	if _, err := transaction.ExecContext(ctx, `INSERT INTO device_authorizations (`+deviceAuthorizationColumns+`)
+		VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, NULL, NULL)`, authorization.ID, authorization.MachineKey,
+		authorization.NodeKey, string(authorization.State), authorization.RequestedAction, authorization.ClientMetadata,
+		authorization.CreatedAt.UnixNano(), authorization.ExpiresAt.UnixNano()); err != nil {
+		return DeviceAuthorization{}, err
+	}
+	return authorization, transaction.Commit()
+}
 
 // CreateDeviceAuthorization implements [DeviceAuthorizationStore].
 func (s *SQLiteStore) CreateDeviceAuthorization(opts NewDeviceAuthorizationOptions) (DeviceAuthorization, error) {
@@ -56,13 +102,63 @@ func (s *SQLiteStore) CreateDeviceAuthorization(opts NewDeviceAuthorizationOptio
 
 // GetDeviceAuthorization implements [DeviceAuthorizationStore].
 func (s *SQLiteStore) GetDeviceAuthorization(id string) (DeviceAuthorization, bool) {
-	row := s.db.QueryRowContext(context.Background(),
-		"SELECT "+deviceAuthorizationColumns+" FROM device_authorizations WHERE id = ?", id)
-	da, err := scanDeviceAuthorization(row)
-	if err != nil {
-		return DeviceAuthorization{}, false
+	authorization, err := s.LookupDeviceAuthorization(context.Background(), id)
+	return authorization, err == nil
+}
+
+func (store *SQLiteStore) LookupDeviceAuthorization(ctx context.Context, id string) (DeviceAuthorization, error) {
+	return DeviceAuthorizationTx(ctx, store.db, id)
+}
+
+func (store *SQLiteStore) LookupDeviceAuthorizationByKeys(ctx context.Context, machineKey, nodeKey string) (DeviceAuthorization, error) {
+	authorization, err := scanDeviceAuthorization(store.db.QueryRowContext(ctx, "SELECT "+deviceAuthorizationColumns+
+		" FROM device_authorizations WHERE machine_key = ? AND node_key = ? ORDER BY created_at DESC, id DESC LIMIT 1", machineKey, nodeKey))
+	if errors.Is(err, sql.ErrNoRows) {
+		return DeviceAuthorization{}, ErrDeviceNotFound
 	}
-	return da, true
+	return authorization, err
+}
+
+// 审批事务读取同一行真实状态，不能把查询故障当成不存在。
+func DeviceAuthorizationTx(ctx context.Context, query interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, id string) (DeviceAuthorization, error) {
+	authorization, err := scanDeviceAuthorization(query.QueryRowContext(ctx,
+		"SELECT "+deviceAuthorizationColumns+" FROM device_authorizations WHERE id = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return DeviceAuthorization{}, ErrDeviceNotFound
+	}
+	return authorization, err
+}
+
+func DecideDeviceAuthorizationTx(ctx context.Context, transaction *sql.Tx, observed DeviceAuthorization, userID tailcfg.UserID, approve bool, now time.Time) (DeviceAuthorization, error) {
+	state := DeviceDenied
+	if approve {
+		state = DeviceApproved
+	}
+	var decisionUser any
+	if approve {
+		decisionUser = int64(userID)
+	}
+	result, err := transaction.ExecContext(ctx, `UPDATE device_authorizations SET state = ?, user_id = ?, approved_by = ?,
+		approved_at = ?, denied_at = ? WHERE id = ? AND machine_key = ? AND node_key = ? AND state = ? AND expires_at > ?`,
+		string(state), decisionUser, decisionUser, nullableDeviceTime(now, approve), nullableDeviceTime(now, !approve),
+		observed.ID, observed.MachineKey, observed.NodeKey, string(DevicePending), now.UnixNano())
+	if err != nil {
+		return DeviceAuthorization{}, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count != 1 {
+		return DeviceAuthorization{}, errors.New("device authorization decision did not persist")
+	}
+	return DeviceAuthorizationTx(ctx, transaction, observed.ID)
+}
+
+func nullableDeviceTime(now time.Time, present bool) any {
+	if present {
+		return now.UnixNano()
+	}
+	return nil
 }
 
 // GetDeviceAuthorizationByNodeKey implements [DeviceAuthorizationStore].

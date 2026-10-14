@@ -109,7 +109,8 @@ type Router struct {
 
 	// selfService is the deployment's sign-up desk, or nil when it has none.
 	// It is written once, before the router serves, and read per request.
-	selfService atomic.Pointer[selfService]
+	selfService   atomic.Pointer[selfService]
+	nativeGateway *nativeGateway
 
 	// platformTokenHash is the SHA-256 of the platform admin token; hashing
 	// equalizes lengths so the constant-time comparison does not leak the
@@ -199,6 +200,11 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 		if err := r.enableSelfServiceLocked(); err != nil {
 			return nil, err
 		}
+		if cfg.SelfService.NativeGateway {
+			if err := r.enableNativeGatewayLocked(); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if cfg.PlatformAuth != nil {
 		config := *cfg.PlatformAuth
@@ -286,6 +292,11 @@ func (r *Router) register(site OrgSite, managed bool) error {
 		return fmt.Errorf("control: managed organization %q has no domains", site.ID)
 	}
 
+	if r.nativeGateway != nil {
+		if err := r.nativeGateway.attach(org); err != nil {
+			return err
+		}
+	}
 	r.orgs = append(r.orgs, org)
 	return nil
 }
@@ -505,8 +516,14 @@ func (r *Router) DeleteManagedOrg(ctx context.Context, id string) (string, error
 	r.removeOrgLocked(org)
 	if err := org.site.Server.Close(); err != nil {
 		r.log.Warn("closing a deleted organization", "organization", id, "err", err)
+		return archived, err
 	}
-	if err := registry.Delete(ctx, id); err != nil {
+	if r.cfg.Plans != nil {
+		if err := r.cfg.Plans.Delete(ctx, id); err != nil {
+			return archived, err
+		}
+	}
+	if err := registry.deleteArchived(ctx, id); err != nil {
 		return archived, err
 	}
 	return archived, nil
@@ -693,7 +710,12 @@ func (r *Router) Handler() http.Handler {
 	// that organization and falls through to its handler.
 	if r.selfService.Load() != nil {
 		mux.Post(selfServiceSignupPath, r.handleSelfServiceSignup)
+		mux.Post(selfServiceLoginPath, r.handleSelfServiceLogin)
 		mux.HandleFunc("/t/{orgID}/*", r.handleTenantConsole)
+	}
+	if r.nativeGateway != nil {
+		mux.Get("/device/{flowID}", r.nativeGateway.handleFlow)
+		mux.Post("/device/{flowID}/login", r.nativeGateway.handleLogin)
 	}
 
 	mux.NotFound(func(w http.ResponseWriter, req *http.Request) {

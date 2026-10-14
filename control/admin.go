@@ -339,9 +339,6 @@ func (r *Router) handleAdminDeleteTenant(w http.ResponseWriter, req *http.Reques
 		r.redirectNotice(w, req, "/admin/tenants", adminErrorText(err))
 		return
 	}
-	if err := r.cfg.Plans.Delete(req.Context(), orgID); err != nil {
-		r.log.Warn("deleting the plan assignment of a removed tenant", "organization", orgID, "err", err)
-	}
 	notice := "Tenant " + orgID + " deleted."
 	if archived != "" {
 		notice += " Its state was archived at " + archived + "."

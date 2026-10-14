@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"tailscale.com/tailcfg"
+
+	"github.com/xunara-net/xunara-server/state"
 )
 
 // This file compiles the document's "grants" section (ACL v2) into the same
@@ -299,7 +301,26 @@ func (r *resolution) sourcePrefixes(sels []selector) []netip.Prefix {
 // tailnet ranges because CapGrant.Dsts cannot hold the wire "*" form.
 func (r *resolution) hostPrefixes(sel selector) []netip.Prefix {
 	if sel.kind == selWildcard {
-		return append([]netip.Prefix(nil), tailnetPrefixes...)
+		prefixes := append([]netip.Prefix(nil), tailnetPrefixes...)
+		// 标准范围维持兼容；非标准地址只覆盖实际节点，不扩大到整个局域网。
+		for _, node := range append(append([]state.Node(nil), r.nodes...), r.self) {
+			for _, address := range []netip.Addr{node.IPv4, node.IPv6} {
+				if !address.IsValid() || address.IsUnspecified() {
+					continue
+				}
+				covered := false
+				for _, prefix := range prefixes {
+					if prefix.Contains(address) {
+						covered = true
+						break
+					}
+				}
+				if !covered {
+					prefixes = append(prefixes, netip.PrefixFrom(address, address.BitLen()))
+				}
+			}
+		}
+		return prefixes
 	}
 
 	var out []netip.Prefix

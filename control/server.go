@@ -229,6 +229,10 @@ type Server struct {
 	// (selfservice.go): the console offers "create your own tailnet" only
 	// where that is what signing up does.
 	selfService atomic.Pointer[SelfServiceInfo]
+	// 平台适配只提供范围回调；Core 不读取平台注册表或浏览器的租户选择。
+	noiseDispatch   atomic.Pointer[noiseDispatch]
+	deviceScope     atomic.Pointer[deviceScopeCheck]
+	nativeEndpoints atomic.Pointer[nativeEndpoints]
 
 	// planSource reports the tenant's commercial plan, or nil when the
 	// deployment sells none. It is a function rather than a value because a
@@ -259,10 +263,6 @@ type Server struct {
 	authenticationMu sync.Mutex
 	// trustedProxy reads the client address from X-Forwarded-For (Config).
 	trustedProxy bool
-
-	// approveMu serialises device approvals so an approval is applied exactly
-	// once even under concurrent requests.
-	approveMu sync.Mutex
 
 	// resolvers and dnsRoutes are the parsed forms of cfg.Nameservers and
 	// cfg.DNSRoutes; parsing happens once, at construction, so a bad

@@ -95,6 +95,9 @@ func NewEngine(doc *Document, opts Options) (*Engine, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("policy: nil document")
 	}
+	if len(doc.Unsupported) != 0 {
+		return nil, fmt.Errorf("policy: unsupported fields: %s", strings.Join(doc.Unsupported, ", "))
+	}
 	if opts.LoginName == nil {
 		opts.LoginName = func(id tailcfg.UserID) string {
 			return state.DefaultUserProfile(id).LoginName
@@ -122,9 +125,6 @@ func NewEngine(doc *Document, opts Options) (*Engine, error) {
 	}
 	if err := e.compileNodeAttrs(); err != nil {
 		return nil, err
-	}
-	for _, field := range doc.Unsupported {
-		e.warnf("policy field %q is not implemented by this build and is ignored", field)
 	}
 	return e, nil
 }

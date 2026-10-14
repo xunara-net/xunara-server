@@ -181,7 +181,7 @@ func (r *sshCheckRequest) hold(w http.ResponseWriter, localUser string) {
 		}
 	}
 
-	hold, err := url.Parse(strings.TrimRight(r.server.cfg.ServerURL, "/") + sshCheckActionURLPath)
+	hold, err := url.Parse(strings.TrimRight(r.server.clientLoginURL(), "/") + sshCheckActionURLPath)
 	if err != nil {
 		httpError(w, fmt.Errorf("control: building ssh check URL: %w", err))
 		return
@@ -190,7 +190,7 @@ func (r *sshCheckRequest) hold(w http.ResponseWriter, localUser string) {
 	q.Set("auth_id", sess.ID)
 	hold.RawQuery = q.Encode()
 
-	approveURL := strings.TrimRight(r.server.cfg.ServerURL, "/") + "/ssh/check/" + url.PathEscape(sess.ID)
+	approveURL := strings.TrimRight(r.server.consoleURL(), "/") + "/ssh/check/" + url.PathEscape(sess.ID)
 
 	writeSSHAction(w, tailcfg.SSHAction{
 		HoldAndDelegate: hold.String(),
@@ -293,6 +293,8 @@ func (s *Server) handleSSHCheckPage(w http.ResponseWriter, req *http.Request) {
 	dst, _ := s.store.GetNodeByID(state.NodeID(sess.DstNodeID))
 
 	s.renderSSHCheckPage(w, req, map[string]any{
+		"ApprovalURL": s.consoleURL() + "/ssh/check/" + authID + "/approve",
+		"DenialURL":   s.consoleURL() + "/ssh/check/" + authID + "/deny",
 		"AuthID":      authID,
 		"CanWrite":    s.userCanWrite(session.UserID),
 		"Source":      nodeLabel(src, sess.SrcNodeID),

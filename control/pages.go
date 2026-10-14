@@ -36,13 +36,13 @@ below; it does not make the device a human identity.</p>
 <dt>Signed in as</dt><dd>{{.LoginName}}</dd>
 </dl>
 {{if .CanWrite}}
-<form method="post" action="/register/{{.AuthID}}/approve">
+<form method="post" action="{{.ApprovalURL}}">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <div class="actions">
 <button class="approve" type="submit">Approve device</button>
 </div>
 </form>
-<form method="post" action="/register/{{.AuthID}}/deny">
+<form method="post" action="{{.DenialURL}}">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <div class="actions">
 <button class="deny" type="submit">Deny</button>
@@ -75,13 +75,13 @@ proceed; the decision is recorded in the audit log.</p>
 <dt>Deciding as</dt><dd>{{.LoginName}}</dd>
 </dl>
 {{if .CanWrite}}
-<form method="post" action="/ssh/check/{{.AuthID}}/approve">
+<form method="post" action="{{.ApprovalURL}}">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <div class="actions">
 <button class="approve" type="submit">Approve connection</button>
 </div>
 </form>
-<form method="post" action="/ssh/check/{{.AuthID}}/deny">
+<form method="post" action="{{.DenialURL}}">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <div class="actions">
 <button class="deny" type="submit">Deny</button>

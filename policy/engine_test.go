@@ -58,7 +58,6 @@ func TestParseHuJSON(t *testing.T) {
 		],
 		"ssh": [{"action": "accept", "src": ["*"], "dst": ["*"], "users": ["root"]}],
 		"grants": [{"src": ["*"], "dst": ["*"], "app": {"example.com/cap/x": []}}],
-		"autoApprovers": {"routes": {"10.0.0.0/8": ["tag:router"]}},
 	}`)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -72,8 +71,8 @@ func TestParseHuJSON(t *testing.T) {
 	if len(doc.Grants) != 1 || doc.Grants[0].Src[0] != "*" {
 		t.Errorf("Grants = %+v, want the parsed grant row", doc.Grants)
 	}
-	if len(doc.Unsupported) != 1 || doc.Unsupported[0] != "autoApprovers" {
-		t.Errorf("Unsupported = %v, want [autoApprovers]", doc.Unsupported)
+	if len(doc.Unsupported) != 0 {
+		t.Errorf("Unsupported = %v, want none", doc.Unsupported)
 	}
 }
 

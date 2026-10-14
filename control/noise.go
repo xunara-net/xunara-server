@@ -50,6 +50,7 @@ type noiseServer struct {
 	// challenge is a fresh per-connection challenge the client must answer by
 	// proving possession of its node key.
 	challenge key.ChallengePrivate
+	clientIP  string
 }
 
 // handleNoiseUpgrade implements /ts2021: it hijacks the HTTP connection,
@@ -69,6 +70,7 @@ func (s *Server) handleNoiseUpgrade(w http.ResponseWriter, req *http.Request) {
 	ns := &noiseServer{
 		server:    s,
 		challenge: key.NewChallenge(),
+		clientIP:  s.clientIP(req),
 	}
 
 	conn, err := controlhttpserver.AcceptHTTP(req.Context(), w, req, s.noiseKey, ns.earlyNoise)
@@ -82,8 +84,12 @@ func (s *Server) handleNoiseUpgrade(w http.ResponseWriter, req *http.Request) {
 	ns.conn = conn
 	ns.machineKey = conn.Peer()
 
+	handler := ns.router()
+	if dispatch := s.noiseDispatch.Load(); dispatch != nil {
+		handler = dispatch.Handler(ns)
+	}
 	base := &http.Server{
-		Handler:           ns.router(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

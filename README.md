@@ -79,14 +79,15 @@ go build ./cmd/xunara-agent     # 节点 Agent
 后，入口站开放自助开租户：访客注册即得到自己的 tailnet（ADR-0007）。
 
 公开开户用户名全平台大小写不敏感唯一：同名重试返回 409，不再生成随机后缀
-的副本网络。旧同名账户保持独立，不自动删除或合并。组织注册表仅追加 v2；
+的副本网络。旧同名账户保持独立，不自动删除或合并。删除独立租户后可以同名
+重注册，但不会继承旧会话、设备或密钥。组织注册表仅追加版本；
 版本、失败补偿和用户默认池选择见[操作说明](docs/signup-network-settings.md)。
 
 ```json
 {
   "organizations": [
     {"id": "portal", "name": "Xunara Cloud", "domains": ["app.example.com"],
-     "server_url": "https://app.example.com", "state_dir": "/var/lib/xunara/portal",
+     "server_url": "https://app.example.com:9090", "state_dir": "/var/lib/xunara/portal",
      "registration": "open"}
   ],
   "self_service": {
@@ -94,7 +95,8 @@ go build ./cmd/xunara-agent     # 节点 Agent
     "domain_suffix": "tailnet.example.com",
     "scheme": "https",
     "port": "9090",
-    "cookie_domain": "example.com",
+    "console_url": "https://app.example.com:9090",
+    "native_gateway": true,
     "plan": "free"
   }
 }
@@ -102,7 +104,16 @@ go build ./cmd/xunara-agent     # 节点 Agent
 
 `-org-config` 需配合 `-platform-state-dir`（托管组织
 与地址池记录）与 `-plans`（每个新租户都要落在某个套餐上）。`domain_suffix`
-下需要 `*.tailnet.example.com` 泛解析。
+用于保留独立 Host 模式。上述共享模式下普通用户直接用登录名和密码登录入口站，
+不需要网络标识；网页与官方客户端都使用入口站的正式证书，不需要泛解析或泛证书。
+未开启 `native_gateway` 时原生客户端仍须使用各租户自己的有效 DNS/TLS 主机。
+
+共享原生接入使用标准 `tailscale up --login-server https://app.example.com:9090`。
+未知设备在浏览器中登录自己的账户，再独立确认设备授权；入口管理员的旧 Cookie
+不会自动选择租户。已有设备仅补录原归属；误加入其他网络的设备应退出后重新登录，
+不能改库搬迁旧授权。组织注册表 v3 持久化精确键与目标控制面公钥代际，禁止旧
+设备在组织短名被复用后继承新账户。详见 [ADR-0045](docs/adr/ADR-0045-explicit-native-tenant-ingress.md)
+与 [ADR-0046](docs/adr/ADR-0046-deleted-account-registration.md)。
 
 入口站的旧本地注册端点不会再给访客创建公共网络成员；旧 `/signup` 跳转到
 控制台 `/register`，API 返回 `TENANT_SIGNUP_REQUIRED`。目标租户自己的邀请注册不变。

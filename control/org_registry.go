@@ -127,6 +127,30 @@ CREATE TABLE IF NOT EXISTS signup_login_claims (
 	created_at INTEGER NOT NULL
 );
 `,
+	// v3：原生入口的范围绑定不是授权；机器仍必须通过自己的租户审批。
+	`
+CREATE TABLE native_device_bindings (
+ machine_key TEXT NOT NULL,
+ node_key TEXT NOT NULL,
+ org_id TEXT NOT NULL,
+ noise_key TEXT NOT NULL,
+ created_at INTEGER NOT NULL,
+ PRIMARY KEY (machine_key, node_key)
+);
+CREATE INDEX native_device_bindings_machine ON native_device_bindings(machine_key);
+CREATE TABLE native_device_flows (
+ id TEXT PRIMARY KEY,
+ machine_key TEXT NOT NULL,
+ node_key TEXT NOT NULL,
+ registration TEXT NOT NULL,
+ org_id TEXT NOT NULL DEFAULT '',
+ noise_key TEXT NOT NULL DEFAULT '',
+ created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL,
+ UNIQUE (machine_key, node_key)
+);
+CREATE INDEX native_device_flows_expiry ON native_device_flows(expires_at);
+`,
 }
 
 // OpenOrgRegistry opens (creating if necessary) the registry and applies
@@ -169,22 +193,7 @@ func OpenOrgRegistry(ctx context.Context, cfg OrgRegistryConfig) (*OrgRegistry, 
 
 // migrate applies pending schema versions.
 func (g *OrgRegistry) migrate(ctx context.Context) error {
-	var version int
-	if err := g.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("control: reading registry schema version: %w", err)
-	}
-	if version > len(orgRegistryMigrations) {
-		return fmt.Errorf("control: registry schema version %d is newer than this build understands", version)
-	}
-	for i := version; i < len(orgRegistryMigrations); i++ {
-		if _, err := g.db.ExecContext(ctx, orgRegistryMigrations[i]); err != nil {
-			return fmt.Errorf("control: applying registry migration %d: %w", i+1, err)
-		}
-		if _, err := g.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
-			return fmt.Errorf("control: recording registry migration %d: %w", i+1, err)
-		}
-	}
-	return nil
+	return migrateRegistry(ctx, g.db, orgRegistryMigrations, "organization registry")
 }
 
 // Close closes the registry database.
@@ -333,6 +342,34 @@ func (g *OrgRegistry) Delete(ctx context.Context, id string) error {
 		return ErrOrgNotFound
 	}
 	return nil
+}
+
+// 只能由已经归档并关闭租户状态的路由器调用；名称释放与组织删除一起提交。
+func (g *OrgRegistry) deleteArchived(ctx context.Context, id string) error {
+	transaction, err := g.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	result, err := transaction.ExecContext(ctx, "DELETE FROM managed_organizations WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count != 1 {
+		return ErrOrgNotFound
+	}
+	if _, err := transaction.ExecContext(ctx, "DELETE FROM signup_login_claims WHERE org_id = ?", id); err != nil {
+		return err
+	}
+	var remaining int
+	if err := transaction.QueryRowContext(ctx, "SELECT count(*) FROM signup_login_claims WHERE org_id = ?", id).Scan(&remaining); err != nil {
+		return err
+	}
+	if remaining != 0 {
+		return errors.New("signup name release did not persist")
+	}
+	return transaction.Commit()
 }
 
 // StateDir returns the state directory of a managed organization.

@@ -85,14 +85,17 @@ type SelfServiceConfig struct {
 	Plan string
 	// ConsoleURL 启用入口域名下的 /t/<org>/ 网页，避免要求浏览器使用泛域名。
 	ConsoleURL string
+	// NativeGateway 复用规范 HTTPS 入口；未知设备通过普通账户登录后独立审批。
+	NativeGateway bool
 }
 
 // SelfServiceInfo is what a console needs to use the sign-up desk.
 type SelfServiceInfo struct {
-	Endpoint     string `json:"endpoint"`
-	DomainSuffix string `json:"domain_suffix,omitempty"`
-	Plan         string `json:"plan,omitempty"`
-	ConsoleURL   string `json:"console_url,omitempty"`
+	Endpoint      string `json:"endpoint"`
+	LoginEndpoint string `json:"login_endpoint,omitempty"`
+	DomainSuffix  string `json:"domain_suffix,omitempty"`
+	Plan          string `json:"plan,omitempty"`
+	ConsoleURL    string `json:"console_url,omitempty"`
 }
 
 // selfService is the normalized configuration, or nil when the deployment
@@ -188,11 +191,16 @@ func (r *Router) enableSelfServiceLocked() error {
 	}
 
 	r.selfService.Store(&selfService{cfg: cfg, site: site})
+	loginEndpoint := ""
+	if cfg.ConsoleURL != "" {
+		loginEndpoint = selfServiceLoginPath
+	}
 	site.site.Server.setSelfService(&SelfServiceInfo{
-		Endpoint:     selfServiceSignupPath,
-		DomainSuffix: cfg.DomainSuffix,
-		Plan:         cfg.Plan,
-		ConsoleURL:   cfg.ConsoleURL,
+		LoginEndpoint: loginEndpoint,
+		Endpoint:      selfServiceSignupPath,
+		DomainSuffix:  cfg.DomainSuffix,
+		Plan:          cfg.Plan,
+		ConsoleURL:    cfg.ConsoleURL,
 	})
 	r.log.Info("self-service sign-up enabled",
 		"site", cfg.Site, "domain_suffix", cfg.DomainSuffix,
@@ -324,14 +332,7 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 			r.log.Error("rolling back a self-service organization failed", "organization", orgID, "err", err)
 			return
 		}
-		// 只有组织成功退出后才能释放分配，不能给仍存活的租户回收网段。
-		if err := r.cfg.Plans.Delete(cleanupCtx, orgID); err != nil {
-			r.log.Error("releasing a self-service allocation failed", "organization", orgID, "err", err)
-			return
-		}
-		if err := r.cfg.Registry.releaseFailedSignupLogin(cleanupCtx, login, orgID); err != nil {
-			r.log.Error("releasing failed signup login", "organization", orgID, "err", err)
-		}
+		// DeleteManagedOrg 在状态归档后统一清理分配与名称，不重复第二套补偿逻辑。
 	}
 
 	if _, err := r.cfg.Plans.Allocate(ctx, orgID); err != nil {

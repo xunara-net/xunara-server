@@ -16,8 +16,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/tailscale/hujson"
 )
 
 // Document is a tailnet ACL document: HuJSON with the fields Xunara understands.
@@ -53,10 +51,7 @@ type Document struct {
 	// file format.
 	Tests []Test `json:"tests,omitempty"`
 
-	// Unsupported lists top-level fields present in the document that this
-	// build does not implement (for example "grants" or "autoApprovers"). They are never
-	// silently treated as granting access: a policy that relies on them denies
-	// more than its author intended, and the server logs them at load time.
+	// Unsupported 仅保留旧内嵌调用的诊断事实；编译器拒绝带有未知限制的文档。
 	Unsupported []string `json:"-"`
 }
 
@@ -182,46 +177,8 @@ type Test struct {
 // Parse reads an ACL document. It accepts HuJSON (JSON with comments and
 // trailing commas), the format the official client and admin console use.
 func Parse(raw []byte) (*Document, error) {
-	standard, err := hujson.Standardize(raw)
-	if err != nil {
-		return nil, fmt.Errorf("policy: parsing HuJSON: %w", err)
-	}
-
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(standard, &fields); err != nil {
-		return nil, fmt.Errorf("policy: parsing document: %w", err)
-	}
-
-	doc := &Document{}
-	targets := map[string]any{
-		"acls":      &doc.ACLs,
-		"groups":    &doc.Groups,
-		"hosts":     &doc.Hosts,
-		"tagOwners": &doc.TagOwners,
-		"tests":     &doc.Tests,
-		"ssh":       &doc.SSH,
-		"nodeAttrs": &doc.NodeAttrs,
-		"grants":    &doc.Grants,
-	}
-
-	keys := make([]string, 0, len(fields))
-	for key := range fields {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-
-	for _, key := range keys {
-		target, ok := targets[key]
-		if !ok {
-			doc.Unsupported = append(doc.Unsupported, key)
-			continue
-		}
-		if err := json.Unmarshal(fields[key], target); err != nil {
-			return nil, fmt.Errorf("policy: parsing %q: %w", key, err)
-		}
-	}
-
-	return doc, nil
+	document, _, err := ParseManaged(raw)
+	return document, err
 }
 
 // ParseString is Parse for a string document.

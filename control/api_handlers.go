@@ -148,6 +148,8 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":        Version,
 		"serverUrl":      s.cfg.ServerURL,
+		"clientLoginUrl": s.clientLoginURL(),
+		"nativeGateway":  s.nativeEndpoints.Load() != nil,
 		"domain":         s.networkDomain(),
 		"machines":       map[string]int{"total": len(nodes), "online": online},
 		"users":          len(s.identity.ListUsers()),
@@ -644,7 +646,11 @@ func (s *Server) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 			"expires":    da.ExpiresAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"devices": out})
+	view := map[string]any{"devices": out}
+	if token := s.accountSessionToken(r); token != "" {
+		view["csrf_token"] = csrfTokenFor(token)
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // handleAPIApproveDevice implements POST /api/v1/devices/{id}/approve.

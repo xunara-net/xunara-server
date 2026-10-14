@@ -249,14 +249,14 @@ func TestSignupLoginUpgradeFromRegistryV1AndIdentityReadFailure(t *testing.T) {
 	if _, err := registry.Create(t.Context(), signupTestOrg("legacy")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.db.ExecContext(t.Context(), "DROP TABLE signup_login_claims; PRAGMA user_version = 1"); err != nil {
+	if _, err := registry.db.ExecContext(t.Context(), "DROP TABLE signup_login_claims; DROP TABLE native_device_bindings; DROP TABLE native_device_flows; PRAGMA user_version = 1"); err != nil {
 		t.Fatal(err)
 	}
 	registry.Close()
 	registry = newTestRegistry(t, dir)
 	t.Cleanup(func() { registry.Close() })
 	var version int
-	if err := registry.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := registry.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version); err != nil || version != len(orgRegistryMigrations) {
 		t.Fatalf("upgraded registry version = %d, %v", version, err)
 	}
 	if records, err := registry.List(t.Context()); err != nil || len(records) != 1 || records[0].ID != "legacy" {

@@ -521,7 +521,6 @@ func TestConsolePolicyPage(t *testing.T) {
 	doc := `{
   // A policy with one rule and one unsupported field.
   "acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}],
-  "autoApprovers": {"routes": {"10.0.0.0/8": ["tag:router"]}},
 }`
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 		t.Fatalf("writing policy: %v", err)
@@ -537,7 +536,7 @@ func TestConsolePolicyPage(t *testing.T) {
 		t.Fatalf("policy page status = %d, want 200", resp.StatusCode)
 	}
 	body := bodyString(t, resp)
-	for _, want := range []string{"policy.hujson", "<dd>1</dd>", "Unsupported fields", "autoApprovers"} {
+	for _, want := range []string{"policy.hujson", "<dd>1</dd>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("policy page lacks %q:\n%s", want, body)
 		}
@@ -558,7 +557,7 @@ func TestConsolePolicyWardenSections(t *testing.T) {
 	for _, want := range []string{
 		"Traffic rules", "tag:server:22", "Grants", "example.com/cap/x",
 		"group:ops", "Hosts", "Tag owners", "SSH rules", "12h0m0s",
-		"Node attributes", "https", "Policy tests", "pass", "autoApprovers",
+		"Node attributes", "https", "Policy tests", "pass",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("policy page lacks %q:\n%s", want, page)

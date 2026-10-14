@@ -44,7 +44,8 @@ type pendingDevicesView struct {
 	// Truncated reports that older pending rows were dropped at
 	// pendingDeviceLimit, so a client knows the list is bounded instead of
 	// silently incomplete.
-	Truncated bool `json:"truncated"`
+	Truncated bool   `json:"truncated"`
+	CSRFToken string `json:"csrf_token,omitempty"`
 }
 
 // pendingDeviceViews lists the authorizations still waiting for a decision,
@@ -76,7 +77,11 @@ func (s *Server) handleAPIV2Devices(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireScope(w, r, identity.ScopeRead); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.pendingDeviceViews(time.Now()))
+	view := s.pendingDeviceViews(time.Now())
+	if token := s.accountSessionToken(r); token != "" {
+		view.CSRFToken = csrfTokenFor(token)
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // handleAPIV2ApproveDevice implements POST /api/v2/devices/{id}/approve.
@@ -102,16 +107,12 @@ func (s *Server) handleAPIV2DenyDevice(w http.ResponseWriter, r *http.Request) {
 // 409). Repeating the same decision is idempotent.
 func (s *Server) apiDecideDevice(w http.ResponseWriter, r *http.Request, principal apiPrincipal, approve bool) {
 	id := chi.URLParam(r, "id")
-
-	var (
-		da  identity.DeviceAuthorization
-		err error
-	)
-	if approve {
-		da, err = s.approveDevice(id, principal.UserID, principal.actor())
-	} else {
-		da, err = s.denyDevice(id, principal.UserID, principal.actor())
+	if principal.Kind == "session" && r.Header.Get("Authorization") == "" && !checkCSRFHeader(r, s.accountSessionToken(r)) {
+		writeAPIError(w, http.StatusForbidden, "CSRF_INVALID: refresh before deciding the device")
+		return
 	}
+	writer := networkWriter(principal)
+	da, err := s.decideDevice(r.Context(), id, principal.UserID, principal.actor(), &writer, approve)
 	if err != nil {
 		var he HTTPError
 		if errors.As(err, &he) {

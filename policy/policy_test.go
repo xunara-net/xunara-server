@@ -17,8 +17,7 @@ const cloneDoc = `{
   "ssh": [{"action": "check", "src": ["autogroup:member"], "dst": ["tag:server"],
            "users": ["root"], "acceptEnv": ["LC_*"], "checkPeriod": "12h"}],
   "nodeAttrs": [{"target": ["tag:server"], "attr": ["https"]}],
-  "tests": [{"src": "alice@example.com", "accept": ["db:5432"], "deny": ["web:22"]}],
-  "autoApprovers": {"routes": {"10.0.0.0/8": ["tag:server"]}}
+  "tests": [{"src": "alice@example.com", "accept": ["db:5432"], "deny": ["web:22"]}]
 }`
 
 // TestDocumentClone mutates every part of a clone and checks the original is
@@ -29,6 +28,7 @@ func TestDocumentClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing the document: %v", err)
 	}
+	doc.Unsupported = []string{"autoApprovers"}
 	clone := doc.Clone()
 	if clone == nil {
 		t.Fatal("Clone returned nil")
@@ -56,6 +56,7 @@ func TestDocumentClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-parsing the document: %v", err)
 	}
+	want.Unsupported = []string{"autoApprovers"}
 	if !reflect.DeepEqual(doc, want) {
 		t.Errorf("mutating the clone changed the original document:\ngot  %#v\nwant %#v", doc, want)
 	}
