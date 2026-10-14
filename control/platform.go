@@ -100,7 +100,8 @@ func (r *Router) mountPlatform(pr chi.Router) {
 	pr.Post("/v1/auth/logout", r.handlePlatformLogout)
 	pr.Post("/v1/organizations/{orgID}/users/{userID}/revoke", r.handlePlatformRevokeUserSessions)
 	pr.Patch("/v1/organizations/{orgID}/users/{userID}/status", r.handlePlatformUserStatus)
-	pr.Post("/v1/organizations/{orgID}/users/{userID}/password-reset", r.handlePlatformPasswordReset)
+	pr.Post("/v1/organizations/{orgID}/users/{userID}/password-reset", passwordResetRetired)
+	pr.Post("/v1/organizations/{orgID}/users/{userID}/password-reset/random", r.handlePlatformRandomPasswordReset)
 	pr.Delete("/v1/organizations/{orgID}/users/{userID}", r.handlePlatformDeleteUser)
 }
 

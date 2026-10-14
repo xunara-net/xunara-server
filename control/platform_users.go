@@ -38,7 +38,8 @@ type platformUser struct {
 	DisabledAt             *time.Time `json:"disabledAt,omitempty"`
 	DisabledReason         string     `json:"disabledReason"`
 	PasswordResetAvailable bool       `json:"passwordResetAvailable"`
-	PasswordResetExpiresAt *time.Time `json:"passwordResetExpiresAt,omitempty"`
+	PasswordResetMode      string     `json:"passwordResetMode"`
+	PasswordChangeRequired bool       `json:"passwordChangeRequired"`
 }
 
 // 明确选定已有租户，只创建人类成员，不新建网络、签发会话或批准设备。
@@ -133,6 +134,7 @@ func (r *Router) handlePlatformUsers(w http.ResponseWriter, req *http.Request) {
 				Email: u.Email, Role: string(u.Role), Plan: planID,
 				CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 				Disabled: !u.DisabledAt.IsZero(), DisabledReason: u.DisabledReason,
+				PasswordResetMode: "temporary_password", PasswordChangeRequired: u.PasswordChangeRequired,
 			}
 			if row.Disabled {
 				disabledAt := u.DisabledAt
@@ -145,16 +147,6 @@ func (r *Router) handlePlatformUsers(w http.ResponseWriter, req *http.Request) {
 					return
 				}
 				row.PasswordResetAvailable = err == nil
-				if row.PasswordResetAvailable {
-					status, found, err := server.identity.GetPasswordResetStatus(req.Context(), u.ID)
-					if err != nil {
-						writeAPIError(w, http.StatusServiceUnavailable, "PASSWORD_RESET_UNAVAILABLE: could not read pending reset status")
-						return
-					}
-					if found {
-						row.PasswordResetExpiresAt = &status.ExpiresAt
-					}
-				}
 			}
 			sessions, err := server.identity.ListAccountSessions(req.Context(), u.ID)
 			if err != nil {

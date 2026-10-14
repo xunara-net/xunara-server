@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -139,9 +138,8 @@ func (s *Server) consoleRouter() http.Handler {
 // requests are sent to the login page, matching the read handlers.
 func (s *Server) consoleWriteAccess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, ok := s.currentSession(r)
+		session, _, ok := s.requireSession(w, r, r.URL.RequestURI())
 		if !ok {
-			http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
 		user, ok := s.identity.GetUser(session.UserID)

@@ -33,6 +33,8 @@ type User struct {
 	// 禁用只约束人类登录及其委托权限，不改变机器或中继的独立信任。
 	DisabledAt     time.Time
 	DisabledReason string
+	// 临时密码只能用于本人改密；所有人类登录方式共用这一持久限制。
+	PasswordChangeRequired bool
 }
 
 // ExternalIdentity binds a user to an account at an external provider.
@@ -142,6 +144,7 @@ const (
 	AuditPasswordChanged       = "user.password_changed"
 	AuditPasswordResetIssued   = "user.password_reset_issued"
 	AuditPasswordResetUsed     = "user.password_reset_used"
+	AuditPasswordReset         = "user.password_reset"
 	AuditPasswordChangeFailed  = "user.password_change_failed"
 	AuditNodeRegistered        = "node.registered"
 	AuditNodeApproved          = "node.approved"

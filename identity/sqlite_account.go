@@ -130,6 +130,10 @@ func (store *SQLiteStore) ChangeLocalPassword(ctx context.Context, userID tailcf
 		return 0, ErrCredentialChanged
 	}
 
+	var expectedSessions int64
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND revoked_at IS NULL", int64(userID)).Scan(&expectedSessions); err != nil {
+		return 0, err
+	}
 	result, err = tx.ExecContext(ctx, `
 		UPDATE sessions SET revoked_at = ?, revoked_reason = 'password changed'
 		WHERE user_id = ? AND revoked_at IS NULL`, now.UnixNano(), int64(userID))
@@ -139,6 +143,9 @@ func (store *SQLiteStore) ChangeLocalPassword(ctx context.Context, userID tailcf
 	revoked, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("identity: checking revoked session count: %w", err)
+	}
+	if revoked != expectedSessions {
+		return 0, errors.New("identity: password change sessions were not fully revoked")
 	}
 	if err := deletePasswordReset(ctx, tx, userID); err != nil {
 		return 0, err
@@ -151,7 +158,7 @@ func (store *SQLiteStore) ChangeLocalPassword(ctx context.Context, userID tailcf
 	if !revision.After(user.UpdatedAt) {
 		revision = user.UpdatedAt.Add(time.Nanosecond)
 	}
-	if err := requireIdentityWrite(tx.ExecContext(ctx, "UPDATE users SET updated_at = ? WHERE id = ? AND updated_at = ?", revision.UnixNano(), int64(userID), user.UpdatedAt.UnixNano())); err != nil {
+	if err := requireIdentityWrite(tx.ExecContext(ctx, "UPDATE users SET updated_at = ?, password_change_required = 0 WHERE id = ? AND updated_at = ?", revision.UnixNano(), int64(userID), user.UpdatedAt.UnixNano())); err != nil {
 		return 0, err
 	}
 	if err := insertAccountAudit(ctx, tx, userID, AuditPasswordChanged, fmt.Sprintf("password changed; revoked %d sessions", revoked), now); err != nil {

@@ -15,7 +15,8 @@ import (
 
 func rewindLoginHistorySchema(test *testing.T, database *sql.DB) {
 	test.Helper()
-	if _, err := database.Exec(`DROP TRIGGER account_login_record_created;
+	if _, err := database.Exec(`ALTER TABLE users DROP COLUMN password_change_required;
+		DROP TRIGGER account_login_record_created;
 		DROP TRIGGER account_login_record_updated; DROP TABLE account_login_records;
 		ALTER TABLE sessions DROP COLUMN client_ip; ALTER TABLE sessions DROP COLUMN user_agent;`); err != nil {
 		test.Fatal(err)
@@ -341,11 +342,7 @@ func TestLoginHistorySynchronizesSecurityRevocations(test *testing.T) {
 			case "disabled":
 				_, err = store.SetUserStatusByPlatform(test.Context(), user.ID, statusChange(user, true))
 			case "reset":
-				issued, issueErr := store.IssuePasswordResetByPlatform(test.Context(), user.ID, PasswordResetOptions{ExpectedUpdatedAt: user.UpdatedAt, OwnershipVerified: true, Reason: "verified holder"})
-				if issueErr != nil {
-					test.Fatal(issueErr)
-				}
-				_, err = store.RedeemPasswordReset(test.Context(), issued.Code, []byte("replacement"))
+				_, err = store.ResetRandomPasswordByPlatform(test.Context(), user.ID, PasswordResetOptions{ExpectedUpdatedAt: user.UpdatedAt, OwnershipVerified: true, Reason: "verified holder"}, "platform-token")
 			case "external unlink":
 				link := ExternalIdentity{ProviderID: "test-oidc", Subject: "bound-subject", UserID: user.ID}
 				if err := store.LinkExternalIdentity(&link); err != nil {

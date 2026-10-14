@@ -336,6 +336,11 @@ CREATE TABLE password_reset_tickets (
 `,
 	// v18：登录记录不包含凭据，且不随过期会话清理；来源仅对新认证采集。
 	accountLoginHistoryMigration,
+	// v19：超管临时密码要求本人首次改密；旧账号不改变密码或登录状态。
+	`
+ALTER TABLE users ADD COLUMN password_change_required INTEGER NOT NULL DEFAULT 0 CHECK (password_change_required IN (0, 1));
+DELETE FROM password_reset_tickets;
+`,
 }
 
 // SQLiteStore is a durable [Store] sharing the control plane's database.
@@ -406,7 +411,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	return nil
 }
 
-const userColumns = "id, login_name, display_name, email, role, created_at, updated_at, disabled_at, disabled_reason"
+const userColumns = "id, login_name, display_name, email, role, created_at, updated_at, disabled_at, disabled_reason, password_change_required"
 
 // CreateUser implements [UserStore].
 func (s *SQLiteStore) CreateUser(u *User) error {
@@ -441,6 +446,7 @@ func (s *SQLiteStore) CreateUser(u *User) error {
 	u.ID = tailcfg.UserID(id)
 	u.DisabledAt = time.Time{}
 	u.DisabledReason = ""
+	u.PasswordChangeRequired = false
 	return nil
 }
 
@@ -588,28 +594,30 @@ func (store *SQLiteStore) DeleteUserContext(ctx context.Context, id tailcfg.User
 
 func scanUser(sc scanner) (User, error) {
 	var (
-		id             int64
-		login          string
-		display        string
-		email          string
-		role           string
-		createdAt      int64
-		updatedAt      int64
-		disabledAt     sql.NullInt64
-		disabledReason string
+		id                     int64
+		login                  string
+		display                string
+		email                  string
+		role                   string
+		createdAt              int64
+		updatedAt              int64
+		disabledAt             sql.NullInt64
+		disabledReason         string
+		passwordChangeRequired bool
 	)
-	if err := sc.Scan(&id, &login, &display, &email, &role, &createdAt, &updatedAt, &disabledAt, &disabledReason); err != nil {
+	if err := sc.Scan(&id, &login, &display, &email, &role, &createdAt, &updatedAt, &disabledAt, &disabledReason, &passwordChangeRequired); err != nil {
 		return User{}, err
 	}
 	user := User{
-		ID:             tailcfg.UserID(id),
-		LoginName:      login,
-		DisplayName:    display,
-		Email:          email,
-		Role:           Role(role),
-		CreatedAt:      time.Unix(0, createdAt).UTC(),
-		UpdatedAt:      time.Unix(0, updatedAt).UTC(),
-		DisabledReason: disabledReason,
+		PasswordChangeRequired: passwordChangeRequired,
+		ID:                     tailcfg.UserID(id),
+		LoginName:              login,
+		DisplayName:            display,
+		Email:                  email,
+		Role:                   Role(role),
+		CreatedAt:              time.Unix(0, createdAt).UTC(),
+		UpdatedAt:              time.Unix(0, updatedAt).UTC(),
+		DisabledReason:         disabledReason,
 	}
 	if disabledAt.Valid {
 		user.DisabledAt = time.Unix(0, disabledAt.Int64).UTC()

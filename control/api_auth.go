@@ -39,7 +39,7 @@ func (s *Server) apiAuthRouter() http.Handler {
 	r.Get("/start", s.handleAPIAuthStart)
 	r.Post("/invite/start", s.handleAPIExternalInviteStart)
 	r.Post("/login", s.handleAPIAuthLogin)
-	r.Post("/password-reset", s.handleAPIResetPassword)
+	r.Post("/password-reset", passwordResetRetired)
 	r.Post("/signup", s.handleAPIAuthSignup)
 	r.With(deprecatedAccountEndpoint).Post("/logout", s.handleAPIAuthLogout)
 	r.Post("/passkey/begin", s.handlePasskeyLoginBegin)
@@ -59,6 +59,13 @@ func apiUserView(user identity.User) map[string]any {
 		"created_at":   user.CreatedAt,
 		"updated_at":   user.UpdatedAt,
 	}
+}
+
+// 登录能力只用于账户 / 会话响应，不扩散到已发布的个人导出 schema v1。
+func apiAccountUserView(user identity.User) map[string]any {
+	view := apiUserView(user)
+	view["password_change_required"] = user.PasswordChangeRequired
+	return view
 }
 
 // apiPlanView is the commercial view of this tenant: the plan, its quotas,
@@ -113,7 +120,7 @@ func (s *Server) apiCapabilities() []string {
 	caps := []string{}
 	if s.localLogin {
 		caps = append(caps, "auth.password")
-		caps = append(caps, "account.password_reset")
+		caps = append(caps, "account.password_recovery.platform")
 	}
 	p := s.Plan()
 	if s.passkeys != nil {
@@ -202,7 +209,7 @@ func (s *Server) apiSessionPayload(user identity.User, session identity.Session)
 	}
 	return map[string]any{
 		"authenticated": true,
-		"user":          apiUserView(user),
+		"user":          apiAccountUserView(user),
 		"session": map[string]any{
 			"id":           session.ID,
 			"auth_method":  session.AuthMethod,
@@ -291,7 +298,7 @@ func (s *Server) handleAPIAuthProviders(w http.ResponseWriter, r *http.Request) 
 		"local_login":         s.localLogin,
 		"setup_required":      required,
 		"passkeys":            s.passkeys != nil,
-		"password_reset":      s.localLogin && !required,
+		"password_reset":      false,
 		"registration":        s.registrationMode().String(),
 		"member_registration": s.memberRegistrationMode().String(),
 		"member_invitations":  !required && s.memberRegistrationMode().AllowsSignup(),

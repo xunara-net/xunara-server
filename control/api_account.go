@@ -46,7 +46,7 @@ func (server *Server) accountSessionToken(request *http.Request) string {
 func (server *Server) accountPayload(request *http.Request, user identity.User) map[string]any {
 	_, hasPassword := server.identity.GetLocalCredential(user.ID)
 	return map[string]any{
-		"user":                    apiUserView(user),
+		"user":                    apiAccountUserView(user),
 		"password_change_enabled": server.localLogin && hasPassword,
 		"csrf_token":              csrfTokenFor(server.accountSessionToken(request)),
 	}

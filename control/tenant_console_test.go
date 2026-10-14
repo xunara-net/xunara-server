@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/xunara-net/xunara-server/identity"
 )
 
 func tenantConsoleRequest(t *testing.T, router *Router, method, path string, body any, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -99,5 +101,57 @@ func TestTenantConsoleWriterClearsScopedCookiesAndRedirects(t *testing.T) {
 	if cookie.Name != "xunara_session_tenant_alice" || cookie.Path != "/t/alice/" || cookie.Domain != "" || cookie.MaxAge != -1 ||
 		response.Header().Get("Location") != "/t/alice/dashboard" {
 		t.Fatal("logout or callback escaped its tenant scope")
+	}
+}
+
+func TestTenantConsoleTemporaryPasswordChangeRemainsScoped(t *testing.T) {
+	router, _ := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "old-address.example.test", ConsoleURL: "https://app.xunara.test"})
+	created := tenantConsoleRequest(t, router, http.MethodPost, selfServiceSignupPath, selfServiceRequest{Login: "recover-owner", Password: "SharedOwner-Strong-2026"})
+	if created.Code != http.StatusCreated {
+		t.Fatal("fixture signup failed")
+	}
+	server := router.serverFor("recover-owner")
+	user, err := server.identity.LookupUserByLoginName(t.Context(), "recover-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, err := server.identity.ResetRandomPasswordByPlatform(t.Context(), user.ID, identity.PasswordResetOptions{Reason: "核实持有人", ExpectedUpdatedAt: user.UpdatedAt, OwnershipVerified: true}, "platform-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/t/recover-owner"
+	login := tenantConsoleRequest(t, router, http.MethodPost, base+"/api/v1/auth/login", map[string]string{"login": user.LoginName, "password": reset.TemporaryPassword})
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `"password_change_required":true`) {
+		t.Fatal("scoped temporary login failed")
+	}
+	cookies := login.Result().Cookies()
+	if response := tenantConsoleRequest(t, router, http.MethodGet, base+"/api/v1/overview", nil, cookies...); response.Code != http.StatusForbidden {
+		t.Fatal("scoped temporary session bypassed forced change")
+	}
+	account := tenantConsoleRequest(t, router, http.MethodGet, base+"/api/v1/account", nil, cookies...)
+	if account.Code != http.StatusOK {
+		t.Fatal("scoped temporary session cannot read its account metadata")
+	}
+	var metadata struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(account.Body.Bytes(), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"current_password": reset.TemporaryPassword, "new_password": "My-Personal-Password-2026"})
+	request := httptest.NewRequest(http.MethodPost, "https://app.xunara.test"+base+"/api/v1/account/password", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CSRF-Token", metadata.CSRFToken)
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	router.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Result().Cookies()[0].Path != base+"/" {
+		t.Fatal("scoped password change or cookie removal escaped its tenant")
+	}
+	root := tenantConsoleRequest(t, router, http.MethodGet, "/api/v1/auth/session", nil, cookies...)
+	if strings.Contains(root.Body.String(), `"authenticated":true`) {
+		t.Fatal("scoped password change signed into the root account")
 	}
 }

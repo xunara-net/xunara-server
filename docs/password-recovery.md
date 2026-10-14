@@ -1,99 +1,88 @@
-# 平台辅助密码重置
+# 超管重置随机临时密码
 
-这是经过人工核实后的恢复，不是自动邮件找回或完整账户接管恢复。联系邮箱未经
-验证，不能据此确认身份。管理员看不到旧密码，也不为用户选择新密码。
-设计见 [ADR-0031](adr/ADR-0031-platform-password-recovery.md) 与
-[Proposal](proposals/platform-password-recovery.md)。
+平台管理员核实持有人后，**直接重置随机临时密码**，不再要求用户兑换重置码。
+管理员不能读取旧密码；临时密码只有本次弹窗可见，用户首次登录必须设置自己的
+新密码。设计见 [ADR-0042](adr/ADR-0042-platform-random-password-reset.md) 与
+[Proposal](proposals/platform-random-password-reset.md)。
 
-## 产品入口
+## 操作入口
 
-- 平台 `/admin/users`：重置密码 → 填原因 → 确认已核实持有人 → 显示一次重置码。
-- 用户 `/login`：「忘记密码」→ `/reset-password`，手动输入码和两次新密码。
-- 仅平台 Bearer 可生成；普通租户 owner/admin Cookie、服务 API Key 和匿名均拒绝。
-- 仅已启用、已有本地密码且部署允许密码登录的账号可生成，不给 external-only
-  账号新增密码。安全恢复不按套餐收费，不改变任何成员 / 设备额度。
+1. 超管后台「用户管理」核对所属网络和登录名，点击「重置密码」。
+2. 填写原因、勾选已通过可靠渠道核实持有人，确认立即重置。
+3. 系统立即替换密码、撤销该账号所有人类会话；弹窗只显示一次随机临时密码。
+4. 通过已核实的独立渠道交付，并告知用户所属网络的正常登录地址。
+5. 用户输入临时密码登录后，只能进入「设置自己的新密码」或退出登录。
+6. 本人改密成功后全部旧人类会话退出，再以新密码登录使用控制台。
 
-生成不改密码、不退出登录；码 256-bit 随机、15 分钟有效、一账号一待用码。
-再次生成使前码失效。必须由平台通过已核实的独立渠道交付，只在可信 HTTPS
-输入，不写网址、argv、日志、工单或浏览器持久存储。关闭 / 离页清除本页原码；
-后续查询只有待用状态 / 期限，不能取回原码。勾选是运营者的明确声明，不等于
-系统完成独立超管身份、证件验证或 MFA。
+取消确认不写入。关闭弹窗 / 离开页面清除本页明文，不写 URL、argv、日志、
+审计或浏览器持久存储；复制后清理剪贴板。勾选是运营者声明，不代表系统完成证件核验。
+仅已有本地密码、已启用且网络允许密码登录的账号可重置，不给第三方专用账号新增密码。
 
 ## API（以本仓库为准）
 
-响应 no-store，严格 JSON body 限 4 KiB，拒绝额外字段和拼接 JSON。不自动重试。
+`POST /api/platform/v1/organizations/{orgID}/users/{userID}/password-reset/random`，
+平台 `Authorization: Bearer` 授权。只接受 4 KiB 内 JSON body：
 
-### 平台生成
+- `reason`：1～256 字单行管理原因，不包含秘密或证件资料。
+- `ownership_verified=true`：已核实持有人。
+- `expected_updated_at`：平台列表的完整账号版本，保留纳秒原字符串。
 
-`POST /api/platform/v1/organizations/{orgID}/users/{userID}/password-reset`，
-`Authorization: Bearer`。请求 `reason`、`ownership_verified=true` 和
-`expected_updated_at`（平台列表中的完整版本，保留纳秒字符串，不转成 JS Date）。
-原因限 1～256 字单行文字，不输入秘密或证件资料。
+200：`org`、`id`、`updatedAt`、仅本次的 `temporaryPassword`、
+`passwordChanged=true`、`passwordChangeRequired=true`、`sessionsRevoked`。
+明文由 crypto/rand 生成 24 字节随机值，编码为 32 个 URL-safe 字符；只持久化 bcrypt 哈希。
+响应 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`。
 
-201：`org`、`id`、`updatedAt`、`resetId`、仅本次的 `code`、`createdAt`、
-`expiresAt`、`passwordChanged=false`、`sessionsRevoked=0`。
-列表新增 `passwordResetAvailable`、可选 `passwordResetExpiresAt`，不返回码或哈希。
-旧服务端缺少能力 / 状态 / 版本时前端只读，禁用生成，不猜可用。
+平台列表只返回 `passwordResetAvailable`、`passwordResetMode=temporary_password`
+与 `passwordChangeRequired`，不提供明文查询。新版后台遇到旧服务端不猜测重置语义。
 
-- 缺版本 428 `PASSWORD_RESET_VERSION_REQUIRED`；冲突 409 `PASSWORD_RESET_CHANGED`。
-- 核实 / 原因无效 400 `PASSWORD_RESET_REQUEST_INVALID`；不存在 404。
-- 停用、无密码或关闭本地登录 409 `PASSWORD_RESET_NOT_AVAILABLE`。
-- 存储故障 503 `PASSWORD_RESET_UNAVAILABLE`，不回显数据库诊断。
+缺版本 428；版本冲突 409 `PASSWORD_RESET_CHANGED`；核实 / 原因 / 额外字段无效 400；
+无账号 404；停用 / 无密码 / 关闭密码登录 409；存储故障 503 `PASSWORD_RESET_UNAVAILABLE`。
+结果未知不得自动重复重置。刷新账号版本，重新核实并明确确认后可以再重置，先前密码失效。
 
-超时 / 冲突 / 未确认结果保留原因，暂停再次提交。必须显式刷新核对、重新确认
-核实和生成；待用状态不代表原码可取回。取消无写入，再次生成会替换原码。
+## 强制改密不是前端限制
 
-### 匿名兑换
+账号的持久 `password_change_required` 由 Identity 维护，所有人类登录方法共用。
+临时登录只能读取本人账户 / 会话、修改密码、退出当前会话，不能读写网络、绑定
+新提供方或通行密钥、批准设备，也不能通过 gRPC 或旧 HTML 管理入口绕过限制。
+Web 显示独立、适配手机的 `/change-password` 页面，不挂载控制台菜单。
 
-`POST /api/v1/auth/password-reset`，JSON body：`code`、`new_password`、
-`confirm_password`。不接受邮箱、用户 ID、query 码，也不以 Cookie / API Key 代替。
-有 Origin 时只允许本网络同源，拒绝跨站浏览器请求；无 Origin 的非浏览器调用
-仍必须有用途限定凭证。密码至少 12 字、最多 72 字节、不等于登录名，确认一致。
+复用 `POST /api/v1/account/password`，要求当前临时密码、新密码、会话绑定 CSRF。
+新密码至少 12 个字符、最多 72 字节，不能等于登录名或当前密码；前端二次确认。
+成功原子清除限制并撤销全部人类会话，再正常登录；故障不部分写入、不自动重试。
+登录 / 账户响应新增 `user.password_change_required`；个人导出 schema v1 不增字段。
 
-无效、过期、已使用、禁用、跨租户及凭据变化统一 400 `PASSWORD_RESET_INVALID`，
-不透露用户信息。密码策略 / 确认错误 400；429 `PASSWORD_RESET_RATE_LIMITED`
-带 Retry-After；存储 / 准入错误 503。每来源 IP 每 15 分钟 20 次、已验证码每
-15 分钟 5 次，预算持久化；随机无效码不建立独立码预算，避免无限扩张状态。
+## 兼容与身份边界
 
-200：`changed=true`、`revoked_sessions`。不发登录 Cookie、不创建 Session、不清除
-其他账号 Cookie。前端清空输入，正常登录；结果未知先尝试新密码登录、联系
-管理员核对，不自动重放；离页清空内存。未发送任何邮件或自动建立已验证邮箱。
+原生成码 API 和匿名兑换 API 保留明确 410 `PASSWORD_RESET_RETIRED` 提示，
+不悄悄把「生成不改密」变为「立即改密」。Web `/reset-password` 变为联系管理员
+的指导页，旧码不再有效，生成 / 兑换实现与输入表单已删除。
 
-## 数据与原子性
+Identity **仅追加 v19**：新持久改密标志默认 0，并清空旧待用重置码。
+旧 v17 表保留迁移 / 成套回退结构，不运行旧恢复流程。state / plans 不变。
+旧账号的密码、原人类会话、设备地址和机器身份不因升级自动改变。
 
-Identity v17 只追加 `password_reset_tickets`：一用户一待用记录、公开 ID、码哈希、
-原密码指纹 / 更新时间、创建 / 到期时间。原码与新明文密码不落库，不复用 Session、
-OAuth State、DeviceAuthorization 或内存 map。
+重置事务复核用户 / 凭据 / 启用状态 / CAS，密码、限制、旧码清理、会话撤销、
+用户版本和必需 `user.password_reset` 审计同事务；错误或忽略写入都回滚。
+不改变外部绑定、Passkey、API Key、设备接入 Key、在线节点或 Relay、角色、套餐、
+网段、DNS / ACL、注册准入或官方 Tailscale 协议。独立服务凭据仍可按原授权使用。
 
-生成事务核对用户 / 状态 / 凭据 / 核实声明 / 版本，替换待用码、推进用户版本、
-写必需 `user.password_reset_issued`，不改密码 / 会话。兑换在慢哈希前预检，
-写事务再次核对有效期 / 状态 / 原密码版本；替换密码、删除码、撤销全部未撤销
-人类会话、推进版本和必需 `user.password_reset_used` 同事务。错误 / 忽略写入均
-回滚，竞争兑换至多成功一次。审计不包含码、码哈希或密码。
+这不是全面接管恢复；疑似泄漏时需另查其他凭据与绑定。邮箱验证、自动邮件找回、
+完整 MFA 和运营核实 / 通知流程不是本功能交付的能力。
 
-自助改密删除待用码、推进用户版本；禁用 / 解禁 / 删除在事务中删除待用码。
-直接密码存储变化再由指纹 / 更新时间核对，旧码不能恢复旧快照。保留外部绑定、
-Passkey、API Key、设备 Key、节点和中继；不改角色、套餐、CIDR、DNS、ACL、
-注册准入或官方客户端协议。其他既有登录方法仍可重新认证，不宣称全面接管恢复。
+## 验证与升级
 
-共享平台 Bearer 仍只审计为平台，不冒充可识别的运营人员。邮件通知 / 邮箱验证、
-自动邮件找回、强 MFA / Break Glass 与独立超管身份未在本切片交付。
-
-## 升级与验证
-
-停止全部旧控制面、私有成套备份数据库 / 密封密钥 / 环境 / 服务 / 静态产物后追加
-identity v17，state v24 / plans v4 不变，原用户初始无待用码。旧二进制不支持新
-身份库，不能混版本滚动运行。仅尚未开放写入时可成套恢复；开放业务后不可用
-旧快照覆盖新数据。
+停止全部旧控制面、成套私有备份后配套升级 Server → Admin / Web。
+旧二进制不能打开 v19 身份库，不能混版本运行。只在恢复对外写入前允许成套回退，
+开放业务后不可用旧快照覆盖新数据。不要擅自重置生产用户密码。
 
 在 Server 仓库执行：
 
 ```sh
 go build ./... && go vet ./... && go test ./... -count=1
-go test -race ./... -count=1 -timeout=20m
+go test -race ./... -count=1 -timeout=30m
 ```
 
-覆盖旧库、跨连接、CAS、期限、重复生成 / 消费、密码变化 / 登录竞争、状态、
-同 ID 跨租户、必需写入故障 / 忽略回滚。真实隔离 HTTPS 浏览器复用 Admin 认证
-脚本，不接生产账号或公网 IdP；运行目录 / 前置条件见
+覆盖迁移、跨连接 / 同 ID 跨租户、并发 CAS、旧密码登录 / 改密 / 禁用竞争、
+失败 / 忽略写入回滚、强制改密 HTTP / gRPC / 旧页面和退出边界。
+隔离 HTTPS 浏览器、真实审计故障 / 重启与手机验证入口见
 [Admin 验收](https://github.com/xunara-net/xunara-admin#浏览器集成验收)。

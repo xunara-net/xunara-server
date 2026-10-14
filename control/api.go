@@ -28,8 +28,9 @@ type apiPrincipal struct {
 	Role   identity.Role
 	Scopes map[string]bool
 
-	Session identity.Session
-	APIKey  identity.APIKey
+	Session                identity.Session
+	APIKey                 identity.APIKey
+	PasswordChangeRequired bool
 }
 
 // actor names the principal in the audit log.
@@ -117,11 +118,12 @@ func (server *Server) resolveSessionPrincipal(ctx context.Context, session ident
 		return apiPrincipal{}, identity.ErrUserDisabled
 	}
 	return apiPrincipal{
-		Kind:    "session",
-		UserID:  session.UserID,
-		Role:    user.Role,
-		Scopes:  map[string]bool{identity.ScopeRead: true, identity.ScopeWrite: true},
-		Session: session,
+		Kind:                   "session",
+		UserID:                 session.UserID,
+		Role:                   user.Role,
+		Scopes:                 map[string]bool{identity.ScopeRead: true, identity.ScopeWrite: true},
+		Session:                session,
+		PasswordChangeRequired: user.PasswordChangeRequired,
 	}, nil
 }
 
@@ -150,6 +152,10 @@ func (server *Server) requireAPIPrincipal(writer http.ResponseWriter, request *h
 		writeAuthenticationError(writer, err)
 		return apiPrincipal{}, false
 	}
+	if principal.PasswordChangeRequired && !passwordChangeRequestAllowed(request, principal.Session.ID) {
+		writeAPIError(writer, http.StatusForbidden, "PASSWORD_CHANGE_REQUIRED: replace the temporary password before using the console")
+		return apiPrincipal{}, false
+	}
 	return principal, true
 }
 
@@ -172,6 +178,9 @@ func (s *Server) requireScope(w http.ResponseWriter, r *http.Request, scope stri
 // the scope must be granted, and a write additionally needs a role that may
 // change tailnet state (service keys inherit their owner's role).
 func authorizeScope(principal apiPrincipal, scope string) error {
+	if principal.PasswordChangeRequired {
+		return errors.New("PASSWORD_CHANGE_REQUIRED: replace the temporary password before using the console")
+	}
 	if !principal.Scopes[scope] {
 		return errors.New("missing scope: " + scope)
 	}

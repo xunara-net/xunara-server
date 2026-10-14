@@ -217,6 +217,16 @@ func checkCSRFHeader(r *http.Request, token string) bool {
 func (s *Server) requireSession(w http.ResponseWriter, r *http.Request, returnTo string) (identity.Session, string, bool) {
 	session, token, err := s.resolveCookieSession(r)
 	if err == nil {
+		user, lookupErr := s.identity.LookupUser(r.Context(), session.UserID)
+		if lookupErr != nil {
+			s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+			return identity.Session{}, "", false
+		}
+		if user.PasswordChangeRequired {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Redirect(w, r, "/change-password", http.StatusFound)
+			return identity.Session{}, "", false
+		}
 		return session, token, true
 	}
 	if !errors.Is(err, identity.ErrSessionNotFound) {
