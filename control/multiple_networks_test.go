@@ -1,13 +1,16 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/netip"
 	"testing"
 
 	"github.com/xunara-net/xunara-server/plan"
+	"github.com/xunara-net/xunara-server/state"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 func TestMultipleAddressPoolsMoveDeviceAndRetainRemovedRangeAddresses(t *testing.T) {
@@ -101,5 +104,72 @@ func TestAdditionalPoolsFreePlanAndOverlapAreRejected(t *testing.T) {
 		if allocationRevision(t, server, cookie) != 0 {
 			t.Fatal("rejected update changed the durable allocation")
 		}
+	}
+}
+
+func TestDefaultPoolSelectionUsesConfiguredEntitlementAndKeepsFreeDeviceQuota(t *testing.T) {
+	router, plans := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "xunara.test"})
+	response := postJSONAtHost(t, router.Handler(), "app.xunara.test", selfServiceSignupPath, map[string]string{
+		"login": "pool-owner", "password": "correct horse battery staple",
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("signup = %d", response.Code)
+	}
+	server := router.orgByID("pool-owner").site.Server
+	cookie, token := seedUserSession(t, server, 1)
+	headers := map[string]string{"X-CSRF-Token": csrfTokenFor(token)}
+	original, err := server.actualAllocation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"revision": original.SourceRevision, "ipv4_cidr": original.IPv4.String(), "extra_ipv4_cidrs": []string{"100.104.70.0/24"}}
+	if response := accountRequest(t, server, http.MethodPut, "/api/v2/network/addresses", body, cookie, headers); response.Code != http.StatusForbidden {
+		t.Fatal("default pool management bypassed a disabled entitlement")
+	}
+	configured := freePlan(t)
+	configured.AllowCustomCIDR = true
+	if _, err := plans.UpsertPlan(t.Context(), configured); err != nil {
+		t.Fatal(err)
+	}
+	existing := seedAPIMachine(t, server, "before-default-switch", nil)
+	if response := accountRequest(t, server, http.MethodPut, "/api/v2/network/addresses", body, cookie, headers); response.Code != http.StatusOK {
+		t.Fatalf("configured Free additional pool = %d (%s)", response.Code, response.Body.String())
+	}
+	current, err := server.actualAllocation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = map[string]any{"revision": current.SourceRevision, "ipv4_cidr": "100.104.70.0/24", "extra_ipv4_cidrs": []string{original.IPv4.String()}}
+	for _, operation := range []struct{ method, path string }{{http.MethodPost, "/api/v2/network/addresses/validate"}, {http.MethodPut, "/api/v2/network/addresses"}} {
+		response := accountRequest(t, server, operation.method, operation.path, body, cookie, headers)
+		if response.Code != http.StatusOK {
+			t.Fatalf("switch default = %d (%s)", response.Code, response.Body.String())
+		}
+	}
+	next, err := server.actualAllocation(t.Context())
+	retained, found := server.store.GetNodeByID(existing.ID)
+	if err != nil || !found || next.IPv4.String() != "100.104.70.0/24" || len(next.ExtraIPv4) != 1 || next.ExtraIPv4[0] != original.IPv4 || retained.IPv4 != existing.IPv4 {
+		t.Fatal("default pool switch changed an existing IP or dropped the old pool")
+	}
+	if response := accountRequest(t, server, http.MethodPut, "/api/v2/network/addresses", body, cookie, headers); response.Code != http.StatusConflict {
+		t.Fatal("stale default pool switch was accepted")
+	}
+	fillDevices(t, server, 9)
+	for _, node := range server.store.ListNodes() {
+		if node.ID != existing.ID && !next.IPv4.Contains(node.IPv4) {
+			t.Fatal("new device did not use the user's default pool")
+		}
+		frame := server.fullMap(node, tailcfg.MapRequest{Version: tailcfg.CurrentCapabilityVersion})
+		if frame.Node == nil || frame.Node.Addresses[0].Addr() != node.IPv4 || frame.Node.AllowedIPs[0].Bits() != 32 {
+			t.Fatal("official MapResponse changed pool addresses into whole-subnet routes")
+		}
+	}
+	_, err = server.handleRegister(context.Background(), tailcfg.RegisterRequest{
+		Version: tailcfg.CurrentCapabilityVersion, NodeKey: key.NewNode().Public(),
+		Auth: &tailcfg.RegisterResponseAuth{AuthKey: seedPreAuthKey(t, server, state.PreAuthKey{})},
+	}, key.NewMachine().Public())
+	var refusal HTTPError
+	if !errors.As(err, &refusal) || refusal.Code != http.StatusForbidden || len(server.store.ListNodes()) != 10 {
+		t.Fatalf("custom default bypassed Free's 10-device quota: %v", err)
 	}
 }

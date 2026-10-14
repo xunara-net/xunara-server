@@ -179,6 +179,14 @@ func NewRouter(cfg RouterConfig) (*Router, error) {
 		if err := r.loadManagedOrgs(); err != nil {
 			return nil, err
 		}
+		if err := r.reserveExistingSignupLoginsLocked(context.Background()); err != nil {
+			for _, org := range r.orgs {
+				if org.managed {
+					_ = org.site.Server.Close()
+				}
+			}
+			return nil, err
+		}
 	}
 
 	if cfg.PlatformAdminToken != "" {
@@ -348,6 +356,10 @@ func (r *Router) orgSnapshot() []*routerOrg {
 // organization. The registry row is written first and rolled back if the
 // control plane cannot start, so a failure never claims the ID.
 func (r *Router) CreateManagedOrg(ctx context.Context, org ManagedOrg) (OrgSite, error) {
+	return r.createManagedOrg(ctx, org, "")
+}
+
+func (r *Router) createManagedOrg(ctx context.Context, org ManagedOrg, signupLogin string) (OrgSite, error) {
 	registry := r.cfg.Registry
 	if registry == nil {
 		return OrgSite{}, errManagedOrgsDisabled
@@ -372,7 +384,7 @@ func (r *Router) CreateManagedOrg(ctx context.Context, org ManagedOrg) (OrgSite,
 		}
 	}
 
-	record, err := registry.Create(ctx, org)
+	record, err := registry.create(ctx, org, signupLogin)
 	if err != nil {
 		return OrgSite{}, err
 	}

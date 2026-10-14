@@ -118,6 +118,15 @@ CREATE TABLE IF NOT EXISTS managed_organizations (
 	updated_at INTEGER NOT NULL
 );
 `,
+	// v2：公开开户名称独立于组织短名；数据库约束负责跨实例阻止重复开户。
+	`
+CREATE TABLE IF NOT EXISTS signup_login_claims (
+	login_name TEXT NOT NULL PRIMARY KEY COLLATE NOCASE CHECK (length(login_name) BETWEEN 1 AND 128),
+	org_id TEXT NOT NULL,
+	completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+	created_at INTEGER NOT NULL
+);
+`,
 }
 
 // OpenOrgRegistry opens (creating if necessary) the registry and applies
@@ -218,8 +227,19 @@ func (g *OrgRegistry) Get(ctx context.Context, id string) (ManagedOrg, bool, err
 // Create validates and stores a new managed organization, assigning its
 // timestamps.
 func (g *OrgRegistry) Create(ctx context.Context, org ManagedOrg) (ManagedOrg, error) {
+	return g.create(ctx, org, "")
+}
+
+func (g *OrgRegistry) create(ctx context.Context, org ManagedOrg, signupLogin string) (ManagedOrg, error) {
 	if err := validateManagedOrg(org); err != nil {
 		return ManagedOrg{}, err
+	}
+	if signupLogin != "" {
+		canonical, err := signupLoginKey(signupLogin)
+		if err != nil {
+			return ManagedOrg{}, err
+		}
+		signupLogin = canonical
 	}
 	domains, err := encodeStringList(org.Domains)
 	if err != nil {
@@ -228,7 +248,22 @@ func (g *OrgRegistry) Create(ctx context.Context, org ManagedOrg) (ManagedOrg, e
 
 	now := time.Now().UTC()
 	org.CreatedAt, org.UpdatedAt = now, now
-	_, err = g.db.ExecContext(ctx, `
+	transaction, err := g.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ManagedOrg{}, fmt.Errorf("control: starting organization creation: %w", err)
+	}
+	defer transaction.Rollback()
+	if signupLogin != "" {
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO signup_login_claims (login_name, org_id, created_at) VALUES (?, ?, ?)`,
+			signupLogin, org.ID, now.UnixNano()); err != nil {
+			if isUniqueViolation(err) {
+				return ManagedOrg{}, errSignupLoginTaken
+			}
+			return ManagedOrg{}, fmt.Errorf("control: reserving signup login: %w", err)
+		}
+	}
+	_, err = transaction.ExecContext(ctx, `
 		INSERT INTO managed_organizations (id, name, domains, server_url, domain, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		org.ID, org.Name, domains, org.ServerURL, org.Domain, now.UnixNano(), now.UnixNano())
@@ -237,6 +272,9 @@ func (g *OrgRegistry) Create(ctx context.Context, org ManagedOrg) (ManagedOrg, e
 			return ManagedOrg{}, ErrOrgExists
 		}
 		return ManagedOrg{}, fmt.Errorf("control: creating managed organization %q: %w", org.ID, err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return ManagedOrg{}, fmt.Errorf("control: committing organization creation: %w", err)
 	}
 	return org, nil
 }

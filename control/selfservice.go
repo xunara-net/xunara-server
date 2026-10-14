@@ -266,9 +266,9 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 	if !decodeAPIBody(w, req, &body) {
 		return
 	}
-	login := sanitizeLoginName(body.Login)
-	if login == "" {
-		writeAPIError(w, http.StatusBadRequest, "Choose a login name (letters, digits, @ . _ - +).")
+	login, err := signupLoginKey(body.Login)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "LOGIN_NAME_INVALID: choose a login of 1–128 letters, digits, @ . _ - + without leading or trailing punctuation")
 		return
 	}
 	if err := identity.CheckPassword(login, body.Password); err != nil {
@@ -284,7 +284,7 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 	ctx := req.Context()
 	orgID, err := r.selfServiceOrgID(login)
 	if err != nil {
-		writeAPIError(w, http.StatusConflict, "that login name is taken; choose another")
+		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: a network identifier could not be allocated")
 		return
 	}
 	domain := orgID + "." + cfg.cfg.DomainSuffix
@@ -294,15 +294,24 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 	}
 	serverURL := cfg.cfg.Scheme + "://" + host
 
-	site, err := r.CreateManagedOrg(ctx, ManagedOrg{
+	site, err := r.createManagedOrg(ctx, ManagedOrg{
 		ID:        orgID,
 		Name:      display,
 		Domains:   []string{domain},
 		ServerURL: serverURL,
-	})
+	}, login)
 	if err != nil {
+		if errors.Is(err, errSignupLoginTaken) {
+			writeAPIError(w, http.StatusConflict, "LOGIN_NAME_TAKEN: this login is already registered; sign in or choose another")
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if cleanupErr := r.cfg.Registry.releaseFailedSignupLogin(cleanupCtx, login, orgID); cleanupErr != nil {
+			r.log.Error("releasing failed signup login", "organization", orgID, "err", cleanupErr)
+		}
 		r.log.Error("creating a self-service organization", "organization", orgID, "err", err)
-		writeAPIError(w, http.StatusConflict, "the tenant could not be created; try again")
+		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_OUTCOME_UNKNOWN: check sign-in before attempting registration again")
 		return
 	}
 
@@ -323,6 +332,10 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 		// 只有组织成功退出后才能释放分配，不能给仍存活的租户回收网段。
 		if err := r.cfg.Plans.Delete(cleanupCtx, orgID); err != nil {
 			r.log.Error("releasing a self-service allocation failed", "organization", orgID, "err", err)
+			return
+		}
+		if err := r.cfg.Registry.releaseFailedSignupLogin(cleanupCtx, login, orgID); err != nil {
+			r.log.Error("releasing failed signup login", "organization", orgID, "err", err)
 		}
 	}
 
@@ -369,9 +382,24 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 
 	user, session, token, err := srv.claimLocalAccount(ctx, identity.ClaimTenantOwner, login, display, email, body.Password, front.sessionClientInfo(req))
 	if err != nil {
+		// 提交后响应丢失不能当作「没有账户」；先以独立上下文读取持久完成事实。
+		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		required, checkErr := srv.identity.LocalAccountSetupRequired(checkCtx)
+		cancel()
+		if checkErr != nil || !required {
+			r.log.Error("signup account outcome could not be confirmed", "organization", orgID, "err", err)
+			writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_OUTCOME_UNKNOWN: check sign-in before attempting registration again")
+			return
+		}
 		rollback(err)
 		w.Header().Set("Retry-After", "5")
 		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_UNAVAILABLE: the tenant's owner could not be initialized; try again later")
+		return
+	}
+	if err := r.cfg.Registry.completeSignupLogin(ctx, login, orgID); err != nil {
+		// Owner 已落库时不删除账户；保留占用，断连后的本人可用刚设置的密码登录。
+		r.log.Error("confirming completed signup", "organization", orgID, "err", err)
+		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_OUTCOME_UNKNOWN: check sign-in before attempting registration again")
 		return
 	}
 	if err := srv.clearSetupToken(); err != nil {
@@ -431,11 +459,8 @@ func hostCoveredByDomain(host, domain string) bool {
 	return host == domain || strings.HasSuffix(host, "."+domain)
 }
 
-// selfServiceOrgID derives the organization ID of a new tenant from the login
-// name, and makes it unique. It prefers the readable form ("alice") and falls
-// back to a random suffix, because the tenant's domain is derived from it and
-// a sign-up that fails on a name collision is a worse experience than a
-// slightly longer host name.
+// selfServiceOrgID 只解决不同用户名映射为同一个组织短名的冲突。
+// 同名账户必须由注册表的唯一约束拒绝，不能用随机组织后缀绕过。
 func (r *Router) selfServiceOrgID(login string) (string, error) {
 	base := orgIDFromLogin(login)
 	if base == "" {

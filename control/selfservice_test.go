@@ -433,20 +433,19 @@ func TestSelfServiceSignupOutsideCookieCoverageSkipsHandoff(t *testing.T) {
 	}
 }
 
-// A second account with the same login name gets its own tenant with a
-// derived ID: the login name is tenant-scoped, the domain is not.
+// 不同用户名可能映射到相同组织短名，但不能因此误判为同一个账户。
 func TestSelfServiceSignupDerivesUniqueOrganization(t *testing.T) {
 	router, _ := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "xunara.test"})
 	handler := router.Handler()
 
 	first := postJSONAtHost(t, handler, "app.xunara.test", selfServiceSignupPath, map[string]string{
-		"login": "bob", "password": "correct horse battery staple",
+		"login": "bob.smith", "password": "correct horse battery staple",
 	})
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first signup = %d (%s), want 201", first.Code, first.Body.String())
 	}
 	second := postJSONAtHost(t, handler, "app.xunara.test", selfServiceSignupPath, map[string]string{
-		"login": "bob", "password": "correct horse battery staple",
+		"login": "bob_smith", "password": "correct horse battery staple",
 	})
 	if second.Code != http.StatusCreated {
 		t.Fatalf("second signup = %d (%s), want 201", second.Code, second.Body.String())
@@ -519,6 +518,13 @@ func TestSelfServiceSignupRollsBackOnQuota(t *testing.T) {
 		if strings.HasPrefix(org.site.ID, "carol") {
 			t.Fatalf("a rolled-back tenant is still served: %+v", org.site.ID)
 		}
+	}
+	// 初始化没有完成且组织已经退出时，才允许本人重新尝试，不能遗留名称占用。
+	retry := postJSONAtHost(t, handler, "app.xunara.test", selfServiceSignupPath, map[string]string{
+		"login": "CAROL", "password": "correct horse battery staple",
+	})
+	if retry.Code != http.StatusForbidden || !strings.Contains(retry.Body.String(), "USER_LIMIT_REACHED") {
+		t.Fatalf("retry after rollback = %d (%s)", retry.Code, retry.Body.String())
 	}
 }
 

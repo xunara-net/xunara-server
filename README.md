@@ -78,6 +78,10 @@ go build ./cmd/xunara-agent     # 节点 Agent
 多租户部署使用 `-org-config <file>` 描述组织与域名。在其中配置 `self_service`
 后，入口站开放自助开租户：访客注册即得到自己的 tailnet（ADR-0007）。
 
+公开开户用户名全平台大小写不敏感唯一：同名重试返回 409，不再生成随机后缀
+的副本网络。旧同名账户保持独立，不自动删除或合并。组织注册表仅追加 v2；
+版本、失败补偿和用户默认池选择见[操作说明](docs/signup-network-settings.md)。
+
 ```json
 {
   "organizations": [
