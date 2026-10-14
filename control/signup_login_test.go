@@ -323,3 +323,68 @@ func TestSelfServicePreservesCommittedOwnerWhenClaimAcknowledgementIsLost(t *tes
 		})
 	}
 }
+
+func TestPendingSignupFencesOrganizationIDAcrossConnectionsUntilCleanup(t *testing.T) {
+	dir := t.TempDir()
+	first := newTestRegistry(t, dir)
+	second := newTestRegistry(t, dir)
+	t.Cleanup(func() { first.Close(); second.Close() })
+	organization := signupTestOrg("pending-id")
+	if _, err := first.create(t.Context(), organization, "original-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Delete(t.Context(), organization.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.create(t.Context(), organization, "replacement-owner"); !errors.Is(err, ErrOrgExists) {
+		t.Fatalf("another connection reused an organization before cleanup finished: %v", err)
+	}
+	if reserved, err := second.signupLoginReserved(t.Context(), "replacement-owner"); err != nil || reserved {
+		t.Fatal("rejected ID reuse leaked a new name reservation")
+	}
+	if _, err := second.Create(t.Context(), organization); !errors.Is(err, ErrOrgExists) {
+		t.Fatal("platform creation bypassed pending signup ID protection")
+	}
+	if err := first.releaseFailedSignupLogin(t.Context(), "original-owner", organization.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.create(t.Context(), organization, "replacement-owner"); err != nil {
+		t.Fatalf("completed safe cleanup still blocks organization reuse: %v", err)
+	}
+}
+
+func TestConcurrentSignupLocalIDCollisionReportsNameConflictAndPreservesClaim(t *testing.T) {
+	router, _ := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "xunara.test"})
+	organization := signupTestOrg("pending-owner")
+	if _, err := router.createManagedOrg(t.Context(), organization, "pending-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.createManagedOrg(t.Context(), organization, "PENDING-OWNER"); !errors.Is(err, errSignupLoginTaken) {
+		t.Fatalf("a preselected ID race was not reported as duplicate signup: %v", err)
+	}
+	if reserved, err := router.cfg.Registry.signupLoginReserved(t.Context(), "pending-owner"); err != nil || !reserved {
+		t.Fatal("a duplicate request released the original pending claim")
+	}
+}
+
+func TestFailedSignupFactorySafelyReleasesOnlyItsOwnClaim(t *testing.T) {
+	router, _ := selfServiceRouter(t, &SelfServiceConfig{DomainSuffix: "xunara.test"})
+	registry := router.cfg.Registry
+	factory := registry.cfg.NewServer
+	registry.cfg.NewServer = func(ManagedOrg, string) (*Server, error) {
+		return nil, errors.New("fixture: server construction failed")
+	}
+	body := map[string]string{"login": "factory-retry", "password": "correct horse battery staple"}
+	failed := postJSONAtHost(t, router.Handler(), "app.xunara.test", selfServiceSignupPath, body)
+	if failed.Code != http.StatusServiceUnavailable {
+		t.Fatalf("factory failure = %d", failed.Code)
+	}
+	if reserved, err := registry.signupLoginReserved(t.Context(), "factory-retry"); err != nil || reserved {
+		t.Fatal("failed construction left a name reservation after safe cleanup")
+	}
+	registry.cfg.NewServer = factory
+	retry := postJSONAtHost(t, router.Handler(), "app.xunara.test", selfServiceSignupPath, body)
+	if retry.Code != http.StatusCreated {
+		t.Fatalf("safe retry after construction failure = %d (%s)", retry.Code, retry.Body.String())
+	}
+}

@@ -74,6 +74,12 @@ func (registry *OrgRegistry) completeSignupLogin(ctx context.Context, login, org
 	return nil
 }
 
+func (registry *OrgRegistry) signupLoginReserved(ctx context.Context, login string) (bool, error) {
+	var reserved bool
+	err := registry.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM signup_login_claims WHERE login_name = ?)", login).Scan(&reserved)
+	return reserved, err
+}
+
 // releaseFailedSignupLogin 只能释放本次未完成开户，且组织必须已从注册表移除。
 // 已完成账户或清理失败的名称仍占用，避免旧身份被新的公开账户接管。
 func (registry *OrgRegistry) releaseFailedSignupLogin(ctx context.Context, login, orgID string) error {

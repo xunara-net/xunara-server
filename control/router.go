@@ -372,6 +372,15 @@ func (r *Router) createManagedOrg(ctx context.Context, org ManagedOrg, signupLog
 		return OrgSite{}, err
 	}
 	if r.orgByIDLocked(org.ID) != nil {
+		if signupLogin != "" {
+			reserved, err := registry.signupLoginReserved(ctx, signupLogin)
+			if err != nil {
+				return OrgSite{}, err
+			}
+			if reserved {
+				return OrgSite{}, errSignupLoginTaken
+			}
+		}
 		return OrgSite{}, orgConflictf("organization %q already exists", org.ID)
 	}
 	patterns, err := normalizeManagedDomains(org.Domains)
@@ -391,12 +400,12 @@ func (r *Router) createManagedOrg(ctx context.Context, org ManagedOrg, signupLog
 
 	server, err := registry.NewServer(record)
 	if err != nil {
-		r.rollbackManagedOrg(ctx, record.ID, nil)
+		r.rollbackManagedOrg(ctx, record.ID, nil, signupLogin)
 		return OrgSite{}, err
 	}
 	site := OrgSite{ID: record.ID, Name: record.Name, Domains: record.Domains, Server: server}
 	if err := r.register(site, true); err != nil {
-		r.rollbackManagedOrg(ctx, record.ID, server)
+		r.rollbackManagedOrg(ctx, record.ID, server, signupLogin)
 		return OrgSite{}, err
 	}
 	r.orgs[len(r.orgs)-1].record = record
@@ -518,12 +527,27 @@ func (r *Router) removeOrgLocked(target *routerOrg) {
 // rollbackManagedOrg undoes a partially created managed organization: the
 // control plane is closed (when one was built) and the registry row removed.
 // The caller holds mu.
-func (r *Router) rollbackManagedOrg(ctx context.Context, id string, server *Server) {
+func (r *Router) rollbackManagedOrg(ctx context.Context, id string, server *Server, signupLogin string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	if server != nil {
 		_ = server.Close()
 	}
-	if err := r.cfg.Registry.Delete(ctx, id); err != nil && !errors.Is(err, ErrOrgNotFound) {
+	if err := r.cfg.Registry.Delete(cleanupCtx, id); err != nil && !errors.Is(err, ErrOrgNotFound) {
 		r.log.Error("rolling back a managed organization row", "organization", id, "err", err)
+		return
+	}
+	// 仅在本次确实提交了组织记录的路径调用，不替失败的冲突请求清理别人的占用。
+	if signupLogin != "" {
+		if r.cfg.Plans != nil {
+			if err := r.cfg.Plans.Delete(cleanupCtx, id); err != nil {
+				r.log.Error("releasing failed organization allocation", "organization", id, "err", err)
+				return
+			}
+		}
+		if err := r.cfg.Registry.releaseFailedSignupLogin(cleanupCtx, signupLogin, id); err != nil {
+			r.log.Error("releasing failed signup login", "organization", id, "err", err)
+		}
 	}
 }
 

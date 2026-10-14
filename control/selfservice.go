@@ -305,11 +305,6 @@ func (r *Router) handleSelfServiceSignup(w http.ResponseWriter, req *http.Reques
 			writeAPIError(w, http.StatusConflict, "LOGIN_NAME_TAKEN: this login is already registered; sign in or choose another")
 			return
 		}
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		if cleanupErr := r.cfg.Registry.releaseFailedSignupLogin(cleanupCtx, login, orgID); cleanupErr != nil {
-			r.log.Error("releasing failed signup login", "organization", orgID, "err", cleanupErr)
-		}
 		r.log.Error("creating a self-service organization", "organization", orgID, "err", err)
 		writeAPIError(w, http.StatusServiceUnavailable, "REGISTRATION_OUTCOME_UNKNOWN: check sign-in before attempting registration again")
 		return

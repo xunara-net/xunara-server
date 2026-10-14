@@ -263,6 +263,16 @@ func (g *OrgRegistry) create(ctx context.Context, org ManagedOrg, signupLogin st
 			return ManagedOrg{}, fmt.Errorf("control: reserving signup login: %w", err)
 		}
 	}
+	// 未完成名称也保留组织 ID：旧组织移除到套餐清理之间不能被另一轮开户复用。
+	var pending bool
+	if err := transaction.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM signup_login_claims WHERE org_id = ? AND completed = 0 AND login_name <> ? COLLATE NOCASE)`,
+		org.ID, signupLogin).Scan(&pending); err != nil {
+		return ManagedOrg{}, fmt.Errorf("control: checking pending organization creation: %w", err)
+	}
+	if pending {
+		return ManagedOrg{}, ErrOrgExists
+	}
 	_, err = transaction.ExecContext(ctx, `
 		INSERT INTO managed_organizations (id, name, domains, server_url, domain, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
