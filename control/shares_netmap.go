@@ -88,11 +88,7 @@ func (s *Server) sharePeersFor(self state.Node) *shareNetmap {
 		TargetUser: int64(self.UserID),
 		Statuses:   []string{ShareAccepted},
 	}) {
-		source := s.shareDir.Org(share.SourceOrg)
-		if source == nil || source.ShareTKAEnabled() {
-			continue
-		}
-		node, ok := source.ShareNode(state.NodeID(share.SourceNode))
+		source, _, node, ok := s.boundShareParties(share)
 		if !ok {
 			continue
 		}
@@ -106,11 +102,14 @@ func (s *Server) sharePeersFor(self state.Node) *shareNetmap {
 		SourceNode: int64(self.ID),
 		Statuses:   []string{ShareAccepted},
 	}) {
-		target := s.shareDir.Org(share.TargetOrg)
-		if target == nil || target.ShareTKAEnabled() {
+		_, target, _, ok := s.boundShareParties(share)
+		if !ok {
 			continue
 		}
 		for _, node := range target.ShareNodesOfUser(tailcfg.UserID(share.AcceptedBy)) {
+			if node.Tags != nil {
+				continue
+			}
 			s.addForeignNode(sn, self, share.TargetOrg, node, share.AcceptedBy, true, target)
 		}
 	}
@@ -166,9 +165,11 @@ func (s *Server) addForeignNode(sn *shareNetmap, self state.Node, remoteOrg stri
 	}
 
 	foreign := state.Node{
-		ID:        syntheticID,
-		StableID:  shareStableID(remoteOrg, node.StableID),
-		UserID:    ownerSynthetic,
+		ID:       syntheticID,
+		StableID: shareStableID(remoteOrg, node.StableID),
+		UserID:   ownerSynthetic,
+		// 只投影 WireGuard/发现所需的公钥，不生成新身份，也不传递任何私钥。
+		NodeKey: node.NodeKey, MachineKey: node.MachineKey, DiscoKey: node.DiscoKey,
 		Hostname:  shareHostname(node.Hostname, remoteOrg),
 		DNSName:   shareHostname(strings.TrimSuffix(node.FQDN(""), "."), remoteOrg),
 		IPv4:      masqV4,
@@ -181,6 +182,16 @@ func (s *Server) addForeignNode(sn *shareNetmap, self state.Node, remoteOrg stri
 		Expiry:    node.Expiry,
 		Created:   node.Created,
 		Method:    node.Method,
+	}
+	for index, existing := range sn.nodes {
+		if existing.ID != syntheticID {
+			continue
+		}
+		// 互相分享只投影一次；反向授权允许该节点主动连接，不能生成重复 peer ID。
+		if shareeNode {
+			sn.nodes[index].Hostinfo = shareHostinfo(node.Hostinfo, true)
+		}
+		return
 	}
 
 	sn.nodes = append(sn.nodes, foreign)

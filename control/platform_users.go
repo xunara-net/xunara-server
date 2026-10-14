@@ -216,6 +216,7 @@ func (router *Router) handlePlatformUserStatus(writer http.ResponseWriter, reque
 		"org": orgID, "id": uint64(result.User.ID), "disabled": !result.User.DisabledAt.IsZero(),
 		"disabledReason": result.User.DisabledReason, "updatedAt": result.User.UpdatedAt, "revoked": result.RevokedSessions,
 	}
+	server.notifyUserShares(result.User.ID)
 	if !result.User.DisabledAt.IsZero() {
 		payload["disabledAt"] = result.User.DisabledAt
 	}
@@ -276,6 +277,7 @@ func (r *Router) handlePlatformDeleteUser(w http.ResponseWriter, req *http.Reque
 		}
 		return
 	}
+	server.notifyUserShares(userID)
 	if _, err := server.identity.RevokeUserSessions(userID, "account deleted by the platform operator"); err != nil {
 		r.log.Warn("revoking sessions of a deleted account", "err", err)
 	}

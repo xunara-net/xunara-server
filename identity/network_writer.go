@@ -14,6 +14,21 @@ import (
 
 var ErrNetworkWriterForbidden = errors.New("identity: network administrator required")
 
+// 分享接受是人类账户行为，不要求管理角色；仍需锁内复核会话与临时密码限制。
+func CheckAccountSession(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, sessionID string, now time.Time) error {
+	if err := lockAccountSession(ctx, tx, userID, sessionID, now); err != nil {
+		return err
+	}
+	var required bool
+	if err := tx.QueryRowContext(ctx, "SELECT password_change_required FROM users WHERE id = ?", int64(userID)).Scan(&required); err != nil {
+		return err
+	}
+	if required {
+		return ErrNetworkWriterForbidden
+	}
+	return nil
+}
+
 // CheckNetworkWriter 复用持久会话校验；事务内再次确认角色，避免 HTTP 快照降权竞争。
 func CheckNetworkWriter(ctx context.Context, tx *sql.Tx, userID tailcfg.UserID, sessionID, apiKeyID string, now time.Time) error {
 	if (sessionID == "") == (apiKeyID == "") {

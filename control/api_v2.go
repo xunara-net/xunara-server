@@ -128,6 +128,11 @@ func (s *Server) apiV2Router() http.Handler {
 	r.Post("/shares/{id}/accept", s.handleAPIV2AcceptShare)
 	r.Post("/shares/{id}/reject", s.handleAPIV2RejectShare)
 	r.Delete("/shares/{id}", s.handleAPIV2RevokeShare)
+	r.Get("/device-shares", s.handleAPIDeviceShares)
+	r.Post("/device-shares", s.handleAPICreateDeviceShare)
+	r.Post("/device-shares/{id}/accept", s.handleAPIAcceptDeviceShare)
+	r.Post("/device-shares/{id}/reject", s.handleAPIRejectDeviceShare)
+	r.Delete("/device-shares/{id}", s.handleAPIRevokeDeviceShare)
 
 	return r
 }

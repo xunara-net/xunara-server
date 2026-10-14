@@ -38,6 +38,8 @@ type ShareOrg interface {
 	ShareServices(nodeID state.NodeID) []state.Service
 	// ShareUser returns one user.
 	ShareUser(userID tailcfg.UserID) (identity.User, bool)
+	ShareGeneration() string
+	ShareIdentityMatches(userID tailcfg.UserID, provider, subject string) bool
 	// ShareOnline reports whether a node holds a live control session.
 	ShareOnline(nodeID state.NodeID) bool
 	// ShareTKAEnabled reports whether the organization enforces tailnet lock.
@@ -57,6 +59,10 @@ type ShareDirectory interface {
 	// Org returns the organization with this ID, or nil when it is not hosted
 	// here.
 	Org(id string) ShareOrg
+}
+
+type AccountShareDirectory interface {
+	ResolveShareAccount(ctx context.Context, login string) (ShareOrg, identity.User, error)
 }
 
 // Sharing errors, mapped to HTTP status codes by the API and console layers.
@@ -83,7 +89,9 @@ var (
 	errShareDecision = errors.New("share is not in a state for this action")
 	// errShareForbidden is returned when the caller could see the share but
 	// may not administer this side of it.
-	errShareForbidden = errors.New("not allowed to revoke this share")
+	errShareForbidden      = errors.New("not allowed to revoke this share")
+	errShareAccountUnknown = errors.New("SHARE_RECIPIENT_UNAVAILABLE: recipient is unavailable or ambiguous; verify the login name")
+	errShareUnavailable    = errors.New("SHARE_UNAVAILABLE: device or account changed; create a new share")
 )
 
 // shareNodeView is the summary of a shared machine the other side may see.
@@ -157,6 +165,40 @@ func (s *Server) ShareServices(nodeID state.NodeID) []state.Service {
 // ShareUser implements [ShareOrg].
 func (s *Server) ShareUser(userID tailcfg.UserID) (identity.User, bool) {
 	return s.identity.GetUser(userID)
+}
+
+func (s *Server) ShareGeneration() string { return s.noiseKey.Public().String() }
+
+func (s *Server) ShareIdentityMatches(userID tailcfg.UserID, provider, subject string) bool {
+	for _, link := range s.identity.ListExternalIdentities(userID) {
+		if link.ProviderID == provider && link.Subject == subject {
+			return true
+		}
+	}
+	return false
+}
+
+// 登录名仅用于定位现存人类账户；重复名字不按默认网络、邮箱或密码猜测。
+func (r *Router) ResolveShareAccount(ctx context.Context, login string) (ShareOrg, identity.User, error) {
+	var target ShareOrg
+	var user identity.User
+	for _, org := range r.orgSnapshot() {
+		candidate, err := org.site.Server.identity.LookupUserByLoginName(ctx, login)
+		if errors.Is(err, identity.ErrUserNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, identity.User{}, err
+		}
+		if target != nil {
+			return nil, identity.User{}, errShareAccountUnknown
+		}
+		target, user = org.site.Server, candidate
+	}
+	if target == nil || !user.DisabledAt.IsZero() {
+		return nil, identity.User{}, errShareAccountUnknown
+	}
+	return target, user, nil
 }
 
 // ShareOnline implements [ShareOrg].
@@ -248,13 +290,19 @@ func (s *Server) createShare(ctx context.Context, actor apiPrincipal, nodeRef, t
 		return Share{}, err
 	}
 
+	creator, err := s.identity.LookupUser(ctx, actor.UserID)
+	if err != nil {
+		return Share{}, err
+	}
 	share, err := s.shares.CreateShare(ctx, Share{
-		SourceOrg:  s.Organization().ID,
-		SourceNode: int64(node.ID),
-		TargetOrg:  strings.TrimSpace(targetOrg),
-		Provider:   strings.TrimSpace(provider),
-		Subject:    strings.TrimSpace(subject),
-		CreatedBy:  int64(actor.UserID),
+		SourceOrg:        s.Organization().ID,
+		SourceNode:       int64(node.ID),
+		TargetOrg:        strings.TrimSpace(targetOrg),
+		Provider:         strings.TrimSpace(provider),
+		Subject:          strings.TrimSpace(subject),
+		CreatedBy:        int64(actor.UserID),
+		SourceGeneration: s.ShareGeneration(), SourceStableID: node.StableID, SourceUserCreated: creator.CreatedAt.UnixNano(),
+		TargetGeneration: s.shareDir.Org(strings.TrimSpace(targetOrg)).ShareGeneration(),
 	}, time.Now().UTC())
 	if err != nil {
 		return Share{}, err
@@ -281,10 +329,10 @@ func (s *Server) shareForCaller(id string, actor apiPrincipal) (Share, error) {
 	if !ok {
 		return Share{}, errShareNotMine
 	}
-	if share.SourceOrg == s.Organization().ID {
+	if share.SourceOrg == s.Organization().ID && share.SourceGeneration == s.ShareGeneration() {
 		return share, nil
 	}
-	if share.TargetOrg == s.Organization().ID && s.callerMatchesShare(share, actor) {
+	if share.TargetOrg == s.Organization().ID && share.TargetGeneration == s.ShareGeneration() && s.callerMatchesShare(share, actor) {
 		return share, nil
 	}
 	return Share{}, errShareNotMine
@@ -293,6 +341,16 @@ func (s *Server) shareForCaller(id string, actor apiPrincipal) (Share, error) {
 // callerMatchesShare reports whether the caller's user holds the share's
 // target identity. An accepted share additionally requires the bound user.
 func (s *Server) callerMatchesShare(share Share, actor apiPrincipal) bool {
+	if share.TargetGeneration != s.ShareGeneration() {
+		return false
+	}
+	if share.TargetKind == ShareTargetAccount {
+		if actor.Kind != "session" || share.TargetAccount != int64(actor.UserID) {
+			return false
+		}
+		user, ok := s.identity.GetUser(actor.UserID)
+		return ok && user.DisabledAt.IsZero() && user.CreatedAt.UnixNano() == share.TargetAccountCreated
+	}
 	if share.Status == ShareAccepted && share.AcceptedBy != int64(actor.UserID) {
 		return false
 	}
@@ -313,6 +371,12 @@ func (s *Server) acceptShare(ctx context.Context, actor apiPrincipal, id string)
 	share, ok := s.shares.GetShare(id)
 	if !ok || share.TargetOrg != s.Organization().ID || !s.callerMatchesShare(share, actor) {
 		return Share{}, errShareNotMine
+	}
+	if share.TargetKind == ShareTargetAccount {
+		return Share{}, errShareForbidden
+	}
+	if _, _, _, ok := s.boundShareParties(share); !ok {
+		return Share{}, errShareUnavailable
 	}
 	if s.TKAStatus().Enabled {
 		return Share{}, errShareTKA
@@ -343,6 +407,9 @@ func (s *Server) rejectShare(ctx context.Context, actor apiPrincipal, id string)
 	if !ok || share.TargetOrg != s.Organization().ID || !s.callerMatchesShare(share, actor) {
 		return Share{}, errShareNotMine
 	}
+	if share.TargetKind == ShareTargetAccount {
+		return Share{}, errShareForbidden
+	}
 	updated, err := s.shares.RejectShare(id, s.Organization().ID, int64(actor.UserID), time.Now().UTC())
 	if err != nil {
 		if errors.Is(err, ErrShareState) {
@@ -362,6 +429,9 @@ func (s *Server) revokeShare(ctx context.Context, actor apiPrincipal, id string)
 	share, err := s.shareForCaller(id, actor)
 	if err != nil {
 		return Share{}, err
+	}
+	if share.TargetKind == ShareTargetAccount {
+		return Share{}, errShareForbidden
 	}
 	if share.SourceOrg == s.Organization().ID && !actor.Role.CanWrite() {
 		// Revoking an outgoing share is administration; a member may only
@@ -451,27 +521,21 @@ func (s *Server) shareView(share Share, direction string) shareView {
 		Subject:   share.Subject,
 		CreatedAt: share.CreatedAt,
 	}
-	if share.SourceOrg == s.Organization().ID {
-		if node, ok := s.store.GetNodeByID(state.NodeID(share.SourceNode)); ok {
+	view.Node = &shareNodeView{Missing: true}
+	if source := s.shareDir.Org(share.SourceOrg); source != nil && source.ShareGeneration() == share.SourceGeneration {
+		if node, ok := source.ShareNode(state.NodeID(share.SourceNode)); ok && node.StableID == share.SourceStableID {
 			view.Node = shareNodeSummary(node, false)
-		} else {
-			view.Node = &shareNodeView{Missing: true}
 		}
-		if creator, ok := s.identity.GetUser(tailcfg.UserID(share.CreatedBy)); ok {
-			view.CreatedBy = creator.LoginName
-		}
-	} else if source := s.shareDir.Org(share.SourceOrg); source != nil {
-		if node, ok := source.ShareNode(state.NodeID(share.SourceNode)); ok {
-			view.Node = shareNodeSummary(node, false)
-		} else {
-			view.Node = &shareNodeView{Missing: true}
-		}
-		if creator, ok := source.ShareUser(tailcfg.UserID(share.CreatedBy)); ok {
+		if creator, ok := source.ShareUser(tailcfg.UserID(share.CreatedBy)); ok && creator.CreatedAt.UnixNano() == share.SourceUserCreated {
 			view.CreatedBy = creator.LoginName
 		}
 	}
-	if share.AcceptedBy != 0 {
-		if user, ok := s.identity.GetUser(tailcfg.UserID(share.AcceptedBy)); ok {
+	targetID := share.AcceptedBy
+	if share.TargetKind == ShareTargetAccount {
+		targetID = share.TargetAccount
+	}
+	if target := s.shareDir.Org(share.TargetOrg); target != nil && target.ShareGeneration() == share.TargetGeneration && targetID != 0 {
+		if user, ok := target.ShareUser(tailcfg.UserID(targetID)); ok && (share.TargetKind != ShareTargetAccount || user.CreatedAt.UnixNano() == share.TargetAccountCreated) {
 			view.TargetUser = user.LoginName
 		}
 	}
@@ -515,16 +579,33 @@ func shareNodeSummary(node state.Node, missing bool) *shareNodeView {
 func (s *Server) listShares(direction string, actor apiPrincipal) ([]Share, error) {
 	switch direction {
 	case "outgoing":
-		return s.shares.ListShares(ShareFilter{SourceOrg: s.Organization().ID}), nil
+		var out []Share
+		for _, share := range s.shares.ListShares(ShareFilter{SourceOrg: s.Organization().ID}) {
+			if share.SourceGeneration == s.ShareGeneration() {
+				out = append(out, share)
+			}
+		}
+		return out, nil
 	case "incoming":
 		out := make([]Share, 0, 4)
 		seen := make(map[string]bool)
+		if actor.Kind == "session" {
+			for _, share := range s.shares.ListShares(ShareFilter{TargetOrg: s.Organization().ID, TargetKind: ShareTargetAccount, TargetAccount: int64(actor.UserID)}) {
+				if s.callerMatchesShare(share, actor) {
+					out = append(out, share)
+					seen[share.ID] = true
+				}
+			}
+		}
 		for _, ei := range s.identity.ListExternalIdentities(actor.UserID) {
 			for _, share := range s.shares.ListShares(ShareFilter{
 				TargetOrg: s.Organization().ID,
 				Provider:  ei.ProviderID,
 				Subject:   ei.Subject,
 			}) {
+				if share.TargetGeneration != s.ShareGeneration() {
+					continue
+				}
 				if share.Status == ShareAccepted && share.AcceptedBy != int64(actor.UserID) {
 					// Another user in the same organization completed an
 					// identity-colliding invite; it is not this caller's.
@@ -542,5 +623,51 @@ func (s *Server) listShares(direction string, actor apiPrincipal) ([]Share, erro
 		return out, nil
 	default:
 		return nil, errShareIdentityInvalid
+	}
+}
+
+// 控制面每次投影都校验双方实例和账户，不能只相信曾经 accepted 的记录。
+func (s *Server) boundShareParties(share Share) (ShareOrg, ShareOrg, state.Node, bool) {
+	source, target := s.shareDir.Org(share.SourceOrg), s.shareDir.Org(share.TargetOrg)
+	if source == nil || target == nil || source.ShareGeneration() != share.SourceGeneration || target.ShareGeneration() != share.TargetGeneration || source.ShareTKAEnabled() || target.ShareTKAEnabled() {
+		return nil, nil, state.Node{}, false
+	}
+	node, ok := source.ShareNode(state.NodeID(share.SourceNode))
+	if !ok || node.StableID != share.SourceStableID {
+		return nil, nil, state.Node{}, false
+	}
+	creator, ok := source.ShareUser(tailcfg.UserID(share.CreatedBy))
+	if !ok || !creator.DisabledAt.IsZero() || creator.CreatedAt.UnixNano() != share.SourceUserCreated {
+		return nil, nil, state.Node{}, false
+	}
+	owner, ok := source.ShareUser(node.UserID)
+	if !ok || !owner.DisabledAt.IsZero() {
+		return nil, nil, state.Node{}, false
+	}
+	userID := share.AcceptedBy
+	if share.TargetKind == ShareTargetAccount {
+		userID = share.TargetAccount
+	}
+	if userID != 0 {
+		user, ok := target.ShareUser(tailcfg.UserID(userID))
+		if !ok || !user.DisabledAt.IsZero() || (share.TargetKind == ShareTargetAccount && (user.CreatedAt.UnixNano() != share.TargetAccountCreated || (share.Status == ShareAccepted && share.AcceptedBy != userID))) {
+			return nil, nil, state.Node{}, false
+		}
+		if share.TargetKind == ShareTargetExternal && !target.ShareIdentityMatches(user.ID, share.Provider, share.Subject) {
+			return nil, nil, state.Node{}, false
+		}
+	}
+	return source, target, node, true
+}
+
+func (s *Server) notifyUserShares(userID tailcfg.UserID) {
+	if !s.sharingEnabled() {
+		return
+	}
+	for _, share := range s.shares.ListShares(ShareFilter{SourceOrg: s.Organization().ID, Statuses: []string{ShareAccepted}}) {
+		s.notifyShareParties(share)
+	}
+	for _, share := range s.shares.ListShares(ShareFilter{TargetOrg: s.Organization().ID, TargetUser: int64(userID), Statuses: []string{ShareAccepted}}) {
+		s.notifyShareParties(share)
 	}
 }

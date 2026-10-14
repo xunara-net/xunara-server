@@ -198,7 +198,7 @@ func (s *Server) packetFilterForNodes(self state.Node, nodes []state.Node) []tai
 			return []tailcfg.FilterRule{}
 		}
 	}
-	return restrictFilterToSignedPeers(rules, s.unsignedPeers(nodes), nodes)
+	return restrictShareFilter(restrictFilterToSignedPeers(rules, s.unsignedPeers(nodes), nodes), nodes)
 }
 
 // netmapNodes is the node set one netmap build sees: this organization's own

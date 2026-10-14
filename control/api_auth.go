@@ -159,6 +159,9 @@ func (s *Server) apiCapabilities() []string {
 	}
 	if s.sharingEnabled() {
 		caps = append(caps, "sharing")
+		if _, ok := s.shareDir.(AccountShareDirectory); ok {
+			caps = append(caps, "sharing.accounts")
+		}
 	}
 	if s.webhooksEnabled() {
 		caps = append(caps, "webhooks")

@@ -31,6 +31,8 @@ type apiShareCreateRequest struct {
 // shareAPIError maps service errors to HTTP responses.
 func shareAPIError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errShareForbidden):
+		writeAPIError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, errShareDisabled),
 		errors.Is(err, errShareNodeUnknown),
 		errors.Is(err, errShareOrgUnknown),
@@ -38,7 +40,7 @@ func shareAPIError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, errShareIdentityInvalid), errors.Is(err, errShareSelf):
 		writeAPIError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, errShareTKA), errors.Is(err, errShareDecision), errors.Is(err, ErrShareExists):
+	case errors.Is(err, errShareTKA), errors.Is(err, errShareUnavailable), errors.Is(err, errShareDecision), errors.Is(err, ErrShareExists):
 		writeAPIError(w, http.StatusConflict, err.Error())
 	default:
 		writeAPIError(w, http.StatusInternalServerError, "internal error")
@@ -79,7 +81,7 @@ func (s *Server) handleAPIV2Shares(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIV2CreateShare implements POST /api/v2/shares.
 func (s *Server) handleAPIV2CreateShare(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeWrite)
+	principal, ok := s.requireShareMutation(w, r, identity.ScopeWrite)
 	if !ok {
 		return
 	}
@@ -118,7 +120,7 @@ func (s *Server) handleAPIV2Share(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIV2AcceptShare implements POST /api/v2/shares/{id}/accept.
 func (s *Server) handleAPIV2AcceptShare(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeRead)
+	principal, ok := s.requireShareMutation(w, r, identity.ScopeRead)
 	if !ok {
 		return
 	}
@@ -132,7 +134,7 @@ func (s *Server) handleAPIV2AcceptShare(w http.ResponseWriter, r *http.Request) 
 
 // handleAPIV2RejectShare implements POST /api/v2/shares/{id}/reject.
 func (s *Server) handleAPIV2RejectShare(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeRead)
+	principal, ok := s.requireShareMutation(w, r, identity.ScopeRead)
 	if !ok {
 		return
 	}
@@ -146,7 +148,7 @@ func (s *Server) handleAPIV2RejectShare(w http.ResponseWriter, r *http.Request) 
 
 // handleAPIV2RevokeShare implements DELETE /api/v2/shares/{id}.
 func (s *Server) handleAPIV2RevokeShare(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.requireScope(w, r, identity.ScopeRead)
+	principal, ok := s.requireShareMutation(w, r, identity.ScopeRead)
 	if !ok {
 		return
 	}
@@ -160,6 +162,18 @@ func (s *Server) handleAPIV2RevokeShare(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, s.shareView(share, s.shareDirection(share)))
+}
+
+func (s *Server) requireShareMutation(w http.ResponseWriter, r *http.Request, scope string) (apiPrincipal, bool) {
+	actor, ok := s.requireScope(w, r, scope)
+	if !ok {
+		return apiPrincipal{}, false
+	}
+	if actor.Kind == "session" && !checkCSRFHeader(r, s.accountSessionToken(r)) {
+		writeAPIError(w, http.StatusForbidden, "CSRF_INVALID: reload before managing shares")
+		return apiPrincipal{}, false
+	}
+	return actor, true
 }
 
 // shareDirection reports how this organization participates in a share.

@@ -29,12 +29,14 @@ func newTestShareRegistryAt(t *testing.T, path string) *ShareRegistry {
 // registryShare builds a valid pending share request.
 func registryShare() Share {
 	return Share{
-		SourceOrg:  "acme",
-		SourceNode: 7,
-		TargetOrg:  "globex",
-		Provider:   "oidc:corp",
-		Subject:    "u-1",
-		CreatedBy:  3,
+		SourceOrg:        "acme",
+		SourceNode:       7,
+		TargetOrg:        "globex",
+		Provider:         "oidc:corp",
+		Subject:          "u-1",
+		CreatedBy:        3,
+		SourceGeneration: "acme-generation", SourceStableID: "acme-node-7", SourceUserCreated: 1,
+		TargetGeneration: "globex-generation",
 	}
 }
 

@@ -44,11 +44,7 @@ func (s *Server) sharedServiceDNSRecordsFor(self state.Node) []state.DNSRecord {
 		TargetUser: int64(self.UserID),
 		Statuses:   []string{ShareAccepted},
 	}) {
-		source := s.shareDir.Org(share.SourceOrg)
-		if source == nil || source.ShareTKAEnabled() {
-			continue
-		}
-		node, ok := source.ShareNode(state.NodeID(share.SourceNode))
+		source, _, node, ok := s.boundShareParties(share)
 		if !ok {
 			continue
 		}

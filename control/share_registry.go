@@ -34,7 +34,9 @@ const (
 	// ShareRejected is terminal: the target declined.
 	ShareRejected = "rejected"
 	// ShareRevoked is terminal: either side withdrew.
-	ShareRevoked = "revoked"
+	ShareRevoked        = "revoked"
+	ShareTargetExternal = "external"
+	ShareTargetAccount  = "account"
 )
 
 // Share lifecycle errors, mapped by the API layer to HTTP status codes.
@@ -63,6 +65,14 @@ type Share struct {
 	SourceNode int64
 	// TargetOrg is the organization the target user must belong to.
 	TargetOrg string
+	// 实例身份与 stable ID 防止同名租户、数字节点 ID 被重新使用后继承分享。
+	SourceGeneration     string
+	SourceStableID       string
+	SourceUserCreated    int64
+	TargetGeneration     string
+	TargetKind           string
+	TargetAccount        int64
+	TargetAccountCreated int64
 	// Provider and Subject are the target identity within TargetOrg
 	// (AGENTS.md section 6: the identity key, never an email).
 	Provider string
@@ -91,12 +101,14 @@ func (s Share) Active() bool {
 // ShareFilter selects shares for listing. Zero fields do not filter, except
 // TargetUser: when set it requires an accepted share bound to that user.
 type ShareFilter struct {
-	SourceOrg  string
-	SourceNode int64
-	TargetOrg  string
-	TargetUser int64
-	Provider   string
-	Subject    string
+	SourceOrg     string
+	SourceNode    int64
+	TargetOrg     string
+	TargetUser    int64
+	Provider      string
+	Subject       string
+	TargetKind    string
+	TargetAccount int64
 	// Statuses limits the result when non-empty.
 	Statuses []string
 }
@@ -143,6 +155,26 @@ CREATE INDEX IF NOT EXISTS idx_shares_source ON shares(source_org, source_node, 
 CREATE INDEX IF NOT EXISTS idx_shares_target ON shares(target_org, provider, subject, status);
 CREATE INDEX IF NOT EXISTS idx_shares_user ON shares(target_org, accepted_by, status);
 `,
+	`
+ALTER TABLE shares ADD COLUMN source_generation TEXT NOT NULL DEFAULT '';
+ALTER TABLE shares ADD COLUMN source_stable_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE shares ADD COLUMN source_user_created INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE shares ADD COLUMN target_generation TEXT NOT NULL DEFAULT '';
+ALTER TABLE shares ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'external';
+ALTER TABLE shares ADD COLUMN target_account INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE shares ADD COLUMN target_account_created INTEGER NOT NULL DEFAULT 0;
+UPDATE shares SET status = 'revoked', revoked_at = unixepoch() WHERE status IN ('pending', 'accepted');
+DROP INDEX idx_shares_active;
+CREATE UNIQUE INDEX idx_shares_active ON shares(source_org, source_generation, source_stable_id, target_org, target_generation, provider, subject)
+ WHERE target_kind = 'external' AND status IN ('pending', 'accepted');
+CREATE UNIQUE INDEX idx_shares_account_active ON shares(source_org, source_generation, source_stable_id, target_org, target_generation, target_account, target_account_created)
+ WHERE target_kind = 'account' AND status IN ('pending', 'accepted');
+CREATE INDEX idx_shares_account ON shares(target_org, target_account, status);
+CREATE TABLE share_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, share_id TEXT NOT NULL REFERENCES shares(id),
+ action TEXT NOT NULL, actor_org TEXT NOT NULL, actor_user INTEGER NOT NULL, created_at INTEGER NOT NULL
+);
+`,
 }
 
 // OpenShareRegistry opens (creating if necessary) the registry and applies
@@ -158,7 +190,7 @@ func OpenShareRegistry(ctx context.Context, cfg ShareRegistryConfig) (*ShareRegi
 		return nil, fmt.Errorf("control: creating the share registry directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", cfg.Path)
+	db, err := sql.Open("sqlite", cfg.Path+"?_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("control: opening the share registry: %w", err)
 	}
@@ -183,22 +215,7 @@ func OpenShareRegistry(ctx context.Context, cfg ShareRegistryConfig) (*ShareRegi
 
 // migrate applies pending schema versions.
 func (r *ShareRegistry) migrate(ctx context.Context) error {
-	var version int
-	if err := r.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
-		return fmt.Errorf("control: reading the share schema version: %w", err)
-	}
-	if version > len(shareMigrations) {
-		return fmt.Errorf("control: share schema version %d is newer than this build (%d)", version, len(shareMigrations))
-	}
-	for i := version; i < len(shareMigrations); i++ {
-		if _, err := r.db.ExecContext(ctx, shareMigrations[i]); err != nil {
-			return fmt.Errorf("control: applying share migration %d: %w", i+1, err)
-		}
-		if _, err := r.db.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, i+1)); err != nil {
-			return fmt.Errorf("control: recording share migration %d: %w", i+1, err)
-		}
-	}
-	return nil
+	return migrateRegistry(ctx, r.db, shareMigrations, "share")
 }
 
 // Close releases the registry's database handle.
@@ -221,8 +238,23 @@ func newShareID() (string, error) {
 // CreateShare stores a new pending share and returns it with its assigned ID
 // and timestamp. The caller is responsible for validating the parties.
 func (r *ShareRegistry) CreateShare(ctx context.Context, share Share, now time.Time) (Share, error) {
-	if share.SourceOrg == "" || share.TargetOrg == "" || share.Provider == "" || share.Subject == "" {
+	if share.TargetKind == "" {
+		share.TargetKind = ShareTargetExternal
+	}
+	if share.SourceOrg == "" || share.TargetOrg == "" || share.SourceGeneration == "" || share.TargetGeneration == "" || share.SourceStableID == "" || share.SourceUserCreated <= 0 {
 		return Share{}, errors.New("control: share needs a source organization, a target organization and an identity")
+	}
+	switch share.TargetKind {
+	case ShareTargetExternal:
+		if share.Provider == "" || share.Subject == "" || share.TargetAccount != 0 || share.TargetAccountCreated != 0 {
+			return Share{}, errShareIdentityInvalid
+		}
+	case ShareTargetAccount:
+		if share.TargetAccount <= 0 || share.TargetAccountCreated <= 0 || share.Provider != "" || share.Subject != "" {
+			return Share{}, errShareIdentityInvalid
+		}
+	default:
+		return Share{}, errShareIdentityInvalid
 	}
 	if share.SourceNode <= 0 {
 		return Share{}, errors.New("control: share needs a source node")
@@ -241,28 +273,48 @@ func (r *ShareRegistry) CreateShare(ctx context.Context, share Share, now time.T
 	share.ID = id
 	share.CreatedAt = now.UTC()
 
-	_, err = r.db.ExecContext(ctx, `
-INSERT INTO shares (id, source_org, source_node, target_org, provider, subject, status, created_by, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	transaction, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Share{}, err
+	}
+	defer transaction.Rollback()
+	_, err = transaction.ExecContext(ctx, `
+INSERT INTO shares (id, source_org, source_node, target_org, provider, subject, status, created_by, created_at,
+ source_generation, source_stable_id, source_user_created, target_generation, target_kind, target_account, target_account_created)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		share.ID, share.SourceOrg, share.SourceNode, share.TargetOrg, share.Provider, share.Subject,
-		share.Status, share.CreatedBy, share.CreatedAt.Unix())
+		share.Status, share.CreatedBy, share.CreatedAt.Unix(), share.SourceGeneration, share.SourceStableID, share.SourceUserCreated,
+		share.TargetGeneration, share.TargetKind, share.TargetAccount, share.TargetAccountCreated)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Share{}, fmt.Errorf("%w: %w", ErrShareExists, err)
 		}
 		return Share{}, fmt.Errorf("control: storing share: %w", err)
 	}
+	if err := insertShareEvent(ctx, transaction, share.ID, "created", share.SourceOrg, share.CreatedBy, now); err != nil {
+		return Share{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return Share{}, err
+	}
 	return share, nil
+}
+
+const shareColumns = `id, source_org, source_node, target_org, provider, subject, status,
+ created_by, created_at, accepted_at, accepted_by, rejected_at, rejected_by, revoked_at, revoked_by, revoked_by_org,
+ source_generation, source_stable_id, source_user_created, target_generation, target_kind, target_account, target_account_created`
+
+func (r *ShareRegistry) LookupShare(ctx context.Context, id string) (Share, error) {
+	share, err := scanShare(r.db.QueryRowContext(ctx, "SELECT "+shareColumns+" FROM shares WHERE id = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Share{}, ErrShareNotFound
+	}
+	return share, err
 }
 
 // GetShare returns a share by ID.
 func (r *ShareRegistry) GetShare(id string) (Share, bool) {
-	row := r.db.QueryRow(`
-SELECT id, source_org, source_node, target_org, provider, subject, status,
-       created_by, created_at, accepted_at, accepted_by, rejected_at, rejected_by,
-       revoked_at, revoked_by, revoked_by_org
-FROM shares WHERE id = ?`, id)
-	share, err := scanShare(row)
+	share, err := r.LookupShare(context.Background(), id)
 	if err != nil {
 		return Share{}, false
 	}
@@ -272,11 +324,12 @@ FROM shares WHERE id = ?`, id)
 // ListShares returns matching shares, newest first (ID breaks ties so the
 // order is total).
 func (r *ShareRegistry) ListShares(filter ShareFilter) []Share {
-	query := `
-SELECT id, source_org, source_node, target_org, provider, subject, status,
-       created_by, created_at, accepted_at, accepted_by, rejected_at, rejected_by,
-       revoked_at, revoked_by, revoked_by_org
-FROM shares`
+	shares, _ := r.QueryShares(context.Background(), filter)
+	return shares
+}
+
+func (r *ShareRegistry) QueryShares(ctx context.Context, filter ShareFilter) ([]Share, error) {
+	query := "SELECT " + shareColumns + " FROM shares"
 	var (
 		where []string
 		args  []any
@@ -303,6 +356,12 @@ FROM shares`
 	if filter.Subject != "" {
 		add("subject = ?", filter.Subject)
 	}
+	if filter.TargetKind != "" {
+		add("target_kind = ?", filter.TargetKind)
+	}
+	if filter.TargetAccount != 0 {
+		add("target_account = ?", filter.TargetAccount)
+	}
 	if len(filter.Statuses) > 0 {
 		placeholders := make([]string, len(filter.Statuses))
 		for i, status := range filter.Statuses {
@@ -316,99 +375,100 @@ FROM shares`
 	}
 	query += " ORDER BY created_at DESC, id ASC"
 
-	rows, err := r.db.Query(query, args...)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
-	var out []Share
+	out := make([]Share, 0)
 	for rows.Next() {
 		share, err := scanShare(rows)
 		if err != nil {
-			return out
+			return nil, err
 		}
 		out = append(out, share)
 	}
-	return out
+	return out, rows.Err()
 }
 
 // AcceptShare binds a pending share to the accepting user. It fails when the
 // share is unknown, not pending, or belongs to another organization.
 func (r *ShareRegistry) AcceptShare(id, targetOrg string, user int64, now time.Time) (Share, error) {
-	return r.decide(id, targetOrg, `
-UPDATE shares SET status = ?, accepted_at = ?, accepted_by = ?
-WHERE id = ? AND status = ?`, []any{ShareAccepted, now.UTC().Unix(), user, id, SharePending})
+	return r.ChangeShare(context.Background(), id, targetOrg, user, ShareAccepted, now)
 }
 
 // RejectShare declines a pending share. It fails when the share is unknown,
 // not pending, or belongs to another organization.
 func (r *ShareRegistry) RejectShare(id, targetOrg string, user int64, now time.Time) (Share, error) {
-	return r.decide(id, targetOrg, `
-UPDATE shares SET status = ?, rejected_at = ?, rejected_by = ?
-WHERE id = ? AND status = ?`, []any{ShareRejected, now.UTC().Unix(), user, id, SharePending})
+	return r.ChangeShare(context.Background(), id, targetOrg, user, ShareRejected, now)
 }
 
 // RevokeShare withdraws a pending or accepted share. Revoking an already
 // revoked share is idempotent and returns the existing row.
 func (r *ShareRegistry) RevokeShare(id, byOrg string, user int64, now time.Time) (Share, error) {
-	share, ok := r.GetShare(id)
-	if !ok {
-		return Share{}, ErrShareNotFound
-	}
-	if byOrg != share.SourceOrg && byOrg != share.TargetOrg {
-		return Share{}, ErrShareTarget
-	}
-	if share.Status == ShareRevoked {
-		return share, nil
-	}
-	if share.Status != SharePending && share.Status != ShareAccepted {
-		return Share{}, fmt.Errorf("%w: cannot revoke a %s share", ErrShareState, share.Status)
-	}
-
-	res, err := r.db.Exec(`
-UPDATE shares SET status = ?, revoked_at = ?, revoked_by = ?, revoked_by_org = ?
-WHERE id = ? AND status IN (?, ?)`,
-		ShareRevoked, now.UTC().Unix(), user, byOrg, id, SharePending, ShareAccepted)
-	if err != nil {
-		return Share{}, fmt.Errorf("control: revoking share: %w", err)
-	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		// Lost a race with another decision; report the row we read.
-		if current, ok := r.GetShare(id); ok {
-			return current, nil
-		}
-		return Share{}, ErrShareNotFound
-	}
-	share.Status = ShareRevoked
-	share.RevokedAt = now.UTC()
-	share.RevokedBy = user
-	share.RevokedByOrg = byOrg
-	return share, nil
+	return r.ChangeShare(context.Background(), id, byOrg, user, ShareRevoked, now)
 }
 
-// decide applies one lifecycle transition under a conditional UPDATE, so two
-// concurrent decisions cannot both win.
-func (r *ShareRegistry) decide(id, targetOrg, update string, args []any) (Share, error) {
-	share, ok := r.GetShare(id)
-	if !ok {
+// 状态与必需事件共用写事务；并发接受/拒绝只能有一方报告成功。
+func (r *ShareRegistry) ChangeShare(ctx context.Context, id, byOrg string, user int64, status string, now time.Time) (Share, error) {
+	transaction, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Share{}, err
+	}
+	defer transaction.Rollback()
+	share, err := scanShare(transaction.QueryRowContext(ctx, "SELECT "+shareColumns+" FROM shares WHERE id = ?", id))
+	if errors.Is(err, sql.ErrNoRows) {
 		return Share{}, ErrShareNotFound
 	}
-	if share.TargetOrg != targetOrg {
+	if err != nil {
+		return Share{}, err
+	}
+	if byOrg != share.TargetOrg && (status != ShareRevoked || byOrg != share.SourceOrg) {
 		return Share{}, ErrShareTarget
 	}
-	if share.Status != SharePending {
-		return Share{}, fmt.Errorf("%w: share is %s", ErrShareState, share.Status)
+	if byOrg == share.TargetOrg && share.TargetKind == ShareTargetAccount && user != share.TargetAccount {
+		return Share{}, ErrShareTarget
 	}
-
-	if _, err := r.db.Exec(update, args...); err != nil {
-		return Share{}, fmt.Errorf("control: deciding share: %w", err)
+	if status == ShareRevoked && share.Status == ShareRevoked {
+		return share, nil
 	}
-	updated, ok := r.GetShare(id)
-	if !ok {
-		return Share{}, ErrShareNotFound
+	if share.Status != SharePending && (status != ShareRevoked || share.Status != ShareAccepted) {
+		return Share{}, ErrShareState
+	}
+	var update string
+	args := []any{status, now.UTC().Unix(), user}
+	switch status {
+	case ShareAccepted:
+		update = "accepted_at = ?, accepted_by = ?"
+	case ShareRejected:
+		update = "rejected_at = ?, rejected_by = ?"
+	case ShareRevoked:
+		update = "revoked_at = ?, revoked_by = ?, revoked_by_org = ?"
+		args = append(args, byOrg)
+	default:
+		return Share{}, ErrShareState
+	}
+	args = append(args, id, share.Status)
+	updated, err := scanShare(transaction.QueryRowContext(ctx, "UPDATE shares SET status = ?, "+update+" WHERE id = ? AND status = ? RETURNING "+shareColumns, args...))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Share{}, ErrShareState
+	}
+	if err != nil {
+		return Share{}, err
+	}
+	if err := insertShareEvent(ctx, transaction, id, status, byOrg, user, now); err != nil {
+		return Share{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return Share{}, err
 	}
 	return updated, nil
+}
+
+func insertShareEvent(ctx context.Context, transaction *sql.Tx, id, action, org string, user int64, now time.Time) error {
+	_, err := transaction.ExecContext(ctx, "INSERT INTO share_events (share_id, action, actor_org, actor_user, created_at) VALUES (?, ?, ?, ?, ?)", id, action, org, user, now.UnixNano())
+	return err
 }
 
 // scanShare reads one share row.
@@ -423,6 +483,8 @@ func scanShare(scan interface{ Scan(...any) error }) (Share, error) {
 		&share.Provider, &share.Subject, &share.Status, &share.CreatedBy, &createdAt,
 		&acceptedAt, &acceptedBy, &rejectedAt, &rejectedBy,
 		&revokedAt, &revokedBy, &share.RevokedByOrg,
+		&share.SourceGeneration, &share.SourceStableID, &share.SourceUserCreated, &share.TargetGeneration,
+		&share.TargetKind, &share.TargetAccount, &share.TargetAccountCreated,
 	); err != nil {
 		return Share{}, err
 	}
@@ -436,15 +498,7 @@ func scanShare(scan interface{ Scan(...any) error }) (Share, error) {
 	if revokedAt != 0 {
 		share.RevokedAt = time.Unix(revokedAt, 0).UTC()
 	}
-	if share.Status == ShareAccepted {
-		share.AcceptedBy = acceptedBy
-	}
-	if share.Status == ShareRejected {
-		share.RejectedBy = rejectedBy
-	}
-	if share.Status == ShareRevoked {
-		share.RevokedBy = revokedBy
-	}
+	share.AcceptedBy, share.RejectedBy, share.RevokedBy = acceptedBy, rejectedBy, revokedBy
 	return share, nil
 }
 
