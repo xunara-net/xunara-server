@@ -63,7 +63,11 @@ func (writer *tenantConsoleWriter) prepare() {
 		http.SetCookie(writer.ResponseWriter, cookie)
 	}
 	if location := headers.Get("Location"); strings.HasPrefix(location, "/") && !strings.HasPrefix(location, "//") {
-		headers.Set("Location", tenantConsolePrefix(writer.orgID)+location)
+		if target, err := url.Parse(location); err == nil && target.Path == "/login" {
+			headers.Set("Location", canonicalAccountLogin(target.Query(), tenantConsolePrefix(writer.orgID)))
+		} else {
+			headers.Set("Location", tenantConsolePrefix(writer.orgID)+location)
+		}
 	}
 }
 
@@ -92,13 +96,27 @@ func (router *Router) handleTenantConsole(writer http.ResponseWriter, request *h
 		return
 	}
 	orgID := chi.URLParam(request, "orgID")
-	org := router.orgByID(orgID)
-	if !managedOrgIDPattern.MatchString(orgID) || org == nil || !org.managed || request.URL.RawPath != "" {
+	if !managedOrgIDPattern.MatchString(orgID) || request.URL.RawPath != "" {
 		http.NotFound(writer, request)
 		return
 	}
 	prefix := tenantConsolePrefix(orgID)
 	path := strings.TrimPrefix(request.URL.Path, prefix)
+	// 旧登录书签不能锁定网络，且不能通过响应判断这个租户是否仍然存在。
+	if path == "/login" || path == "/login/" {
+		if request.Method != http.MethodGet && request.Method != http.MethodHead {
+			writer.Header().Set("Allow", "GET, HEAD")
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		http.Redirect(writer, request, canonicalAccountLogin(request.URL.Query(), prefix), http.StatusFound)
+		return
+	}
+	org := router.orgByID(orgID)
+	if org == nil || !org.managed {
+		http.NotFound(writer, request)
+		return
+	}
 	devicePage := router.nativeGateway != nil && (strings.HasPrefix(path, "/register/") || strings.HasPrefix(path, "/ssh/check/"))
 	if !devicePage && !strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/api/v2/") && !strings.HasPrefix(path, "/oidc/callback/") && !strings.HasPrefix(path, "/oauth2/callback/") {
 		http.NotFound(writer, request)
@@ -116,4 +134,30 @@ func (router *Router) handleTenantConsole(writer http.ResponseWriter, request *h
 		}
 	}
 	org.handler.ServeHTTP(&tenantConsoleWriter{ResponseWriter: writer, orgID: orgID, secure: base.Scheme == "https"}, copy)
+}
+
+func canonicalAccountLogin(query url.Values, prefix string) string {
+	allowed := make(url.Values)
+	if targets := query["return_to"]; len(targets) == 1 {
+		target := safeReturnTo(targets[0])
+		if target != "/" && target != "/dashboard" && target != "/console" && target != "/console/" && target != "/login" && target != "/login/" {
+			if !strings.HasPrefix(target, "/t/") {
+				target = prefix + target
+			}
+			allowed.Set("return_to", target)
+		}
+	}
+	for _, name := range []string{"signed_out", "password_changed"} {
+		values := query[name]
+		if len(values) != 1 {
+			continue
+		}
+		if name == "signed_out" && (values[0] == "current" || values[0] == "all") || name == "password_changed" && values[0] == "1" {
+			allowed.Set(name, values[0])
+		}
+	}
+	if len(allowed) == 0 {
+		return "/login"
+	}
+	return "/login?" + allowed.Encode()
 }

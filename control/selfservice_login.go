@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,23 +30,9 @@ func (router *Router) signInAccount(ctx context.Context, request *http.Request, 
 		return nil, passwordSignInResult{retryAfter: int(retryAfter.Seconds()) + 1}, errPasswordRateLimited
 	}
 	login = strings.TrimSpace(login)
-	var target *routerOrg
-	if login != "" && len(login) <= 128 {
-		for _, org := range router.orgSnapshot() {
-			_, err := org.site.Server.identity.LookupUserByLoginName(ctx, login)
-			if errors.Is(err, identity.ErrUserNotFound) {
-				continue
-			}
-			if err != nil {
-				return nil, passwordSignInResult{}, err
-			}
-			// 历史同名账户不能按默认租户或密码猜测，避免身份串网。
-			if target != nil {
-				identity.VerifyPasswordMissing(password)
-				return nil, passwordSignInResult{}, errPasswordRejected
-			}
-			target = org
-		}
+	target, _, err := router.resolveAccount(ctx, login)
+	if err != nil {
+		return nil, passwordSignInResult{}, err
 	}
 	if target == nil || !target.site.Server.localLogin {
 		identity.VerifyPasswordMissing(password)
@@ -61,6 +48,31 @@ func (router *Router) signInAccount(ctx context.Context, request *http.Request, 
 	}
 	result, err := target.site.Server.signInWithPassword(ctx, front.clientIP(request), login, password, front.sessionClientInfo(request))
 	return target, result, err
+}
+
+// 账户归属由当前身份库唯一解析，不接受浏览器旧路径提供的租户提示。
+func (router *Router) resolveAccount(ctx context.Context, login string) (*routerOrg, identity.User, error) {
+	login = strings.TrimSpace(login)
+	var target *routerOrg
+	var account identity.User
+	if login != "" && len(login) <= 128 {
+		for _, org := range router.orgSnapshot() {
+			user, err := org.site.Server.identity.LookupUserByLoginName(ctx, login)
+			if errors.Is(err, identity.ErrUserNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, identity.User{}, err
+			}
+			// 历史同名账户不能按默认租户或密码猜测，避免身份串网。
+			if target != nil {
+				return nil, identity.User{}, nil
+			}
+			target = org
+			account = user
+		}
+	}
+	return target, account, nil
 }
 
 func (router *Router) accountConsolePath(org *routerOrg) string {
@@ -93,6 +105,9 @@ func (router *Router) handleSelfServiceLogin(writer http.ResponseWriter, request
 		http.NotFound(writer, request)
 		return
 	}
+	if !requireAccountJSON(writer, request) {
+		return
+	}
 	var credentials apiLoginRequest
 	if !decodeAPIBody(writer, request, &credentials) {
 		return
@@ -116,6 +131,16 @@ func (router *Router) handleSelfServiceLogin(writer http.ResponseWriter, request
 		"console_path": router.accountConsolePath(org),
 		"session":      org.site.Server.apiSessionPayload(result.user, result.session),
 	})
+}
+
+// 登录只接受 JSON，不能由外站普通 HTML 表单替浏览器发起账户切换。
+func requireAccountJSON(writer http.ResponseWriter, request *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeAPIError(writer, http.StatusUnsupportedMediaType, "JSON_REQUIRED: send an application/json body")
+		return false
+	}
+	return true
 }
 
 func writeAccountLoginError(writer http.ResponseWriter, result passwordSignInResult, err error) {

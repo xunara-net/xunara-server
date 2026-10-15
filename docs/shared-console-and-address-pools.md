@@ -21,9 +21,10 @@
 
 此处是 `self_service` 对象，不是整个组织配置文件。需要新版 Server、Web
 和部署仓库 nginx 模板一起升级。浏览器新入口是
-`https://app.example.com:9090/t/<网络标识>/login`；注册直接进入同源专属控制台。
-入口登录选择「我的独立网络」，填写注册所得的网络标识与原用户名/密码；
-入口管理员或入口受邀成员选「当前网络」。已有用户不需要重新注册或重置密码。
+`https://app.example.com:9090/login`；注册直接进入同源专属控制台。
+普通用户名与密码自动定位账户，不要求填写网络标识或选择登录范围。
+旧 `/t/<org>/login` 书签、退出登录和会话过期都回到统一入口，不固定旧租户；
+共享入口通行密钥先填写用户名，再验证已绑定的密钥。已有用户不需要重新注册或重置密码。
 
 浏览器同源入口使用租户路径 Cookie，不能拿入口 owner 的 Cookie 登录别的网络。
 运行时 OAuth/OIDC 配置页面显示新入口下的回调地址，需同步到第三方应用的精确
@@ -55,8 +56,9 @@ IPv6 对应 `fd7a:115c:a1e0::53`；控制面不能通过 DNSConfig 随意更换�
 参见 [Quad100](https://tailscale.com/docs/reference/quad100) 与
 [resolv.conf 行为](https://tailscale.com/docs/reference/faq/dns-resolv-conf)。
 
-Linux「添加设备」默认开启「接入前检查本地网段冲突」，需要 Python 3、curl
-及支持 JSON 的 iproute2。命令先从当前受信站点下载公开只读检查器，检查本地
+Linux「添加设备」默认开启「接入前检查本地网段冲突」，使用 Shell、curl、awk、
+iproute2、mktemp、timeout 等常见工具，不依赖 Python 或 iproute2 JSON。
+命令先从当前受信站点下载 `/network-check.sh` 公开只读检查器，检查本地
 接口地址/所有表中的非默认路由；冲突或读取失败时不执行后续安装和 `tailscale up`。
 检查器不接收账户密钥，不变更本机网络，不自动关闭 DNS 或制造一个自定义 Quad100。
 

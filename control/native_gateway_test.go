@@ -90,7 +90,8 @@ func TestNativeGatewayTS2021AccountApprovalIsolation(test *testing.T) {
 	approval.AddCookie(adminCookie)
 	anonymous := httptest.NewRecorder()
 	router.Handler().ServeHTTP(anonymous, approval)
-	if anonymous.Code != http.StatusFound || !strings.HasPrefix(anonymous.Header().Get("Location"), "/t/alice/login") {
+	relogin, err := url.Parse(anonymous.Header().Get("Location"))
+	if err != nil || anonymous.Code != http.StatusFound || relogin.Path != "/login" || relogin.Query().Get("return_to") != approval.URL.Path {
 		test.Fatal("default administrator cookie authenticated a tenant approval")
 	}
 	approval.AddCookie(tenantCookie)

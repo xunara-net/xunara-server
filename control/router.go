@@ -711,6 +711,8 @@ func (r *Router) Handler() http.Handler {
 	if r.selfService.Load() != nil {
 		mux.Post(selfServiceSignupPath, r.handleSelfServiceSignup)
 		mux.Post(selfServiceLoginPath, r.handleSelfServiceLogin)
+		mux.Post(selfServicePasskeyBeginPath, r.handleSelfServicePasskeyBegin)
+		mux.Post(selfServicePasskeyFinishPath, r.handleSelfServicePasskeyFinish)
 		mux.HandleFunc("/t/{orgID}/*", r.handleTenantConsole)
 	}
 	if r.nativeGateway != nil {
