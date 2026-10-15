@@ -109,8 +109,8 @@ const adminHead = `<!doctype html>
 
 const adminFoot = `</main>
 <footer>Xunara {{T "platform"}} · v{{.Version}} ·
-<a href="https://github.com/xunara-net/xunara">GitHub</a> ·
-<a href="https://github.com/xunara-net/xunara/blob/master/Xunara_AI_Development_Docs_2026-10-05/PROJECT_SPEC.md">{{T "Documentation"}}</a></footer>
+<a href="https://github.com/xunara-net/xunara-server">GitHub</a> ·
+<a href="https://github.com/xunara-net/xunara-docs">{{T "Documentation"}}</a></footer>
 </body></html>`
 
 // adminPageData is what every platform page needs. Extra fields are set by the

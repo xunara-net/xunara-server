@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -181,8 +183,7 @@ func TestPlanGatesWithoutAPlanSourceAreNoOps(t *testing.T) {
 	}
 	for name, err := range map[string]error{
 		"device":  s.assertDeviceQuota(),
-		"authkey": s.assertAuthKeyQuota(),
-		"user":    s.assertUserQuota(),
+		"members": s.assertMemberQuota(100),
 		"api":     s.assertAPIAllowed(),
 		"audit":   s.assertAuditLogAllowed(),
 		"routes":  s.assertRouteApprovalAllowed([]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}),
@@ -191,44 +192,78 @@ func TestPlanGatesWithoutAPlanSourceAreNoOps(t *testing.T) {
 			t.Errorf("%s gate refused an unlimited tenant: %v", name, err)
 		}
 	}
+	hs := newTestHTTPServer(t, s)
+	_, token := seedAPIKey(t, s)
+	response := apiRequest(t, noRedirectClient(), http.MethodPost, hs.URL+"/api/v1/auth-keys", token, map[string]any{"ttl": "1h"})
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("unlimited auth-key creation = %d, want 201", response.StatusCode)
+	}
 }
 
 func TestAuthKeyQuotaCountsUsableKeys(t *testing.T) {
-	s := planServer(t, freePlan(t))
-	limit := freePlan(t).MaxAuthKeys
+	for _, testCase := range []struct {
+		name     string
+		key      state.PreAuthKey
+		occupies bool
+	}{
+		{name: "active", occupies: true},
+		{name: "expired", key: state.PreAuthKey{Expiry: time.Now().Add(-time.Hour)}},
+		{name: "spent single-use", key: state.PreAuthKey{Used: true}},
+		{name: "spent reusable", key: state.PreAuthKey{Used: true, Reusable: true}, occupies: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			s := planServer(t, freePlan(t))
+			limit := s.Plan().MaxAuthKeys
+			for count := 0; count < limit-1; count++ {
+				seedPreAuthKey(t, s, state.PreAuthKey{})
+			}
+			seedPreAuthKey(t, s, testCase.key)
+			hs := newTestHTTPServer(t, s)
+			client := noRedirectClient()
+			_, token := seedUserSession(t, s, state.DefaultUserID)
+			csrf := map[string]string{"X-CSRF-Token": csrfTokenFor(token)}
+			create := func() *http.Response {
+				return apiRequest(t, client, http.MethodPost, hs.URL+"/api/v1/auth-keys", token, map[string]any{"ttl": "1h"}, csrf)
+			}
 
-	for i := 0; i < limit; i++ {
-		seedPreAuthKey(t, s, state.PreAuthKey{})
-	}
-	if err := s.assertAuthKeyQuota(); err == nil {
-		t.Fatalf("the %dth auth key was allowed past a limit of %d", limit+1, limit)
-	} else if !strings.HasPrefix(err.Error(), "AUTH_KEY_LIMIT_REACHED") {
-		t.Fatalf("auth key gate = %v, want AUTH_KEY_LIMIT_REACHED", err)
-	}
-
-	// An expired key must not hold a quota slot: the tenant cannot delete it
-	// from the console.
-	keys := s.store.ListPreAuthKeys()
-	if err := s.store.DeletePreAuthKey(keys[0].Key); err != nil {
-		t.Fatalf("DeletePreAuthKey: %v", err)
-	}
-	if err := s.assertAuthKeyQuota(); err != nil {
-		t.Fatalf("after deleting a key = %v, want success", err)
+			// 验证真实 HTTP → 权限 → 事务额度链，不再测试没有生产调用的列表预检。
+			if !testCase.occupies {
+				if response := create(); response.StatusCode != http.StatusCreated {
+					t.Fatalf("unusable key retained a quota slot: status = %d", response.StatusCode)
+				}
+			}
+			response := create()
+			if response.StatusCode != http.StatusForbidden || !strings.Contains(bodyString(t, response), "AUTH_KEY_LIMIT_REACHED") {
+				t.Fatalf("full auth-key quota returned status = %d, want 403 AUTH_KEY_LIMIT_REACHED", response.StatusCode)
+			}
+			if used, err := s.networkConfig.AuthKeyUsage(t.Context()); err != nil || used != limit {
+				t.Fatalf("usable auth keys = %d (%v), want %d", used, err, limit)
+			}
+			keys := s.store.ListPreAuthKeys()
+			response = apiRequest(t, client, http.MethodDelete, hs.URL+"/api/v1/auth-keys/"+strconv.FormatUint(keys[0].ID, 10), token, nil, csrf)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("auth-key deletion = %d, want 200", response.StatusCode)
+			}
+			if response := create(); response.StatusCode != http.StatusCreated {
+				t.Fatalf("creation after deletion = %d, want 201", response.StatusCode)
+			}
+		})
 	}
 }
 
-func TestUserQuotaCountsMembers(t *testing.T) {
+func TestProvisionedMemberCountFollowsPlan(t *testing.T) {
 	s := planServer(t, freePlan(t))
-	// newServerWithConfig seeds one administrator, which is exactly what the
-	// free plan allows.
-	if err := s.assertUserQuota(); err == nil {
+	if err := s.assertMemberQuota(1); err != nil {
+		t.Fatalf("claiming the built-in owner = %v, want success", err)
+	}
+	if err := s.assertMemberQuota(2); err == nil {
 		t.Fatal("a second member was allowed on a one-member plan")
 	} else if !strings.HasPrefix(err.Error(), "USER_LIMIT_REACHED") {
 		t.Fatalf("user gate = %v, want USER_LIMIT_REACHED", err)
 	}
 
 	pro := planServer(t, proPlan(t))
-	if err := pro.assertUserQuota(); err != nil {
+	if err := pro.assertMemberQuota(2); err != nil {
 		t.Fatalf("a five-member plan refused the second member: %v", err)
 	}
 }

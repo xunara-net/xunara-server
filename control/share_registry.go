@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -500,9 +499,4 @@ func scanShare(scan interface{ Scan(...any) error }) (Share, error) {
 	}
 	share.AcceptedBy, share.RejectedBy, share.RevokedBy = acceptedBy, rejectedBy, revokedBy
 	return share, nil
-}
-
-// validShareStatus reports whether status is a known lifecycle value.
-func validShareStatus(status string) bool {
-	return slices.Contains([]string{SharePending, ShareAccepted, ShareRejected, ShareRevoked}, status)
 }

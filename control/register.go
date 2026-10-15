@@ -619,11 +619,6 @@ func (s *Server) approveDevice(authID string, userID tailcfg.UserID, actor strin
 	return s.decideDevice(context.Background(), authID, userID, actor, nil, true)
 }
 
-// denyDevice refuses a pending registration.
-func (s *Server) denyDevice(authID string, userID tailcfg.UserID, actor string) (identity.DeviceAuthorization, error) {
-	return s.decideDevice(context.Background(), authID, userID, actor, nil, false)
-}
-
 func (server *Server) decideDevice(ctx context.Context, authID string, userID tailcfg.UserID, actor string, writer *networkconfig.Writer, approve bool) (identity.DeviceAuthorization, error) {
 	authorization, err := server.identity.LookupDeviceAuthorization(ctx, authID)
 	if err != nil {

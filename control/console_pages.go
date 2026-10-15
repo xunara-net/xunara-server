@@ -272,9 +272,9 @@ footer.console-foot a { color: var(--muted); }
 const consoleFoot = `</main>
 </div>
 <footer class="console-foot">Xunara {{T "console"}} · v{{.Version}} ·
-<a href="https://github.com/xunara-net/xunara">GitHub</a> ·
-<a href="https://github.com/xunara-net/xunara/issues">{{T "Feedback"}}</a> ·
-<a href="https://github.com/xunara-net/xunara/blob/master/Xunara_AI_Development_Docs_2026-10-05/PROJECT_SPEC.md">{{T "Documentation"}}</a></footer>
+<a href="https://github.com/xunara-net/xunara-server">GitHub</a> ·
+<a href="https://github.com/xunara-net/xunara-server/issues">{{T "Feedback"}}</a> ·
+<a href="https://github.com/xunara-net/xunara-docs">{{T "Documentation"}}</a></footer>
 <script>` + consoleJS + `</script>
 </body></html>`
 

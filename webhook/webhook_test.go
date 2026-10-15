@@ -23,8 +23,6 @@ type fakeStore struct {
 	cursors map[string]uint64
 	claims  map[string]claimState
 	retries map[string]retryState
-
-	listErr chan struct{} // optional: closed to fail ListAuditAfter
 }
 
 // claimState mirrors the durable delivery lease.

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -377,28 +376,6 @@ func openMapSession(t *testing.T, client *http.Client, nodeKey key.NodePublic) *
 		t.Fatalf("map session status = %d, want 200", resp.StatusCode)
 	}
 	return resp
-}
-
-// readMapResponse reads one length-prefixed MapResponse from a stream.
-func readMapResponse(t *testing.T, r io.Reader) *tailcfg.MapResponse {
-	t.Helper()
-
-	var header [reservedResponseHeaderSize]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		t.Fatalf("reading map response header: %v", err)
-	}
-
-	size := binary.LittleEndian.Uint32(header[:])
-	payload := make([]byte, size)
-	if _, err := io.ReadFull(r, payload); err != nil {
-		t.Fatalf("reading map response body: %v", err)
-	}
-
-	var msg tailcfg.MapResponse
-	if err := json.Unmarshal(payload, &msg); err != nil {
-		t.Fatalf("decoding map response: %v", err)
-	}
-	return &msg
 }
 
 // TestTS2021RegisterWithAuthKey covers the `tailscale up --authkey=...` path

@@ -14,20 +14,6 @@ import (
 	"github.com/xunara-net/xunara-server/state"
 )
 
-// decodeSecurity decodes GET /api/v2/security.
-func decodeSecurity(t *testing.T, resp *http.Response) securityView {
-	t.Helper()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("security status = %d, want 200", resp.StatusCode)
-	}
-	var view securityView
-	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
-		t.Fatalf("decoding security view: %v", err)
-	}
-	return view
-}
-
 // findingIDs returns the findings' IDs in order.
 func findingIDs(view securityView) []string {
 	ids := make([]string, 0, len(view.Findings))

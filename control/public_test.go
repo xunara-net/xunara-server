@@ -76,6 +76,9 @@ func TestLandingPageIsTheFrontDoor(t *testing.T) {
 		"Self-hosted Tailscale control plane",
 		"tailscale up --login-server",
 		`href="/login?return_to=%2Fconsole%2F"`,
+		`href="https://github.com/xunara-net/xunara-server"`,
+		`href="https://github.com/xunara-net/xunara-docs"`,
+		`href="https://github.com/xunara-net/xunara-docs/blob/main/specs/project-spec.md"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("landing page lacks %q", want)

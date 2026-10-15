@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
-	"time"
 
 	"github.com/xunara-net/xunara-server/plan"
 )
@@ -105,38 +104,8 @@ func (s *Server) assertDeviceQuota() error {
 	return planGateError(MsgDeviceLimitReached)
 }
 
-// assertAuthKeyQuota reports whether the tenant may mint another pre-auth key.
-//
-// Used keys are gone from the console's point of view but still stored, so the
-// count is of keys that are still usable: an expired or spent key must not
-// hold a quota slot on a tenant that can no longer remove it.
-func (s *Server) assertAuthKeyQuota() error {
-	p := s.Plan()
-	if p.MaxAuthKeys == plan.Unlimited {
-		return nil
-	}
-	now := time.Now().UTC()
-	used := 0
-	for _, key := range s.store.ListPreAuthKeys() {
-		if key.Usable(now) {
-			used++
-		}
-	}
-	if used < p.MaxAuthKeys {
-		return nil
-	}
-	return planGateError(MsgAuthKeyLimitReached)
-}
-
-// assertUserQuota reports whether the tenant may add one more member.
-func (s *Server) assertUserQuota() error {
-	return s.assertMemberQuota(len(s.identity.ListUsers()) + 1)
-}
-
-// assertMemberQuota reports whether the tenant's plan allows it to have n
-// members. Callers that add a member (an invitation, a first OIDC sign-in) use
-// [Server.assertUserQuota]; the tenant provisioner, which claims the built-in
-// account instead of adding one, asks about the count it will end up with.
+// 开通独立租户时检查最终成员数；认领内置 owner 不会再新增一名成员。
+// 普通注册和密钥额度由各自写事务复核，不能恢复“先读列表再写入”的重复门禁。
 func (s *Server) assertMemberQuota(n int) error {
 	p := s.Plan()
 	if p.MaxUsers == plan.Unlimited || n <= p.MaxUsers {

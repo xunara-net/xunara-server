@@ -71,7 +71,7 @@ func TestOAuth2OrgConfigIsTenantScoped(test *testing.T) {
 	if err != nil || strings.Contains(string(encoded), "private-fixture-secret") {
 		test.Fatal("serialized org config leaked secret")
 	}
-	sites, err := loadOrgSites(writeOrgConfig(test, `{"organizations":[`+string(encoded)+`]}`), slog.Default())
+	sites, _, err := loadOrgConfig(writeOrgConfig(test, `{"organizations":[`+string(encoded)+`]}`), slog.Default(), false)
 	if err != nil {
 		test.Fatal(err)
 	}

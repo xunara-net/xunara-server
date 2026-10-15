@@ -15,7 +15,7 @@ func nativeOAuth2Settings() identity.OAuth2Config {
 func TestOAuth2ProviderConfigurationAndCapabilities(test *testing.T) {
 	settings := nativeOAuth2Settings()
 	config := Config{ServerURL: "https://console.example", OAuth2Providers: []identity.OAuth2Config{settings}}
-	registry, redirects, local, err := configureIdentityProviders(config)
+	_, redirects, local, err := configureIdentityProviders(config)
 	if err != nil || local || redirects["github"] != "https://console.example/oauth2/callback/github" {
 		test.Fatalf("OAuth2 configuration: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestOAuth2ProviderConfigurationAndCapabilities(test *testing.T) {
 	}
 	config.AllowLocalLogin = true
 	config.OIDCProviders = []identity.OIDCConfig{{ID: "corp", Issuer: "https://idp.example", ClientID: "client"}}
-	registry, _, local, err = configureIdentityProviders(config)
+	registry, _, local, err := configureIdentityProviders(config)
 	if err != nil || !local {
 		test.Fatalf("coexisting providers: %v", err)
 	}

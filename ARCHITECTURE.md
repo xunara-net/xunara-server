@@ -2,7 +2,7 @@
 
 > 本文档描述 `xunara-server` 的内部结构、依赖方向与边界。
 > 产品级规范见 [xunara-docs](https://github.com/xunara-net/xunara-docs)
-> （`AI_DEVELOPMENT.md`、`PROJECT_SPEC.md`、`ROADMAP.md`）。
+> （`AI_DEVELOPMENT.md`、`specs/project-spec.md`、`specs/roadmap.md`）。
 
 ## 1. 定位
 
@@ -16,7 +16,8 @@
    与 gRPC 平台面。前端（xunara-web / xunara-admin）、CLI、未来客户端全部
    经由这一层，任何前端都不允许直接接触控制面内部状态。
 
-本仓库**不含 Web UI**。用户控制台是 `xunara-web`，平台后台是 `xunara-admin`。
+正式产品界面由 `xunara-web` / `xunara-admin` 提供；本仓库仍保留设备授权页和
+迁移尚未完成的内嵌管理页，不能把架构目标误写成已经删除全部模板。
 
 ## 2. 分层与依赖方向
 
@@ -87,8 +88,13 @@
 ## 6. 迁移中的部分
 
 旧版把控制台页面内嵌在服务端（`control/console_pages*.go`、
-`control/admin_pages.go`、`control/public*.go`）。按多仓库规范，产品 UI 属于
-`xunara-web` / `xunara-admin`；服务端只保留**设备授权流程必需的浏览器页面**
-（`/register/{authID}`、`/login`、`/signup`、`/setup`、`/ssh/check/*`）。
+`control/admin_pages.go`、`control/public*.go`）。现用 `Server.Handler()` 仍挂载
+`/console/*`，`Router.mountAdmin()` 在配置平台凭据和套餐后仍挂载内嵌后台；这些
+不是不可达文件。服务、Reach / Flux、Webhook 等旧管理入口尚无完整 Vue 功能对等。
 
-迁移路径见 `docs/adr/ADR-0003-server-web-split.md`。
+目标仍是产品界面独立，只在服务端保留官方客户端必需的授权页面；删除旧模板前
+必须逐项确认功能对等、独立部署入口与迁移说明，不能通过删除测试来制造“无调用”。
+旧地址需要继续存在时只做兼容适配，已收敛的账户、邀请和额度逻辑不得复制回来。
+
+迁移路径见 [ADR-0003](docs/adr/ADR-0003-server-web-split.md)，本次实际清理与保留
+证据见[代码清理审查](docs/code-cleanup-audit.md)。

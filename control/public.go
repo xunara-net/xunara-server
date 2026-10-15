@@ -127,8 +127,8 @@ const publicHead = `<!doctype html>
 <header class="pbar">
 <a class="pbrand" href="/">Xunara <span>{{T "control plane"}}</span></a>
 <nav class="pnav">
-<a href="https://github.com/xunara-net/xunara/blob/master/Xunara_AI_Development_Docs_2026-10-05/PROJECT_SPEC.md">{{T "Documentation"}}</a>
-<a href="https://github.com/xunara-net/xunara">GitHub</a>
+<a href="https://github.com/xunara-net/xunara-docs">{{T "Documentation"}}</a>
+<a href="https://github.com/xunara-net/xunara-server">GitHub</a>
 <span class="plang"><a href="/console/prefs?lang=zh&return_to={{.Path}}"{{if eq .Lang "zh"}} class="on"{{end}}>中文</a><a href="/console/prefs?lang=en&return_to={{.Path}}"{{if eq .Lang "en"}} class="on"{{end}}>English</a></span>
 {{if .User}}<span class="pwho">{{.User}}</span><a class="pbtn small ghost on-dark" href="/console/">{{T "Open console"}}</a>
 {{else if not .Setup}}<a class="pbtn small ghost on-dark" href="/login?return_to=%2Fconsole%2F">{{T "Sign in"}}</a>{{end}}
@@ -174,7 +174,7 @@ var (
 <div class="cta">
 {{if .Setup}}<a class="pbtn" href="/setup">Set up the administrator</a>
 {{else}}<a class="pbtn" href="/login?return_to=%2Fconsole%2F">Sign in to the console</a>{{end}}
-<a class="pbtn ghost" href="https://github.com/xunara-net/xunara/blob/master/Xunara_AI_Development_Docs_2026-10-05/PROJECT_SPEC.md">Read the specification</a>
+<a class="pbtn ghost" href="https://github.com/xunara-net/xunara-docs/blob/main/specs/project-spec.md">Read the specification</a>
 </div>
 <ul class="chips"><li>Official-client compatible</li><li>Self-hosted</li><li>Multi-tenant</li><li>Audit and access control</li></ul>
 </div>

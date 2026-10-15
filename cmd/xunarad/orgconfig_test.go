@@ -25,9 +25,9 @@ func writeOrgConfig(t *testing.T, doc string) string {
 	return path
 }
 
-// TestLoadOrgSitesHostsEachOrganization builds one server per row and checks
+// TestLoadOrgConfigHostsEachOrganization builds one server per row and checks
 // the isolation-critical fields (distinct state directories, distinct keys).
-func TestLoadOrgSitesHostsEachOrganization(t *testing.T) {
+func TestLoadOrgConfigHostsEachOrganization(t *testing.T) {
 	base := t.TempDir()
 	path := writeOrgConfig(t, `{
 		"organizations": [
@@ -41,15 +41,18 @@ func TestLoadOrgSitesHostsEachOrganization(t *testing.T) {
 		]
 	}`)
 
-	sites, err := loadOrgSites(path, slog.Default())
+	sites, selfService, err := loadOrgConfig(path, slog.Default(), false)
 	if err != nil {
-		t.Fatalf("loadOrgSites: %v", err)
+		t.Fatalf("loadOrgConfig: %v", err)
 	}
 	defer func() {
 		for _, site := range sites {
 			_ = site.Server.Close()
 		}
 	}()
+	if selfService != nil {
+		t.Fatal("organization-only configuration unexpectedly enables self-service")
+	}
 
 	if len(sites) != 2 {
 		t.Fatalf("sites = %d, want 2", len(sites))
@@ -62,8 +65,8 @@ func TestLoadOrgSitesHostsEachOrganization(t *testing.T) {
 	}
 }
 
-// TestLoadOrgSitesRejectsBrokenTables pins the fail-closed validation.
-func TestLoadOrgSitesRejectsBrokenTables(t *testing.T) {
+// TestLoadOrgConfigRejectsBrokenTables pins the fail-closed validation.
+func TestLoadOrgConfigRejectsBrokenTables(t *testing.T) {
 	base := t.TempDir()
 	dir := func(name string) string { return filepath.Join(base, name) }
 
@@ -94,12 +97,12 @@ func TestLoadOrgSitesRejectsBrokenTables(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeOrgConfig(t, tc.doc)
-			sites, err := loadOrgSites(path, slog.Default())
+			sites, _, err := loadOrgConfig(path, slog.Default(), false)
 			for _, site := range sites {
 				_ = site.Server.Close()
 			}
 			if err == nil {
-				t.Fatal("loadOrgSites accepted an invalid table")
+				t.Fatal("loadOrgConfig accepted an invalid table")
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to mention %q", err, tc.want)
@@ -128,9 +131,9 @@ func writeDERPMapFile(t *testing.T, regionIDs ...int) string {
 	return path
 }
 
-// TestLoadOrgSitesDERPPolicy checks the policy travels from the organization
+// TestLoadOrgConfigDERPPolicy checks the policy travels from the organization
 // table into the per-organization server, filtered against its DERP map.
-func TestLoadOrgSitesDERPPolicy(t *testing.T) {
+func TestLoadOrgConfigDERPPolicy(t *testing.T) {
 	base := t.TempDir()
 	derpMap := writeDERPMapFile(t, 900, 901)
 	path := writeOrgConfig(t, `{
@@ -143,9 +146,9 @@ func TestLoadOrgSitesDERPPolicy(t *testing.T) {
 		]
 	}`)
 
-	sites, err := loadOrgSites(path, slog.Default())
+	sites, _, err := loadOrgConfig(path, slog.Default(), false)
 	if err != nil {
-		t.Fatalf("loadOrgSites: %v", err)
+		t.Fatalf("loadOrgConfig: %v", err)
 	}
 	defer func() {
 		for _, site := range sites {

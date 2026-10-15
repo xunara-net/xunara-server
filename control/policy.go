@@ -134,14 +134,6 @@ func (server *Server) runPolicyWatcher(ctx context.Context) {
 	}
 }
 
-func policyModTime(path string) time.Time {
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}
-	}
-	return info.ModTime()
-}
-
 func (server *Server) userLoginName(userID tailcfg.UserID) string {
 	return server.UserProfile(userID).LoginName
 }

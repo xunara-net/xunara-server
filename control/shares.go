@@ -49,9 +49,6 @@ type ShareOrg interface {
 	ShareEnsureAddress(remoteOrg, remoteKey string) (netip.Addr, netip.Addr, error)
 	// ShareNotify wakes this organization's netmap watchers.
 	ShareNotify()
-	// shareRegistry returns the organization's share registry handle, so a
-	// router can address the same registry from every tenant.
-	shareRegistry() *ShareRegistry
 }
 
 // ShareDirectory resolves the organizations one router hosts.
@@ -219,11 +216,6 @@ func (s *Server) ShareEnsureAddress(remoteOrg, remoteKey string) (netip.Addr, ne
 // ShareNotify implements [ShareOrg].
 func (s *Server) ShareNotify() {
 	s.notifyWatchers()
-}
-
-// shareRegistry implements [ShareOrg].
-func (s *Server) shareRegistry() *ShareRegistry {
-	return s.shares
 }
 
 // Org implements [ShareDirectory].

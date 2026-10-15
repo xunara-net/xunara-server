@@ -113,18 +113,11 @@ type orgOIDCConfig struct {
 	Scopes          []string `json:"scopes"`
 }
 
-// loadOrgSites parses the organization table and builds one control-plane
-// server per organization. Any partly built server is closed when a later one
-// fails, so a broken row cannot leak resources.
-func loadOrgSites(path string, logger *slog.Logger) ([]control.OrgSite, error) {
-	sites, _, err := loadOrgConfig(path, logger, false)
-	return sites, err
-}
-
 // loadOrgConfig parses the organization table and returns the deployment-wide
 // settings that sit next to it. trustedProxy is a process-level decision
 // (-trusted-proxy): every organization in this deployment sits behind the
 // same reverse proxy, so it is passed in rather than repeated per row.
+// 任一租户构建失败都关闭此前已打开的实例，避免半初始化和数据库句柄泄漏。
 func loadOrgConfig(path string, logger *slog.Logger, trustedProxy bool) ([]control.OrgSite, *control.SelfServiceConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

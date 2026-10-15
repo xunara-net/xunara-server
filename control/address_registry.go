@@ -105,10 +105,6 @@ func (registry *PlanRegistry) reserveLegacyAddresses(ctx context.Context, orgID 
 	return transaction.Commit()
 }
 
-func (registry *PlanRegistry) validateNetwork(ctx context.Context, orgID string, prefix netip.Prefix) error {
-	return registry.validateNetworks(ctx, orgID, prefix, nil)
-}
-
 func (registry *PlanRegistry) validateNetworks(ctx context.Context, orgID string, prefix netip.Prefix, extra []netip.Prefix) error {
 	transaction, err := registry.db.BeginTx(ctx, nil)
 	if err != nil {

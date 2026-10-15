@@ -459,17 +459,6 @@ func relayViewFor(relay state.Relay, now time.Time) relayView {
 	return view
 }
 
-// relayViews renders every relay of this organization.
-func (s *Server) relayViews() []relayView {
-	now := time.Now().UTC()
-	relays := s.store.ListRelays()
-	out := make([]relayView, 0, len(relays))
-	for _, relay := range relays {
-		out = append(out, relayViewFor(relay, now))
-	}
-	return out
-}
-
 // relayEnrollTokenView is the JSON shape of an enrollment token. The secret is
 // never part of it: it exists only in the answer that created it.
 type relayEnrollTokenView struct {

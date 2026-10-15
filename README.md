@@ -320,10 +320,14 @@ go run ./cmd/xunarad -listen 127.0.0.1:8080 -server-url http://localhost:5173
 
 ```bash
 go build ./...
-go test ./...
 go vet ./...
-go test -race ./...
+go test ./... -count=1
+go test -race ./... -count=1 -timeout=30m
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks=U1000,SA4006 ./...
 ```
+
+在本仓库根目录执行。全量竞态包含真实密码哈希和官方客户端回归，显式使用
+30 分钟测试预算；未使用声明 / 无效赋值与 CI 使用同一固定版本检查。
 
 - **核心接入与诊断**：只读设备连接/归属中继报告，受限私有中继 TLS/HTTP 检测、审计与限流。添加设备/参数化安装器见[核心手册](docs/device-core.md)，不冒充实时路径。
 - **路由与出口管理**：直接预览审批、设备版本保护、原子审计/通知；旧管理适配同一流程，自报选择和本机命令见[路由手册](docs/route-management.md)，不改变路由选举或远程切换客户端。
@@ -367,5 +371,6 @@ go test -race ./...
 
 - 长期规范与架构：[xunara-docs](https://github.com/xunara-net/xunara-docs)
 - 本仓库结构：[ARCHITECTURE.md](ARCHITECTURE.md)
+- 无用代码清理与保留边界：[代码审查记录](docs/code-cleanup-audit.md)
 - AI 开发规则：[AI_DEVELOPMENT.md](AI_DEVELOPMENT.md)
 - 架构决策记录：[docs/adr](docs/adr/)

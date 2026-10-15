@@ -255,8 +255,8 @@ func TestAgentEnrollInteractiveApproval(t *testing.T) {
 		t.Errorf("mismatched machine key status = %d, want 403", status)
 	}
 
-	if _, err := s.denyDevice(path.Base(otherPending.AuthURL), state.DefaultUserID, "test"); err != nil {
-		t.Fatalf("denyDevice: %v", err)
+	if _, err := s.decideDevice(t.Context(), path.Base(otherPending.AuthURL), state.DefaultUserID, "test", nil, false); err != nil {
+		t.Fatalf("deciding device denial: %v", err)
 	}
 	body, status = agentPost(t, client, hs.URL, "/api/agent/v1/enroll", "", agentEnrollRequest{
 		Version:    agentProtocolVersion,
