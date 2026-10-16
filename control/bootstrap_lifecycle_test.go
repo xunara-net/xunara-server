@@ -53,7 +53,7 @@ func TestBootstrapAcrossInstancesCannotReplaceTheWinner(t *testing.T) {
 	var successful, rejected int
 	for attempt := 0; attempt < 2; attempt++ {
 		result := <-results
-		if result.response.Code == http.StatusFound && result.response.Header().Get("Location") == "/console/" {
+		if result.response.Code == http.StatusFound && result.response.Header().Get("Location") == "/dashboard" {
 			winner = result
 			successful++
 		} else if (result.response.Code == http.StatusConflict || (result.response.Code == http.StatusFound && result.response.Header().Get("Location") == "/login")) && result.response.Header().Get("Set-Cookie") == "" {
@@ -92,7 +92,7 @@ func TestBootstrapCompletedStateSurvivesPasswordDeletionAndStaleProof(t *testing
 	host := newTestHTTPServer(t, server)
 	form := setupAdmissionForm(server)
 	response := postForm(t, noRedirectClient(), host.URL+"/setup", form, nil)
-	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/console/" {
+	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dashboard" {
 		t.Fatal("initial setup did not complete")
 	}
 	owner, err := server.identity.LookupUser(t.Context(), state.DefaultUserID)

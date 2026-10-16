@@ -193,32 +193,3 @@ func TestAPIMemberStorageFailuresAreNotEmptyOrMissing(test *testing.T) {
 		})
 	}
 }
-
-func TestConsoleMemberUpdateSharesVersionAndAudit(test *testing.T) {
-	server := newTestServer(test)
-	host := newTestHTTPServer(test, server)
-	client := noRedirectClient()
-	cookie, token := seedUserSession(test, server, 1)
-	memberID := seedRoleUser(test, server, "console-member", identity.RoleMember)
-	member, _ := server.identity.GetUser(memberID)
-	response := getRequest(test, client, host.URL+"/console/users", cookie)
-	if response.StatusCode != http.StatusOK || !strings.Contains(bodyString(test, response), `name="expectedUpdatedAt"`) {
-		test.Fatal("compatibility form omitted the version")
-	}
-	fields := map[string][]string{"csrf": {csrfTokenFor(token)}, "role": {"admin"}, "expectedUpdatedAt": {member.UpdatedAt.Format("2006-01-02T15:04:05.999999999Z07:00")}}
-	baseline := len(server.identity.ListAudit(0))
-	response = postForm(test, client, host.URL+"/console/users/"+itoa(memberID), fields, cookie)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		test.Fatalf("compatibility form update failed: %d", response.StatusCode)
-	}
-	fields["role"] = []string{"member"}
-	response = postForm(test, client, host.URL+"/console/users/"+itoa(memberID), fields, cookie)
-	if response.StatusCode != http.StatusConflict || !strings.Contains(bodyString(test, response), "MEMBER_CHANGED") {
-		test.Fatal("compatibility form bypassed the same version check")
-	}
-	stored, _ := server.identity.GetUser(memberID)
-	if stored.Role != identity.RoleAdmin || len(server.identity.ListAudit(0)) != baseline+1 {
-		test.Fatal("form and API did not share atomic audit behavior")
-	}
-}

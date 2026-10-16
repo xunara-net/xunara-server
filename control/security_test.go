@@ -223,38 +223,3 @@ func TestSecuritySharingCounts(t *testing.T) {
 		t.Errorf("target sharing counts = %+v", globex.Sharing)
 	}
 }
-
-// TestConsoleSecurityPage checks the read-only page renders the snapshot and
-// findings for any role, with no write surface.
-func TestConsoleSecurityPage(t *testing.T) {
-	s := newTestServer(t)
-	hs := newTestHTTPServer(t, s)
-	client := noRedirectClient()
-
-	// Unauthenticated requests go to the login page.
-	if resp := getRequest(t, client, hs.URL+"/console/security", nil); resp.StatusCode != http.StatusFound {
-		t.Errorf("anonymous console status = %d, want 302", resp.StatusCode)
-	}
-
-	cookie := loginLocal(t, client, hs.URL, "/console/security")
-	page := bodyString(t, getRequest(t, client, hs.URL+"/console/security", cookie))
-	for _, want := range []string{"Security", "Findings", "policy.absent", "Node keys", "not configured (allow-all)"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("security page lacks %q:\n%s", want, page)
-		}
-	}
-	if strings.Contains(page, `action="/console/security"`) {
-		t.Errorf("security page renders a form:\n%s", page)
-	}
-
-	// A member can read it too: security posture is not administration.
-	member := seedRoleUser(t, s, "member@example.com", identity.RoleMember)
-	memberCookie, _ := seedUserSession(t, s, member)
-	resp := getRequest(t, client, hs.URL+"/console/security", memberCookie)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("member console status = %d, want 200", resp.StatusCode)
-	}
-	if !strings.Contains(bodyString(t, resp), "read-only") {
-		t.Error("member page lacks the read-only banner")
-	}
-}

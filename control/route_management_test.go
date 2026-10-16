@@ -224,7 +224,7 @@ func TestRouteManagementServiceScopesAndTenantIsolation(test *testing.T) {
 }
 
 func TestRouteManagementLegacyEndpointsShareAtomicAudit(test *testing.T) {
-	for _, source := range []string{"api-v1", "html"} {
+	for _, source := range []string{"api-v1", "html-retired"} {
 		test.Run(source, func(test *testing.T) {
 			server := newTestServer(test)
 			node := seedManagedRoutes(test, server, "legacy-router", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
@@ -244,8 +244,8 @@ func TestRouteManagementLegacyEndpointsShareAtomicAudit(test *testing.T) {
 				host := newTestHTTPServer(test, server)
 				response := postForm(test, noRedirectClient(), host.URL+"/console/machines/"+node.StableID+"/routes",
 					url.Values{"csrf": {csrfTokenFor(token)}, "action": {"approve-all"}}, cookie)
-				if response.StatusCode != 503 {
-					test.Fatal("HTML acknowledged unrecorded audit")
+				if response.StatusCode != http.StatusGone {
+					test.Fatal("retired HTML accepted a route write")
 				}
 			}
 			stored, _ := server.store.GetNodeByID(node.ID)

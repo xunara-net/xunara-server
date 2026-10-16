@@ -6,10 +6,7 @@ import (
 	"strings"
 )
 
-// The console is Chinese-first and can be switched to English; both choices
-// are cookies set through GET /console/prefs (spec section 51). Templates
-// carry English message ids and call {{T "..."}}; a missing translation falls
-// back to the English text, so the console is never half-blank.
+// 独立授权页保留语言和配色偏好；用户中心本身只由 Web 应用渲染。
 const (
 	consoleLangCookie   = "xunara_lang"
 	consoleAccentCookie = "xunara_accent"
@@ -148,14 +145,11 @@ func translator(lang string) func(string, ...any) string {
 	}
 }
 
-// handleConsolePrefs stores the language and accent preferences and returns
-// the operator to where they came from. Both parameters are optional, so one
-// link can change only one of them. The language menu is plain links, so it
-// works without JavaScript.
-func (s *Server) handleConsolePrefs(w http.ResponseWriter, r *http.Request) {
-	returnTo := r.URL.Query().Get("return_to")
-	if !strings.HasPrefix(returnTo, "/") || strings.HasPrefix(returnTo, "//") {
-		returnTo = "/console/"
+// handlePagePrefs 只修改非敏感的页面偏好，不能跳到站外或恢复旧控制台。
+func (s *Server) handlePagePrefs(w http.ResponseWriter, r *http.Request) {
+	returnTo := safeReturnTo(r.URL.Query().Get("return_to"))
+	if returnTo == "/" {
+		returnTo = "/dashboard"
 	}
 	if lang := r.URL.Query().Get("lang"); lang != "" {
 		if !consoleLangs[lang] {
@@ -186,102 +180,3 @@ func (s *Server) setPrefCookie(w http.ResponseWriter, name, value string) {
 }
 
 // consoleNavItem is one console section in the sidebar.
-type consoleNavItem struct {
-	Key  string
-	Href string
-}
-
-// consoleNavGroup is a labelled group of console sections. An empty label
-// renders the group without a heading (the top-level items).
-type consoleNavGroup struct {
-	Label string
-	Items []consoleNavItem
-}
-
-// consoleNav is the sidebar structure: the same sections as before, grouped
-// the way operators look for them (network, identity, credentials, ...).
-var consoleNav = []consoleNavGroup{
-	{Items: []consoleNavItem{
-		{Key: "overview", Href: "/console/"},
-	}},
-	{Label: "Network", Items: []consoleNavItem{
-		{Key: "machines", Href: "/console/machines"},
-		{Key: "exit-nodes", Href: "/console/exit-nodes"},
-		{Key: "services", Href: "/console/services"},
-		{Key: "relays", Href: "/console/relays"},
-		{Key: "serve", Href: "/console/serve"},
-		{Key: "devices", Href: "/console/devices"},
-	}},
-	{Label: "Identity", Items: []consoleNavItem{
-		{Key: "users", Href: "/console/users"},
-		{Key: "passkeys", Href: "/console/passkeys"},
-		{Key: "dns", Href: "/console/dns"},
-		{Key: "derp", Href: "/console/derp"},
-	}},
-	{Label: "Credentials", Items: []consoleNavItem{
-		{Key: "auth-keys", Href: "/console/auth-keys"},
-		{Key: "agents", Href: "/console/agents"},
-		{Key: "api-keys", Href: "/console/api-keys"},
-	}},
-	{Label: "Collaboration", Items: []consoleNavItem{
-		{Key: "shares", Href: "/console/shares"},
-		{Key: "reach", Href: "/console/reach"},
-		{Key: "flux", Href: "/console/flux"},
-		{Key: "ssh-check", Href: "/console/ssh-check"},
-		{Key: "webhooks", Href: "/console/webhooks"},
-	}},
-	{Label: "Account", Items: []consoleNavItem{
-		{Key: "plan", Href: "/console/plan"},
-	}},
-	{Label: "Governance", Items: []consoleNavItem{
-		{Key: "policy", Href: "/console/policy"},
-		{Key: "security", Href: "/console/security"},
-		{Key: "audit", Href: "/console/audit"},
-	}},
-}
-
-// consoleLedes is the one-line description under each page title. The values
-// are English message ids translated at render time.
-var consoleLedes = map[string]string{
-	"plan":       "The plan this tailnet is on, what it allows and what it uses.",
-	"overview":   "Your tailnet at a glance.",
-	"machines":   "Devices registered to this tailnet.",
-	"exit-nodes": "Which devices route the default route, and who selected them.",
-	"services":   "Services nodes publish about themselves (Xunara Atlas).",
-	"relays":     "Peer relays nodes offer and the grants that allow their use.",
-	"serve":      "Ports shared through Xunara Serve.",
-	"devices":    "Devices waiting for approval, with their machine keys.",
-	"users":      "People and roles in this tailnet.",
-	"passkeys":   "Passkeys that sign you in without a password.",
-	"dns":        "MagicDNS records and resolvers this deployment serves.",
-	"derp":       "Which DERP regions this organization serves.",
-	"auth-keys":  "Pre-authentication keys for unattended devices.",
-	"agents":     "Agent tokens that authenticate self-hosted agents.",
-	"api-keys":   "API keys for the HTTP v2 management API.",
-	"shares":     "Machines shared across organizations.",
-	"reach":      "Remote command sessions and their approvals.",
-	"flux":       "End-to-end encrypted file transfers.",
-	"ssh-check":  "Tailscale SSH check approvals.",
-	"webhooks":   "Event receivers and their delivery attempts.",
-	"policy":     "The ACL policy document in force (read-only).",
-	"security":   "Security posture and findings.",
-	"audit":      "Who did what, newest first.",
-}
-
-// consoleNavGroups resolves the sidebar for one active section: the group
-// labels and titles stay message ids, translated when the page renders.
-func consoleNavGroups(active string) []map[string]any {
-	groups := make([]map[string]any, 0, len(consoleNav))
-	for _, group := range consoleNav {
-		items := make([]map[string]any, 0, len(group.Items))
-		for _, item := range group.Items {
-			items = append(items, map[string]any{
-				"Title":  consoleTitles[item.Key],
-				"Href":   item.Href,
-				"Active": item.Key == active,
-			})
-		}
-		groups = append(groups, map[string]any{"Label": group.Label, "Items": items})
-	}
-	return groups
-}

@@ -1,7 +1,6 @@
 package control
 
 import (
-	"errors"
 	"net/http"
 	"net/netip"
 
@@ -153,22 +152,6 @@ func (s *Server) assertRouteApprovalAllowed(routes []netip.Prefix) error {
 // isExitRoute reports whether a prefix is an exit-node default route.
 func isExitRoute(prefix netip.Prefix) bool {
 	return prefix.Bits() == 0
-}
-
-// planGateOrRender writes the gate's error page and reports false, or returns
-// true when the action may proceed. Console handlers use it to keep the gate,
-// the audit trail and the page rendering in one place.
-func (s *Server) planGateOrRender(w http.ResponseWriter, r *http.Request, err error, title string) bool {
-	if err == nil {
-		return true
-	}
-	var he HTTPError
-	if !errors.As(err, &he) {
-		s.renderError(w, r, http.StatusInternalServerError, title, "Please try again.")
-		return false
-	}
-	s.renderError(w, r, he.Code, title, s.translateMessage(r, he.Msg))
-	return false
 }
 
 // translateMessage localizes a gate message for the request's language. The

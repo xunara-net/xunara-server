@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 
 	"tailscale.com/tailcfg"
@@ -145,33 +144,5 @@ func TestAPIV2Serve(t *testing.T) {
 	memberToken := seedAPIKeyForUser(t, f.server, member, identity.ScopeRead)
 	if resp := apiRequest(t, client, http.MethodGet, hs.URL+"/api/v2/serve", memberToken, nil); resp.StatusCode != http.StatusOK {
 		t.Errorf("member status = %d, want 200", resp.StatusCode)
-	}
-}
-
-// TestConsoleServe checks the console page renders the postures, explains the
-// Funnel decision and stays read-only for every role.
-func TestConsoleServe(t *testing.T) {
-	f := newServeFixture(t, Config{DNSProvider: &fakeDNSProvider{}})
-	hs := newTestHTTPServer(t, f.server)
-	client := noRedirectClient()
-	cookie := loginLocal(t, client, hs.URL, "/console/serve")
-
-	page := bodyString(t, getRequest(t, client, hs.URL+"/console/serve", cookie))
-	for _, want := range []string{
-		"Serve", "DNS provider configured", "not supported", "https granted",
-		"funnel reported", "requests ingress wiring", "serve.tailnet.test",
-	} {
-		if !strings.Contains(page, want) {
-			t.Errorf("serve page lacks %q:\n%s", want, page)
-		}
-	}
-	if strings.Contains(page, `action="/console/serve"`) {
-		t.Errorf("page renders a form:\n%s", page)
-	}
-
-	member := seedRoleUser(t, f.server, "member@example.com", identity.RoleMember)
-	memberCookie, _ := seedUserSession(t, f.server, member)
-	if resp := getRequest(t, client, hs.URL+"/console/serve", memberCookie); resp.StatusCode != http.StatusOK {
-		t.Errorf("member page status = %d, want 200", resp.StatusCode)
 	}
 }

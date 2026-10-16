@@ -75,7 +75,7 @@ func TestLandingPageIsTheFrontDoor(t *testing.T) {
 	for _, want := range []string{
 		"Self-hosted Tailscale control plane",
 		"tailscale up --login-server",
-		`href="/login?return_to=%2Fconsole%2F"`,
+		`href="/login"`,
 		`href="https://github.com/xunara-net/xunara-server"`,
 		`href="https://github.com/xunara-net/xunara-docs"`,
 		`href="https://github.com/xunara-net/xunara-docs/blob/main/specs/project-spec.md"`,
@@ -103,7 +103,7 @@ func TestRootKeepsJSONForClients(t *testing.T) {
 		t.Fatalf("GET / content type = %q, want JSON", ct)
 	}
 	body := bodyString(t, resp)
-	for _, want := range []string{`"name":"Xunara"`, `"console":"/console/"`, `"version"`} {
+	for _, want := range []string{`"name":"Xunara"`, `"console":"/dashboard"`, `"version"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("root JSON lacks %q: %s", want, body)
 		}
@@ -206,8 +206,8 @@ func TestSetupCreatesTheAdministrator(t *testing.T) {
 		"confirm":      {"correct horse battery"},
 	}
 	resp := postForm(t, client, hs.URL+"/setup", form, nil)
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/console/" {
-		t.Fatalf("setup = %d %q, want 302 /console/", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/dashboard" {
+		t.Fatalf("setup = %d %q, want 302 /dashboard", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	cookie := cookieNamed(t, resp, sessionCookieName)
 	session, err := s.Identity().GetSessionByToken(cookie.Value)
@@ -325,8 +325,8 @@ func TestSignupRedeemsAnInvitation(t *testing.T) {
 
 	form.Set("confirm", "alice-password-1")
 	resp := postForm(t, client, hs.URL+"/signup", form, nil)
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/console/" {
-		t.Fatalf("signup = %d %q, want 302 /console/", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/dashboard" {
+		t.Fatalf("signup = %d %q, want 302 /dashboard", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	cookie := cookieNamed(t, resp, sessionCookieName)
 	session, err := s.Identity().GetSessionByToken(cookie.Value)
@@ -486,170 +486,4 @@ func submitLocalLoginAs(t *testing.T, client *http.Client, baseURL, login, passw
 		"password":  {password},
 		"return_to": {returnTo},
 	}, nil)
-}
-
-// TestConsoleInvitations walks invitation management from the console: create
-// (the link is shown once), redeem, and revoke.
-func TestConsoleInvitations(t *testing.T) {
-	s := newTestServer(t)
-	hs := newTestHTTPServer(t, s)
-	client := noRedirectClient()
-	// The default local account is the owner, so it may write.
-	admin := loginLocal(t, client, hs.URL, "/console/users")
-
-	page := bodyString(t, getRequest(t, client, hs.URL+"/console/users", admin))
-	csrf := extractCSRF(t, page)
-	if !strings.Contains(page, "Create an invitation") {
-		t.Fatalf("users page lacks the invitation form:\n%s", page)
-	}
-
-	create := postForm(t, client, hs.URL+"/console/invites", url.Values{
-		"csrf": {csrf},
-		"role": {"member"},
-		"note": {"for bob"},
-		"ttl":  {"168"},
-	}, admin)
-	if create.StatusCode != http.StatusOK {
-		t.Fatalf("create invitation status = %d (%s)", create.StatusCode, bodyString(t, create))
-	}
-	created := bodyString(t, create)
-	token := invitationCodeFromPage(t, created)
-	if !strings.HasPrefix(token, identity.InvitePrefix) {
-		t.Fatalf("invitation link carries %q, want a %s token", token, identity.InvitePrefix)
-	}
-	if !strings.Contains(created, "for bob") || !strings.Contains(created, "open") {
-		t.Errorf("the new invitation is not listed as open:\n%s", created)
-	}
-
-	// The token is shown once: the list only ever holds the hash.
-	reloaded := bodyString(t, getRequest(t, client, hs.URL+"/console/users", admin))
-	if strings.Contains(reloaded, token) {
-		t.Errorf("the invitation token is stored and re-rendered:\n%s", reloaded)
-	}
-	if !strings.Contains(reloaded, "for bob") {
-		t.Errorf("the invitation is missing from the list:\n%s", reloaded)
-	}
-
-	// A read-only member cannot mint one.
-	member := identity.User{LoginName: "member-user", DisplayName: "Member", Role: identity.RoleMember}
-	if err := s.Identity().CreateUser(&member); err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-	hash, err := identity.HashPassword("member-password-1")
-	if err != nil {
-		t.Fatalf("HashPassword: %v", err)
-	}
-	if err := s.Identity().SetLocalCredential(&identity.LocalCredential{UserID: member.ID, PasswordHash: hash}); err != nil {
-		t.Fatalf("SetLocalCredential: %v", err)
-	}
-	memberClient := noRedirectClient()
-	memberLogin := submitLocalLoginAs(t, memberClient, hs.URL, "member-user", "member-password-1", "/console/users")
-	if memberLogin.StatusCode != http.StatusFound {
-		t.Fatalf("member sign-in = %d", memberLogin.StatusCode)
-	}
-	cookie := cookieNamed(t, memberLogin, sessionCookieName)
-	forbidden := postForm(t, memberClient, hs.URL+"/console/invites", url.Values{
-		"csrf": {csrf},
-		"role": {"member"},
-		"ttl":  {"24"},
-	}, cookie)
-	if forbidden.StatusCode != http.StatusForbidden {
-		t.Errorf("member may create invitations: status = %d", forbidden.StatusCode)
-	}
-
-	// Redeeming the invitation creates the account and marks it used.
-	form := url.Values{
-		"_csrf":    {hiddenValue(t, bodyString(t, getHTML(t, client, hs.URL+"/signup")), "_csrf")},
-		"invite":   {token},
-		"login":    {"bob"},
-		"password": {"bob-password-123"},
-		"confirm":  {"bob-password-123"},
-	}
-	signup := postForm(t, client, hs.URL+"/signup", form, nil)
-	if signup.StatusCode != http.StatusFound {
-		t.Fatalf("signup status = %d (%s)", signup.StatusCode, bodyString(t, signup))
-	}
-	after := bodyString(t, getRequest(t, client, hs.URL+"/console/users", admin))
-	if !strings.Contains(after, "redeemed") || !strings.Contains(after, "bob") {
-		t.Errorf("the console does not show the redeemed invitation:\n%s", after)
-	}
-
-	// A redeemed invitation cannot be revoked; a new one can.
-	invites := s.Identity().ListRegistrationInvites()
-	if len(invites) != 1 {
-		t.Fatalf("invites = %+v", invites)
-	}
-	revoked := postForm(t, client, hs.URL+"/console/invites/"+invites[0].ID+"/delete",
-		url.Values{"csrf": {csrf}}, admin)
-	if revoked.StatusCode != http.StatusConflict {
-		t.Errorf("revoking a redeemed invitation = %d, want 409", revoked.StatusCode)
-	}
-
-	fresh, freshToken, err := s.Identity().CreateRegistrationInvite(identity.NewRegistrationInviteOptions{
-		Role: identity.RoleAdmin, TTL: time.Hour,
-	})
-	if err != nil {
-		t.Fatalf("CreateRegistrationInvite: %v", err)
-	}
-	revoked = postForm(t, client, hs.URL+"/console/invites/"+fresh.ID+"/delete", url.Values{"csrf": {csrf}}, admin)
-	if revoked.StatusCode != http.StatusOK {
-		t.Fatalf("revoking an open invitation = %d (%s)", revoked.StatusCode, bodyString(t, revoked))
-	}
-	if _, err := s.Identity().FindRegistrationInvite(freshToken); err == nil {
-		t.Error("the revoked invitation still resolves")
-	}
-}
-
-func invitationCodeFromPage(t *testing.T, page string) string {
-	t.Helper()
-
-	const marker = `<code id="invitation-code">`
-	i := strings.Index(page, marker)
-	if i < 0 {
-		t.Fatal("page has no one-time invitation code")
-	}
-	rest := page[i+len(marker):]
-	end := strings.IndexAny(rest, `"<&`)
-	if end < 0 {
-		t.Fatalf("malformed invitation link in page")
-	}
-	return rest[:end]
-}
-
-// TestConsoleDoesNotTranslateRuntimeData checks that a login name that reads
-// like UI copy is printed verbatim: a user called "Cancel" must not become
-// a button label.
-func TestConsoleDoesNotTranslateRuntimeData(t *testing.T) {
-	s := newTestServer(t)
-	hs := newTestHTTPServer(t, s)
-	client := noRedirectClient()
-	cookie := loginLocal(t, client, hs.URL, "/console/users")
-
-	user := identity.User{LoginName: "Cancel", DisplayName: "Sign out"}
-	if err := s.Identity().CreateUser(&user); err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-
-	request, err := http.NewRequest(http.MethodGet, hs.URL+"/console/users", nil)
-	if err != nil {
-		t.Fatalf("building request: %v", err)
-	}
-	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	request.AddCookie(cookie)
-	resp, err := client.Do(request)
-	if err != nil {
-		t.Fatalf("GET /console/users: %v", err)
-	}
-	t.Cleanup(func() { resp.Body.Close() })
-	body := bodyString(t, resp)
-
-	if !strings.Contains(body, "登录名") {
-		t.Errorf("the page is not Chinese; the test would not prove anything:\n%.800s", body)
-	}
-	if !strings.Contains(body, `<span translate="no">Cancel</span>`) {
-		t.Errorf("the login name was translated or lost:\n%.1200s", body)
-	}
-	if !strings.Contains(body, `translate="no">Sign out</span>`) {
-		t.Errorf("the display name was translated or lost:\n%.1200s", body)
-	}
 }

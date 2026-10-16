@@ -118,7 +118,8 @@ func (router *Router) handleTenantConsole(writer http.ResponseWriter, request *h
 		return
 	}
 	devicePage := router.nativeGateway != nil && (strings.HasPrefix(path, "/register/") || strings.HasPrefix(path, "/ssh/check/"))
-	if !devicePage && !strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/api/v2/") && !strings.HasPrefix(path, "/oidc/callback/") && !strings.HasPrefix(path, "/oauth2/callback/") {
+	retiredConsole := path == "/console" || strings.HasPrefix(path, "/console/")
+	if !devicePage && !retiredConsole && path != "/ui/prefs" && !strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/api/v2/") && !strings.HasPrefix(path, "/oidc/callback/") && !strings.HasPrefix(path, "/oauth2/callback/") {
 		http.NotFound(writer, request)
 		return
 	}

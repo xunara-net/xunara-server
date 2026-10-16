@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-// The console templates stay English-only: the English text doubles as the
+// 独立授权页复用本地化器，不依赖已退役的内嵌控制台。
+// The standalone templates stay English-only: the English text doubles as the
 // message id, so a page that is not translated yet renders the English text
 // instead of a blank or a key. Translation itself happens after rendering,
 // which keeps every page template free of translation bookkeeping and covers

@@ -273,7 +273,7 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, token, session.ExpiresAt)
 
-	http.Redirect(w, r, "/console/", http.StatusFound)
+	http.Redirect(w, r, s.consolePageURL("/dashboard"), http.StatusFound)
 }
 
 // passwordPolicyMessage turns a password policy error into page copy.

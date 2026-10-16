@@ -111,6 +111,8 @@ func (s *Server) renderPage(w http.ResponseWriter, r *http.Request, tmpl *templa
 	if _, ok := data["ServerURL"]; !ok {
 		data["ServerURL"] = s.cfg.ServerURL
 	}
+	data["ConsoleURL"] = s.consolePageURL("/dashboard")
+	data["PreferencesURL"] = s.consolePageURL("/ui/prefs")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// The template is cloned per request so the T helper (used by inline
 	// scripts, which the localization pass deliberately skips) is bound to the
@@ -136,6 +138,7 @@ func (s *Server) renderError(w http.ResponseWriter, r *http.Request, status int,
 	page := translateHTML(lang, renderToString(errorPageTemplate, map[string]any{
 		"Title": translateTitle(lang, title), "Message": message,
 		"Lang": lang, "Accent": consoleAccentFromRequest(r),
+		"ConsoleURL": s.consolePageURL("/dashboard"), "PreferencesURL": s.consolePageURL("/ui/prefs"),
 	}))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

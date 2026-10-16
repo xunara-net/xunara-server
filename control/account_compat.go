@@ -16,18 +16,3 @@ func deprecatedAccountEndpoint(next http.Handler) http.Handler {
 		next.ServeHTTP(writer, request)
 	})
 }
-
-// 旧表单仅适配 CSRF 的传输位置和跳转，删除仍使用统一账户事务。
-func (server *Server) handleLegacyDeletePasskey(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := server.requireAccountSession(writer, request, false)
-	if !ok {
-		return
-	}
-	if !checkCSRF(request, server.accountSessionToken(request)) {
-		writeAPIError(writer, http.StatusForbidden, "CSRF_INVALID: reload the account page and try again")
-		return
-	}
-	if server.deleteAccountPasskey(writer, request, principal) {
-		http.Redirect(writer, request, "/security", http.StatusFound)
-	}
-}

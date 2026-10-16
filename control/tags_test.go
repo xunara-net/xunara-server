@@ -5,12 +5,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -249,39 +247,5 @@ func TestAPIKeyCreationWithTags(t *testing.T) {
 	}
 	if _, hasSecret := authKeys[0].(map[string]any)["key"]; hasSecret {
 		t.Error("the auth-key list must not reveal secrets")
-	}
-}
-
-// TestConsoleAuthKeyTags checks tag validation on the console form.
-func TestConsoleAuthKeyTags(t *testing.T) {
-	s := newServerWithConfig(t, Config{PolicyPath: policyFile(t, tagPolicy)})
-	hs := newTestHTTPServer(t, s)
-	client := noRedirectClient()
-	cookie := loginLocal(t, client, hs.URL, "/console/auth-keys")
-
-	page := bodyString(t, getRequest(t, client, hs.URL+"/console/auth-keys", cookie))
-	csrf := extractCSRF(t, page)
-
-	// An undefined tag is rejected, not silently stored.
-	bad := postForm(t, client, hs.URL+"/console/auth-keys",
-		url.Values{"csrf": {csrf}, "tags": {"tag:undefined"}}, cookie)
-	if bad.StatusCode != http.StatusBadRequest {
-		t.Fatalf("undefined tag status = %d, want 400", bad.StatusCode)
-	}
-	if keys := s.Store().ListPreAuthKeys(); len(keys) != 0 {
-		t.Fatalf("rejected form created a key: %+v", keys)
-	}
-
-	good := postForm(t, client, hs.URL+"/console/auth-keys",
-		url.Values{"csrf": {csrf}, "tags": {"tag:owned, tag:owned"}}, cookie)
-	if good.StatusCode != http.StatusOK {
-		t.Fatalf("create status = %d (%s), want 200", good.StatusCode, bodyString(t, good))
-	}
-	keys := s.Store().ListPreAuthKeys()
-	if len(keys) != 1 || !slices.Equal(keys[0].Tags, []string{"tag:owned"}) {
-		t.Fatalf("stored keys = %+v, want one key tagged tag:owned", keys)
-	}
-	if body := bodyString(t, good); !strings.Contains(body, "<code>tag:owned</code>") {
-		t.Errorf("key list does not show the tag:\n%s", body)
 	}
 }

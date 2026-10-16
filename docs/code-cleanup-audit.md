@@ -62,8 +62,8 @@ typecheck / build。浏览器脚本补充明确 npm 入口，防止今后被文�
 
 以下内容明确保留，不用清理名义取消能力或破坏升级：
 
-- `/console/*` 与内嵌 `/admin/*` 仍有实际路由和部署 / 测试调用，按
-  [ADR-0003](adr/ADR-0003-server-web-split.md)等待功能对等后单独退役。
+- 后续 2026-10-16 已按 [ADR-0049](adr/ADR-0049-retire-embedded-console.md)删除 `/console/*`
+  完整页面和表单，仅保留书签迁移 / 旧写 410。内嵌 `/admin/*` 不在此次用户中心退役范围内。
 - 旧账户地址的薄适配、旧租户登录跳转、`network-check.py` 的 410 拒绝规则、
   重置码退役响应和旧凭据清理 SQL，均是兼容或安全边界，不是旧业务复活。
 - `MemoryStore` 是持久实现的测试对照和内嵌公共能力；`Agent.netmapStats` 是

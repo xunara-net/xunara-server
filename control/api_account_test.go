@@ -164,8 +164,8 @@ func TestAccountLegacyUserManagementOwnerOnly(t *testing.T) {
 	request.AddCookie(cookie)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden {
-		t.Fatal("an admin could bypass account permissions through the HTML console")
+	if response.Code != http.StatusGone {
+		t.Fatal("the retired HTML console still accepted account management")
 	}
 	response = accountRequest(t, server, http.MethodPatch, "/api/v1/account", map[string]string{"display_name": "own admin profile"}, cookie, map[string]string{"X-CSRF-Token": csrfTokenFor(token)})
 	if response.Code != http.StatusOK {

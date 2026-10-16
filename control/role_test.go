@@ -243,45 +243,6 @@ func TestDeletedUserCannotAuthenticate(t *testing.T) {
 	}
 }
 
-func TestConsoleRoleGating(t *testing.T) {
-	s := newTestServer(t)
-	hs := newTestHTTPServer(t, s)
-	client := noRedirectClient()
-
-	memberID := seedRoleUser(t, s, "viewer@example.com", identity.RoleMember)
-	memberCookie, memberToken := seedUserSession(t, s, memberID)
-	adminID := seedRoleUser(t, s, "operator@example.com", identity.RoleAdmin)
-	adminCookie, adminToken := seedUserSession(t, s, adminID)
-
-	// The member can read pages and is told the access is read-only.
-	resp := getRequest(t, client, hs.URL+"/console/machines", memberCookie)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("member GET /console/machines status = %d, want 200", resp.StatusCode)
-	}
-	body := bodyString(t, resp)
-	if want := "read-only"; !strings.Contains(body, want) {
-		t.Errorf("member console page does not mention read-only access")
-	}
-	if strings.Contains(body, "Delete") {
-		t.Error("member console page renders a Delete control")
-	}
-
-	// A write POST is rejected before CSRF even matters.
-	resp = postForm(t, client, hs.URL+"/console/machines/1/delete",
-		map[string][]string{"csrf": {csrfTokenFor(memberToken)}}, memberCookie)
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("member console write status = %d, want 403", resp.StatusCode)
-	}
-
-	// The admin can perform the same write (the node does not have to exist for
-	// the guard to pass; a missing node renders an error page).
-	resp = postForm(t, client, hs.URL+"/console/machines/1/delete",
-		map[string][]string{"csrf": {csrfTokenFor(adminToken)}}, adminCookie)
-	if resp.StatusCode == http.StatusForbidden {
-		t.Errorf("admin console write status = %d, want anything but 403", resp.StatusCode)
-	}
-}
-
 // helpers local to this file
 
 // newJSONBody marshals v for a JSON request body.

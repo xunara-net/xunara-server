@@ -249,5 +249,5 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.setSessionCookie(w, sessionToken, session.ExpiresAt)
-	http.Redirect(w, r, "/console/", http.StatusFound)
+	http.Redirect(w, r, s.consolePageURL("/dashboard"), http.StatusFound)
 }

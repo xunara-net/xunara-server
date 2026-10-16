@@ -101,13 +101,6 @@ func (s *Server) principalForToken(ctx context.Context, token string) (apiPrinci
 	return s.resolveSessionPrincipal(ctx, session)
 }
 
-// sessionPrincipal grants a signed-in human the full scope set; the role still
-// bounds what those scopes can do.
-func (s *Server) sessionPrincipal(session identity.Session) (apiPrincipal, bool) {
-	principal, err := s.resolveSessionPrincipal(context.Background(), session)
-	return principal, err == nil
-}
-
 func (server *Server) resolveSessionPrincipal(ctx context.Context, session identity.Session) (apiPrincipal, error) {
 	user, err := server.identity.LookupUser(ctx, session.UserID)
 	if err != nil {

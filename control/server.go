@@ -30,8 +30,7 @@ import (
 	"github.com/xunara-net/xunara-server/webhook"
 )
 
-// Version is the Xunara server version reported by /version and shown in the
-// console footer. A release build overrides it with
+// Version is the Xunara server version reported by /version. A release build overrides it with
 // -ldflags "-X github.com/xunara-net/xunara-server/control.Version=<version>"; the
 // default keeps a source build honest about being a development snapshot.
 var Version = "0.0.0-dev"
@@ -779,6 +778,7 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/key", s.handleKey)
 	r.Get("/health", s.handleHealth)
 	r.Get("/version", s.handleVersion)
+	r.Get("/ui/prefs", s.handlePagePrefs)
 	r.Get("/.well-known/jwks.json", s.handleJWKS)
 	r.Get("/.well-known/openid-configuration", s.handleOpenIDConfiguration)
 	r.Get("/login", s.handleLogin)
@@ -810,7 +810,7 @@ func (s *Server) Handler() http.Handler {
 	r.Mount("/api/agent/v1", s.agentRouter())
 	r.Mount("/api/v1", s.apiRouter())
 	r.Mount("/api/v2", s.apiV2Router())
-	r.Mount("/console", s.consoleRouter())
+	r.Mount("/console", http.HandlerFunc(s.handleRetiredConsole))
 	r.Get("/", s.handleRoot)
 	r.NotFound(s.handleNotFound)
 
@@ -933,7 +933,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			"name":    "Xunara",
 			"version": Version,
 			"message": "Tailscale-compatible control plane. Point clients at this URL with `tailscale up --login-server=<url>`.",
-			"console": "/console/",
+			"console": s.consolePageURL("/dashboard"),
 		})
 		return
 	}

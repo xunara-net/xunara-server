@@ -123,13 +123,6 @@ func (server *Server) handleAPIAccountPasskeyFinish(writer http.ResponseWriter, 
 		}
 		return
 	}
-	// 兼容期只保留旧 JSON 形状，不保留旧注册或审计实现。
-	if strings.HasPrefix(request.URL.Path, "/console/") {
-		writeJSON(writer, http.StatusOK, map[string]any{"passkey": map[string]any{
-			"ID": passkey.ID, "Name": passkey.Name, "Created": passkey.CreatedAt, "LastUsed": passkey.LastUsedAt,
-		}})
-		return
-	}
 	writeJSON(writer, http.StatusCreated, map[string]any{"passkey": accountPasskey(passkey)})
 }
 

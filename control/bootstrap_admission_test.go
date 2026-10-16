@@ -78,7 +78,7 @@ func TestBootstrapAdmissionFailsClosedOnRateStorageFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			response = postForm(t, noRedirectClient(), host.URL+"/setup", form, nil)
-			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/console/" {
+			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dashboard" {
 				t.Fatal("bootstrap did not recover after rate storage became available")
 			}
 			cookieNamed(t, response, sessionCookieName)
@@ -130,7 +130,7 @@ func TestBootstrapTransactionFailurePreservesOwnerProofAndSession(t *testing.T) 
 				t.Fatal(err)
 			}
 			response = postForm(t, noRedirectClient(), host.URL+"/setup", form, oldCookie)
-			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/console/" {
+			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dashboard" {
 				t.Fatal("rolled-back bootstrap could not retry")
 			}
 			cookieNamed(t, response, sessionCookieName)
@@ -180,7 +180,6 @@ func TestBootstrapInvitationGateStorageFailureIsNotDisabled(t *testing.T) {
 	server := newTestServer(t)
 	host := newTestHTTPServer(t, server)
 	token := inviteOwnerToken(t, server)
-	cookie := &http.Cookie{Name: sessionCookieName, Value: token}
 	database := server.store.(*state.SQLiteStore).DB()
 	if _, err := database.Exec("ALTER TABLE local_bootstrap_state RENAME TO unavailable_invite_bootstrap"); err != nil {
 		t.Fatal(err)
@@ -189,8 +188,6 @@ func TestBootstrapInvitationGateStorageFailureIsNotDisabled(t *testing.T) {
 	response := memberInviteRequestForTest(t, noRedirectClient(), http.MethodGet, endpoint, token, "", nil)
 	assertBootstrapUnavailable(t, response, token, "unavailable_invite_bootstrap")
 	response = memberInviteRequestForTest(t, noRedirectClient(), http.MethodPost, endpoint, token, csrfTokenFor(token), memberInviteRequest{Role: "member", TTLHours: 1})
-	assertBootstrapUnavailable(t, response, token, "unavailable_invite_bootstrap")
-	response = getHTML(t, noRedirectClient(), host.URL+"/console/users", cookie)
 	assertBootstrapUnavailable(t, response, token, "unavailable_invite_bootstrap")
 	if invites, err := server.identity.ListRegistrationInvitesContext(t.Context()); err != nil || len(invites) != 0 {
 		t.Fatal("failed invitation gate persisted an invitation")

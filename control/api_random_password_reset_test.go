@@ -150,6 +150,12 @@ func TestTemporaryPasswordRequiresChangeAcrossHumanSurfacesAndNotServices(test *
 	}
 	for _, operation := range []struct{ method, path string }{{http.MethodGet, "/console/"}, {http.MethodPost, "/console/machines/1/delete"}, {http.MethodPost, "/register/test/approve"}} {
 		response := accountRequest(test, server, operation.method, operation.path, nil, cookie, nil)
+		if operation.path == "/console/machines/1/delete" {
+			if response.Code != http.StatusGone {
+				test.Fatal("retired form accepted a temporary human login")
+			}
+			continue
+		}
 		if response.Code != http.StatusFound || response.Header().Get("Location") != "/change-password" {
 			test.Fatal("legacy console or device approval bypassed forced change")
 		}

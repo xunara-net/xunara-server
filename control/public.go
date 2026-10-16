@@ -129,9 +129,9 @@ const publicHead = `<!doctype html>
 <nav class="pnav">
 <a href="https://github.com/xunara-net/xunara-docs">{{T "Documentation"}}</a>
 <a href="https://github.com/xunara-net/xunara-server">GitHub</a>
-<span class="plang"><a href="/console/prefs?lang=zh&return_to={{.Path}}"{{if eq .Lang "zh"}} class="on"{{end}}>中文</a><a href="/console/prefs?lang=en&return_to={{.Path}}"{{if eq .Lang "en"}} class="on"{{end}}>English</a></span>
-{{if .User}}<span class="pwho">{{.User}}</span><a class="pbtn small ghost on-dark" href="/console/">{{T "Open console"}}</a>
-{{else if not .Setup}}<a class="pbtn small ghost on-dark" href="/login?return_to=%2Fconsole%2F">{{T "Sign in"}}</a>{{end}}
+<span class="plang"><a href="{{.PreferencesURL}}?lang=zh&return_to={{.Path}}"{{if eq .Lang "zh"}} class="on"{{end}}>中文</a><a href="{{.PreferencesURL}}?lang=en&return_to={{.Path}}"{{if eq .Lang "en"}} class="on"{{end}}>English</a></span>
+{{if .User}}<span class="pwho">{{.User}}</span><a class="pbtn small ghost on-dark" href="{{.ConsoleURL}}">{{T "Open console"}}</a>
+{{else if not .Setup}}<a class="pbtn small ghost on-dark" href="/login">{{T "Sign in"}}</a>{{end}}
 </nav>
 </header>
 `
@@ -173,7 +173,7 @@ var (
 <p class="lede">Keep official clients working: TS2021, Noise, MagicDNS, ACLs, DERP, Serve and Funnel behave as upstream defines them. Multi-tenant, separated human and machine identity, and a full audit log are built in, with no external assets and no CDN.</p>
 <div class="cta">
 {{if .Setup}}<a class="pbtn" href="/setup">Set up the administrator</a>
-{{else}}<a class="pbtn" href="/login?return_to=%2Fconsole%2F">Sign in to the console</a>{{end}}
+{{else}}<a class="pbtn" href="/login">Sign in to the console</a>{{end}}
 <a class="pbtn ghost" href="https://github.com/xunara-net/xunara-docs/blob/main/specs/project-spec.md">Read the specification</a>
 </div>
 <ul class="chips"><li>Official-client compatible</li><li>Self-hosted</li><li>Multi-tenant</li><li>Audit and access control</li></ul>

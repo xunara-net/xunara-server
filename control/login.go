@@ -392,7 +392,7 @@ func safeReturnTo(raw string) string {
 // did not name anything better (or tried to leave the site).
 func loginReturnTo(raw string) string {
 	if strings.TrimSpace(raw) == "" {
-		return "/console/"
+		return "/dashboard"
 	}
 	return safeReturnTo(raw)
 }

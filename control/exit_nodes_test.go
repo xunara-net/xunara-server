@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
-	"strings"
 	"testing"
 
 	"tailscale.com/tailcfg"
@@ -178,31 +177,5 @@ func TestAPIV2ExitNodes(t *testing.T) {
 	memberToken := seedAPIKeyForUser(t, f.server, member, identity.ScopeRead)
 	if resp := apiRequest(t, client, http.MethodGet, hs.URL+"/api/v2/exit-nodes", memberToken, nil); resp.StatusCode != http.StatusOK {
 		t.Errorf("member status = %d, want 200", resp.StatusCode)
-	}
-}
-
-// TestConsoleExitNodes checks the console page renders the join and stays
-// read-only for every role.
-func TestConsoleExitNodes(t *testing.T) {
-	f := newExitFixture(t)
-	hs := newTestHTTPServer(t, f.server)
-	client := noRedirectClient()
-	cookie := loginLocal(t, client, hs.URL, "/console/exit-nodes")
-
-	page := bodyString(t, getRequest(t, client, hs.URL+"/console/exit-nodes", cookie))
-	for _, want := range []string{"Exit nodes", "Approved exit nodes", "Clients", "exit", "laptop", "n-deleted", "unresolved", "not advertising"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("exit-nodes page lacks %q:\n%s", want, page)
-		}
-	}
-	if strings.Contains(page, `action="/console/exit-nodes"`) {
-		t.Errorf("page renders a form:\n%s", page)
-	}
-
-	member := seedRoleUser(t, f.server, "member@example.com", identity.RoleMember)
-	memberCookie, _ := seedUserSession(t, f.server, member)
-	resp := getRequest(t, client, hs.URL+"/console/exit-nodes", memberCookie)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("member console status = %d, want 200", resp.StatusCode)
 	}
 }

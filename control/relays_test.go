@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 
 	"tailscale.com/tailcfg"
@@ -146,34 +145,6 @@ func TestAPIV2Relays(t *testing.T) {
 	memberToken := seedAPIKeyForUser(t, f.server, member, identity.ScopeRead)
 	if resp := apiRequest(t, client, http.MethodGet, hs.URL+"/api/v2/relays", memberToken, nil); resp.StatusCode != http.StatusOK {
 		t.Errorf("member status = %d, want 200", resp.StatusCode)
-	}
-}
-
-// TestConsoleRelays checks the console page renders the join, stays read-only
-// and is available to every role.
-func TestConsoleRelays(t *testing.T) {
-	f := newRelayFixture(t)
-	hs := newTestHTTPServer(t, f.server)
-	client := noRedirectClient()
-	cookie := loginLocal(t, client, hs.URL, "/console/relays")
-
-	page := bodyString(t, getRequest(t, client, hs.URL+"/console/relays", cookie))
-	for _, want := range []string{
-		"Relay candidates", "Relay grants", "relay", "blocked-relay", "willing", "client",
-		"disable-relay-server", "disable-relay-client", "not in any relay grant",
-	} {
-		if !strings.Contains(page, want) {
-			t.Errorf("relays page lacks %q:\n%s", want, page)
-		}
-	}
-	if strings.Contains(page, `action="/console/relays"`) {
-		t.Errorf("page renders a form:\n%s", page)
-	}
-
-	member := seedRoleUser(t, f.server, "member@example.com", identity.RoleMember)
-	memberCookie, _ := seedUserSession(t, f.server, member)
-	if resp := getRequest(t, client, hs.URL+"/console/relays", memberCookie); resp.StatusCode != http.StatusOK {
-		t.Errorf("member page status = %d, want 200", resp.StatusCode)
 	}
 }
 

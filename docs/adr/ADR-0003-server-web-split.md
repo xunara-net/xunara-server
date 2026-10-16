@@ -17,7 +17,7 @@
 4. 服务端**保留**设备授权流程必需的浏览器页面（`/login`、`/signup`、`/setup`、
    `/register/{authID}`、`/ssh/check/*`），因为 Tailscale 客户端会把用户直接
    带到这些 URL；
-5. 旧控制台页面（`/console/*`）在 xunara-web 达到功能对等前保留在同一二进制
+5. （已由 [ADR-0049](ADR-0049-retire-embedded-console.md) 于 2026-10-16 取代）旧控制台页面（`/console/*`）在 xunara-web 达到功能对等前保留在同一二进制
    中，标记为过渡实现；对等后删除，删除时同步发布迁移说明。
 
 ## 影响

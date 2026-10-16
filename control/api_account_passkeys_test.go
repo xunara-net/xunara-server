@@ -2,10 +2,8 @@ package control
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -106,7 +104,7 @@ func TestPasskeyJSONLoginSnapshot(t *testing.T) {
 	}
 }
 
-func TestAccountPasskeyInputsAndDeprecatedConsoleAliases(t *testing.T) {
+func TestAccountPasskeyInputsAndRetiredConsoleAliases(t *testing.T) {
 	server := newServerWithConfig(t, Config{ServerURL: testPasskeyOrigin, Passkeys: testPasskeyConfig()})
 	cookie, token := seedUserSession(t, server, state.DefaultUserID)
 	headers := map[string]string{"X-CSRF-Token": csrfTokenFor(token)}
@@ -127,50 +125,12 @@ func TestAccountPasskeyInputsAndDeprecatedConsoleAliases(t *testing.T) {
 	}
 	for _, path := range []string{"/console/passkeys/begin", "/console/passkeys/finish", "/console/passkeys/old/delete"} {
 		response := accountRequest(t, server, http.MethodPost, path, "{}", cookie, headers)
-		if response.Header().Get("Deprecation") == "" || !strings.Contains(response.Header().Get("Link"), `rel="deprecation"`) {
-			t.Fatalf("old alias has no migration warning: %s", path)
+		if response.Code != http.StatusGone || !strings.Contains(response.Body.String(), "CONSOLE_RETIRED") {
+			t.Fatalf("old alias is still active: %s", path)
 		}
-		if response := accountRequest(t, server, http.MethodPost, path, "{}", cookie, nil); response.Code != http.StatusForbidden {
-			t.Fatal("compatibility alias bypassed CSRF")
+		if response := accountRequest(t, server, http.MethodPost, path, "{}", cookie, nil); response.Code != http.StatusGone {
+			t.Fatal("retired alias resumed without CSRF")
 		}
-	}
-}
-
-func TestDeprecatedPasskeyAliasesUseAccountCore(t *testing.T) {
-	server := newServerWithConfig(t, Config{ServerURL: testPasskeyOrigin, Passkeys: testPasskeyConfig()})
-	httpServer := newTestHTTPServer(t, server)
-	client := newPasskeyClient(t)
-	passkeyLocalLogin(t, client, httpServer.URL, "/security")
-	csrf := csrfTokenFor(sessionCookieFromJar(t, client, httpServer.URL))
-	begin := postJSONRequest(t, client, httpServer.URL+"/console/passkeys/begin", []byte("{}"), csrf)
-	if begin.StatusCode != http.StatusOK || begin.Header.Get("Deprecation") == "" {
-		t.Fatal("legacy begin has no compatible response or migration notice")
-	}
-	options := decodeJSON[struct{ Options protocol.CredentialCreation }](t, readBody(t, begin)).Options
-	authenticator := newSoftwareAuthenticator(t)
-	credential := authenticator.creationBody(t, testPasskeyRPID, testPasskeyOrigin, &options)
-	body, err := json.Marshal(map[string]any{"name": "旧地址迁移测试", "credential": json.RawMessage(credential)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	finish := postJSONRequest(t, client, httpServer.URL+"/console/passkeys/finish", body, csrf)
-	if finish.StatusCode != http.StatusOK || finish.Header.Get("Deprecation") == "" {
-		t.Fatal("legacy registration did not preserve its response status")
-	}
-	payload := decodeJSON[struct{ Passkey struct{ ID, Name string } }](t, readBody(t, finish))
-	if payload.Passkey.ID == "" || payload.Passkey.Name != "旧地址迁移测试" {
-		t.Fatal("legacy registration did not preserve its JSON shape")
-	}
-	deleted := postForm(t, client, httpServer.URL+"/console/passkeys/"+payload.Passkey.ID+"/delete", url.Values{"csrf": {csrf}}, nil)
-	if deleted.StatusCode != http.StatusFound || deleted.Header.Get("Location") != "/security" || deleted.Header.Get("Deprecation") == "" {
-		t.Fatal("legacy form did not use account deletion and the new UI")
-	}
-	actions := map[string]int{}
-	for _, event := range server.identity.ListAudit(0) {
-		actions[event.Action]++
-	}
-	if actions[identity.AuditPasskeyRegistered] != 1 || actions[identity.AuditPasskeyDeleted] != 1 {
-		t.Fatal("compatibility aliases duplicated account audits")
 	}
 }
 

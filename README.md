@@ -300,21 +300,27 @@ go run ./cmd/xunarad -listen 127.0.0.1:8080 -server-url http://localhost:5173
 
 ### 旧账户接口迁移
 
-旧通行密钥管理模板和旧撤销业务实现已删除；以下地址仅保留薄适配，不维护第二套逻辑。
-它们返回 `Deprecation` 日期头与指向本节的 `Link`，最终删除时间另行公告：
+内嵌 `/console/*` 用户中心已于 2026-10-16 整体退役，页面模板和表单业务实现均已删除。
+已登录的旧书签只跳转到独立 Web 对应页面；未登录先到统一 `/login`，回跳也只指向新页面。
+旧表单（包括通行密钥旧别名）统一返回 `410 CONSOLE_RETIRED`，不会再修改状态：
 
 | 旧入口 | 新入口 |
 | --- | --- |
 | `/console/passkeys` | 重定向到 Web `/security` |
-| `POST /console/passkeys/begin`、`finish` | `/api/v1/account/passkeys/begin`、`finish` |
-| `POST /console/passkeys/{id}/delete`（表单 CSRF） | `DELETE /api/v1/account/passkeys/{id}`（CSRF header） |
+| `/console/ssh-check` | Web `/security#ssh-check`，读取既有 `/api/v2/ssh-check/sessions` |
+| `POST /console/passkeys/begin`、`finish`（现返回 410） | `/api/v1/account/passkeys/begin`、`finish` |
+| `POST /console/passkeys/{id}/delete`（现返回 410） | `DELETE /api/v1/account/passkeys/{id}`（CSRF header） |
 | `GET /api/v1/sessions`、`DELETE .../sessions/{id}` | `/api/v1/account/sessions` 与单个撤销接口 |
 | `POST /api/v1/auth/logout` | 撤销当前 `/api/v1/account/sessions/{id}` |
 
+表内旧 JSON 会话接口仍有 `Deprecation` 与迁移 `Link`，不与已退役的 HTML 表单混同。
 旧 JSON 会话写接口也必须使用 Human Session + CSRF；API Key 和无 CSRF 写入不再支持。
 顶部退出与安全中心已统一调用新接口，存储失败不会清 Cookie 或假报成功。
-官方客户端授权必需的 HTML 登录及其通行密钥登录入口保留；其他尚未功能对等的
-内嵌控制台模块按 ADR-0003 继续分阶段迁移，不把它们混入新的产品前端。
+官方客户端授权必需的 HTML 登录、`/register/*`、`/ssh/check/*` 及通行密钥登录保留。
+独立授权页的语言偏好改走 `/ui/prefs`；完整用户中心必须部署 `xunara-web`。
+Reach、Flux、服务和 Webhook 等未提供新 Web 页面部分仍保留已有版本化 API / CLI，
+不因此恢复旧页面或宣称 Web 已全功能对等。部署顺序、边界与回滚见
+[ADR-0049](docs/adr/ADR-0049-retire-embedded-console.md)。
 
 ## 测试
 
