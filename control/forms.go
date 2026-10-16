@@ -15,12 +15,8 @@ import (
 	"time"
 )
 
-// Anonymous forms (sign in, first-run setup, registration) have no session to
-// bind a CSRF token to, so they carry a signed token instead: it names the
-// form it was minted for and expires, and the signing key never leaves the
-// server. Without it, a page on another site could submit the sign-in form
-// with the attacker's credentials and silently log the victim into the wrong
-// account.
+// 匿名初始化、注册与共享设备登录尚无人类会话，使用绑定用途和有效期的签名 CSRF 证明。
+// 证明从 JSON 读取、在请求头提交；持久签名密钥不离开服务端，也不恢复旧 HTML 表单。
 
 // formTokenTTL bounds how long a rendered page's token stays valid. Long
 // enough for a form left open while the operator finds the setup token, short

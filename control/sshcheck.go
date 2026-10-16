@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"tailscale.com/tailcfg"
 
 	"github.com/xunara-net/xunara-server/identity"
@@ -259,122 +259,4 @@ func writeSSHAction(w http.ResponseWriter, action tailcfg.SSHAction) {
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-}
-
-// handleSSHCheckPage serves the approval page a user opens from the banner the
-// SSH client shows.
-func (s *Server) handleSSHCheckPage(w http.ResponseWriter, req *http.Request) {
-	authID := chi.URLParam(req, "authID")
-
-	sess, ok := s.identity.GetSSHCheckSession(authID)
-	if !ok {
-		s.renderError(w, req, http.StatusNotFound, "Unknown SSH check",
-			"This SSH check is unknown or has expired. The SSH connection will ask again.")
-		return
-	}
-	now := time.Now()
-	if sess.Expired(now) && sess.Pending() {
-		s.renderError(w, req, http.StatusGone, "SSH check expired",
-			"This SSH check has expired. The SSH connection will ask again.")
-		return
-	}
-	if !sess.Pending() {
-		s.renderDecidedPage(w, req, string(sess.Verdict))
-		return
-	}
-
-	session, ok := s.currentSession(req)
-	if !ok {
-		http.Redirect(w, req, "/login?return_to="+url.QueryEscape("/ssh/check/"+authID), http.StatusFound)
-		return
-	}
-
-	src, _ := s.store.GetNodeByID(state.NodeID(sess.SrcNodeID))
-	dst, _ := s.store.GetNodeByID(state.NodeID(sess.DstNodeID))
-
-	s.renderSSHCheckPage(w, req, map[string]any{
-		"ApprovalURL": s.consoleURL() + "/ssh/check/" + authID + "/approve",
-		"DenialURL":   s.consoleURL() + "/ssh/check/" + authID + "/deny",
-		"AuthID":      authID,
-		"CanWrite":    s.userCanWrite(session.UserID),
-		"Source":      nodeLabel(src, sess.SrcNodeID),
-		"Destination": nodeLabel(dst, sess.DstNodeID),
-		"LocalUser":   sess.LocalUser,
-		"Created":     s.consoleTime(sess.CreatedAt),
-		"Expires":     s.consoleTime(sess.ExpiresAt),
-		"LoginName":   s.UserProfile(session.UserID).LoginName,
-		"CSRF":        csrfTokenFor(s.sessionToken(req)),
-	})
-}
-
-// handleSSHCheckApprove implements POST /ssh/check/{authID}/approve.
-func (s *Server) handleSSHCheckApprove(w http.ResponseWriter, req *http.Request) {
-	s.decideSSHCheck(w, req, identity.SSHCheckAccepted)
-}
-
-// handleSSHCheckDeny implements POST /ssh/check/{authID}/deny.
-func (s *Server) handleSSHCheckDeny(w http.ResponseWriter, req *http.Request) {
-	s.decideSSHCheck(w, req, identity.SSHCheckRejected)
-}
-
-// decideSSHCheck applies an approve/deny verdict from the browser.
-func (s *Server) decideSSHCheck(w http.ResponseWriter, req *http.Request, verdict identity.SSHCheckVerdict) {
-	authID := chi.URLParam(req, "authID")
-
-	session, token, ok := s.requireSession(w, req, "/ssh/check/"+authID)
-	if !ok {
-		return
-	}
-	if !s.userCanWrite(session.UserID) {
-		s.renderError(w, req, http.StatusForbidden, "SSH check rejected",
-			"Your role does not allow deciding SSH checks.")
-		return
-	}
-	if !checkCSRF(req, token) {
-		s.renderError(w, req, http.StatusForbidden, "SSH check rejected",
-			"The form token is invalid. Reload the page and try again.")
-		return
-	}
-
-	sess, err := s.identity.DecideSSHCheckSession(authID, verdict, session.UserID, time.Now().UTC())
-	if err != nil {
-		switch {
-		case errors.Is(err, identity.ErrSSHCheckNotFound):
-			s.renderError(w, req, http.StatusNotFound, "Unknown SSH check",
-				"This SSH check is unknown or has expired.")
-		case errors.Is(err, identity.ErrSSHCheckExpired):
-			s.renderError(w, req, http.StatusGone, "SSH check expired",
-				"This SSH check has expired. The SSH connection will ask again.")
-		case errors.Is(err, identity.ErrSSHCheckDecided):
-			// A second tab or a replay: show the recorded outcome.
-			if got, ok := s.identity.GetSSHCheckSession(authID); ok {
-				s.renderDecidedPage(w, req, string(got.Verdict))
-				return
-			}
-			s.renderError(w, req, http.StatusConflict, "SSH check already decided",
-				"This SSH check was already decided.")
-		default:
-			s.log.Error("deciding ssh check", "err", err)
-			s.renderError(w, req, http.StatusInternalServerError, "SSH check failed", "Please try again.")
-		}
-		return
-	}
-
-	action := identity.AuditSSHCheckApproved
-	if verdict == identity.SSHCheckRejected {
-		action = identity.AuditSSHCheckDenied
-	}
-	s.audit(fmt.Sprintf("user:%d", session.UserID), action, "sshcheck:"+authID,
-		fmt.Sprintf("src_node=%d dst_node=%d local_user=%s", sess.SrcNodeID, sess.DstNodeID, sess.LocalUser))
-
-	s.renderDecidedPage(w, req, string(verdict))
-}
-
-// nodeLabel names a node for a page, falling back to its ID when the node is
-// gone.
-func nodeLabel(n state.Node, id int64) string {
-	if n.ID == 0 {
-		return fmt.Sprintf("node %d (removed)", id)
-	}
-	return fmt.Sprintf("%s (%s)", n.Hostname, n.IPv4)
 }

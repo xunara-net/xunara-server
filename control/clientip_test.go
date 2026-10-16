@@ -3,7 +3,6 @@ package control
 import (
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -57,7 +56,11 @@ func TestClientIPUsesTheLastHopBehindATrustedProxy(t *testing.T) {
 // one busy client would exhaust the limit for everyone.
 func TestTrustedProxySeparatesRateLimitBuckets(t *testing.T) {
 	untrusted := newUnconfiguredServer(t)
-	trusted := newServerWithConfig(t, Config{StateDir: t.TempDir(), TrustedProxy: true})
+	trusted, err := New(Config{ServerURL: "http://login.test", StateDir: t.TempDir(), TrustedProxy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { trusted.Close() })
 
 	attempt := func(s *Server, forwarded string) int {
 		t.Helper()
@@ -65,17 +68,12 @@ func TestTrustedProxySeparatesRateLimitBuckets(t *testing.T) {
 		client := noRedirectClient()
 		var last *http.Response
 		for i := 0; i < setupRateLimit+1; i++ {
-			req, err := http.NewRequest(http.MethodPost, hs.URL+"/setup", strings.NewReader(url.Values{
-				"_csrf":    {"not-a-token"},
-				"token":    {"guess"},
-				"login":    {"admin"},
-				"password": {"correct horse battery"},
-				"confirm":  {"correct horse battery"},
-			}.Encode()))
+			req, err := http.NewRequest(http.MethodPost, hs.URL+"/api/v1/auth/setup", strings.NewReader(`{"token":"guess","login":"admin","password":"correct horse battery","confirm":"correct horse battery"}`))
 			if err != nil {
-				t.Fatalf("building the request: %v", err)
+				t.Fatal(err)
 			}
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-CSRF-Token", "not-a-token")
 			req.Header.Set("X-Forwarded-For", forwarded)
 			resp, err := client.Do(req)
 			if err != nil {

@@ -18,7 +18,7 @@ func TestAuthAdmissionFailsClosedWhenRateStorageIsUnavailable(t *testing.T) {
 	}
 	host := newTestHTTPServer(t, server)
 	client := noRedirectClient()
-	for _, endpoint := range []string{"/api/v1/auth/start?provider=fake", "/login?provider=fake"} {
+	for _, endpoint := range []string{"/api/v1/auth/start?provider=fake"} {
 		response := getRequest(t, client, host.URL+endpoint, nil)
 		if response.StatusCode != http.StatusServiceUnavailable || strings.Contains(bodyString(t, response), "private rate storage") {
 			t.Fatal("external login ignored or exposed rate storage failure")
@@ -34,8 +34,8 @@ func TestAuthAdmissionFailsClosedWhenRateStorageIsUnavailable(t *testing.T) {
 		t.Fatal("JSON registration ignored rate storage failure")
 	}
 	response = postForm(t, client, host.URL+"/signup", nil, nil)
-	if response.StatusCode != http.StatusServiceUnavailable || len(server.identity.ListUsers()) != 1 {
-		t.Fatal("HTML registration ignored rate storage failure")
+	if response.StatusCode != http.StatusGone || len(server.identity.ListUsers()) != 1 {
+		t.Fatal("retired form remains writable")
 	}
 }
 

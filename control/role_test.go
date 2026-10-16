@@ -290,18 +290,17 @@ func TestDeviceApprovalRequiresWriteRole(t *testing.T) {
 	adminCookie, adminToken := seedUserSession(t, s, adminID)
 
 	// The member sees the request but no approval controls.
-	page := getRequest(t, client, hs.URL+"/register/"+authID, memberCookie)
+	page := getRequest(t, client, hs.URL+"/api/v1/browser/device-authorizations/"+authID, memberCookie)
 	body := bodyString(t, page)
-	if !strings.Contains(body, "read-only") {
+	if !strings.Contains(body, `"can_write":false`) {
 		t.Error("member approval page does not mention read-only access")
 	}
-	if strings.Contains(body, "Approve device") {
+	if strings.Contains(body, `"can_write":true`) {
 		t.Error("member approval page renders the approve button")
 	}
 
 	// A member's approval POST is rejected.
-	resp := postForm(t, client, hs.URL+"/register/"+authID+"/approve",
-		map[string][]string{"csrf": {csrfTokenFor(memberToken)}}, memberCookie)
+	resp := postBrowserDecision(t, client, hs.URL+"/api/v1/browser/device-authorizations/"+authID+"/approve", csrfTokenFor(memberToken), memberCookie)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member approval status = %d, want 403", resp.StatusCode)
 	}
@@ -310,8 +309,7 @@ func TestDeviceApprovalRequiresWriteRole(t *testing.T) {
 	}
 
 	// An admin's approval goes through.
-	resp = postForm(t, client, hs.URL+"/register/"+authID+"/approve",
-		map[string][]string{"csrf": {csrfTokenFor(adminToken)}}, adminCookie)
+	resp = postBrowserDecision(t, client, hs.URL+"/api/v1/browser/device-authorizations/"+authID+"/approve", csrfTokenFor(adminToken), adminCookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("admin approval status = %d, want 200", resp.StatusCode)
 	}
@@ -351,13 +349,12 @@ func TestSSHCheckApprovalRequiresWriteRole(t *testing.T) {
 	memberID := seedRoleUser(t, s, "ssh-member@example.com", identity.RoleMember)
 	memberCookie, memberToken := seedUserSession(t, s, memberID)
 
-	page := getRequest(t, client, hs.URL+"/ssh/check/"+authID, memberCookie)
-	if body := bodyString(t, page); !strings.Contains(body, "read-only") {
+	page := getRequest(t, client, hs.URL+"/api/v1/browser/ssh-checks/"+authID, memberCookie)
+	if body := bodyString(t, page); !strings.Contains(body, `"can_write":false`) {
 		t.Error("member SSH check page does not mention read-only access")
 	}
 
-	resp := postForm(t, client, hs.URL+"/ssh/check/"+authID+"/approve",
-		map[string][]string{"csrf": {csrfTokenFor(memberToken)}}, memberCookie)
+	resp := postBrowserDecision(t, client, hs.URL+"/api/v1/browser/ssh-checks/"+authID+"/approve", csrfTokenFor(memberToken), memberCookie)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member SSH check decision status = %d, want 403", resp.StatusCode)
 	}

@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -101,6 +102,9 @@ const DefaultSSHCheckTTL = 15 * time.Minute
 type SSHCheckStore interface {
 	// CreateSSHCheckSession records a held SSH session awaiting a decision.
 	CreateSSHCheckSession(opts NewSSHCheckOptions) (SSHCheckSession, error)
+
+	// LookupSSHCheckSession distinguishes a missing record from a storage failure.
+	LookupSSHCheckSession(ctx context.Context, id string) (SSHCheckSession, error)
 
 	// GetSSHCheckSession returns a session by ID.
 	GetSSHCheckSession(id string) (SSHCheckSession, bool)

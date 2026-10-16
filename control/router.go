@@ -716,8 +716,10 @@ func (r *Router) Handler() http.Handler {
 		mux.HandleFunc("/t/{orgID}/*", r.handleTenantConsole)
 	}
 	if r.nativeGateway != nil {
-		mux.Get("/device/{flowID}", r.nativeGateway.handleFlow)
-		mux.Post("/device/{flowID}/login", r.nativeGateway.handleLogin)
+		mux.Get("/device/{flowID}", webUIRequired)
+		mux.Post("/device/{flowID}/login", retiredBrowserForm)
+		mux.Get("/api/v1/browser/device-flows/{flowID}", r.nativeGateway.handleFlow)
+		mux.Post("/api/v1/browser/device-flows/{flowID}/login", r.nativeGateway.handleLogin)
 	}
 
 	mux.NotFound(func(w http.ResponseWriter, req *http.Request) {

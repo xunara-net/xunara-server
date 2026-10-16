@@ -228,6 +228,7 @@ func (s *Server) apiRouter() http.Handler {
 	// a session, so it lives here rather than behind requireScope.
 	r.Mount("/auth", s.apiAuthRouter())
 	r.Get("/capabilities", s.handleAPICapabilities)
+	r.Mount("/browser", s.browserAPIRouter())
 
 	r.Get("/overview", s.handleAPIOverview)
 	r.Get("/plan", s.handleAPIPlan)

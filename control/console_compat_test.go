@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xunara-net/xunara-server/identity"
 	"github.com/xunara-net/xunara-server/state"
 )
 
@@ -100,27 +99,12 @@ func TestRetiredConsoleKeepsTenantBoundary(t *testing.T) {
 	}
 }
 
-func TestPublicPagePreferencesWithoutLegacyConsole(t *testing.T) {
+func TestRetiredPagePreferencesUseModernSettings(t *testing.T) {
 	server := newTestServer(t)
-	cookie, _ := seedUserSession(t, server, state.DefaultUserID)
-	for _, target := range []string{"", "https://untrusted.test", "//untrusted.test", "/\\untrusted.test", "/dashboard"} {
-		response := accountRequest(t, server, http.MethodGet, "/ui/prefs?lang=zh&accent=teal&return_to="+url.QueryEscape(target), nil, cookie, nil)
-		if response.Code != http.StatusFound || response.Header().Get("Location") != "/dashboard" {
-			t.Fatal("page preference allowed an untrusted or old console return path")
+	for _, target := range []string{"", "https://untrusted.test", "//untrusted.test", "/dashboard"} {
+		response := accountRequest(t, server, http.MethodGet, "/ui/prefs?lang=zh&return_to="+url.QueryEscape(target), nil, nil, nil)
+		if response.Code != http.StatusFound || response.Header().Get("Location") != "/settings" || len(response.Result().Cookies()) != 0 {
+			t.Fatal("retired preferences restored Go UI settings or an untrusted redirect")
 		}
-		preferences := response.Result().Cookies()
-		if len(preferences) != 2 || preferences[0].Name != consoleLangCookie || preferences[0].Value != "zh" || preferences[1].Value != "teal" {
-			t.Fatal("standalone page preferences stopped working")
-		}
-	}
-	response := accountRequest(t, server, http.MethodGet, "/login", nil, nil, map[string]string{"Accept-Language": "zh-CN"})
-	if !strings.Contains(response.Body.String(), `<html lang="zh"`) || strings.Contains(response.Body.String(), "/console/") || !strings.Contains(response.Body.String(), "/ui/prefs?") {
-		t.Fatal("public page still links to the old console or lost localization")
-	}
-	memberID := seedRoleUser(t, server, "member-bookmark", identity.RoleMember)
-	memberCookie, _ := seedUserSession(t, server, memberID)
-	response = accountRequest(t, server, http.MethodGet, "/console/machines", nil, memberCookie, nil)
-	if response.Code != http.StatusFound || response.Header().Get("Location") != "/devices" {
-		t.Fatal("read-only account cannot migrate its bookmark")
 	}
 }

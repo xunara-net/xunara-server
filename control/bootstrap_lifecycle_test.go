@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -40,8 +41,21 @@ func TestBootstrapAcrossInstancesCannotReplaceTheWinner(t *testing.T) {
 		form.Set("confirm", form.Get("password"))
 		handler := server.Handler()
 		go func() {
-			request := httptest.NewRequest(http.MethodPost, "http://login.test/setup", strings.NewReader(form.Encode()))
-			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			body := map[string]string{}
+			for name := range form {
+				if name != "_csrf" {
+					body[name] = form.Get(name)
+				}
+			}
+			raw, marshalErr := json.Marshal(body)
+			if marshalErr != nil {
+				t.Error(marshalErr)
+				return
+			}
+
+			request := httptest.NewRequest(http.MethodPost, "http://login.test/api/v1/auth/setup", strings.NewReader(string(raw)))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-CSRF-Token", form.Get("_csrf"))
 			response := httptest.NewRecorder()
 			<-start
 			handler.ServeHTTP(response, request)
@@ -53,7 +67,7 @@ func TestBootstrapAcrossInstancesCannotReplaceTheWinner(t *testing.T) {
 	var successful, rejected int
 	for attempt := 0; attempt < 2; attempt++ {
 		result := <-results
-		if result.response.Code == http.StatusFound && result.response.Header().Get("Location") == "/dashboard" {
+		if result.response.Code == http.StatusCreated {
 			winner = result
 			successful++
 		} else if (result.response.Code == http.StatusConflict || (result.response.Code == http.StatusFound && result.response.Header().Get("Location") == "/login")) && result.response.Header().Get("Set-Cookie") == "" {
@@ -91,8 +105,8 @@ func TestBootstrapCompletedStateSurvivesPasswordDeletionAndStaleProof(t *testing
 	server := newUnconfiguredServer(t)
 	host := newTestHTTPServer(t, server)
 	form := setupAdmissionForm(server)
-	response := postForm(t, noRedirectClient(), host.URL+"/setup", form, nil)
-	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dashboard" {
+	response := postSetupJSON(t, noRedirectClient(), host.URL, form)
+	if response.StatusCode != http.StatusCreated {
 		t.Fatal("initial setup did not complete")
 	}
 	owner, err := server.identity.LookupUser(t.Context(), state.DefaultUserID)
@@ -106,8 +120,8 @@ func TestBootstrapCompletedStateSurvivesPasswordDeletionAndStaleProof(t *testing
 		t.Fatal(err)
 	}
 	form.Set("login", "replacement-owner")
-	response = postForm(t, noRedirectClient(), host.URL+"/setup", form, nil)
-	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/login" || response.Header.Get("Set-Cookie") != "" {
+	response = postSetupJSON(t, noRedirectClient(), host.URL, form)
+	if response.StatusCode != http.StatusConflict || response.Header.Get("Set-Cookie") != "" {
 		t.Fatal("stale proof reopened initialization after password deletion")
 	}
 	after, err := server.identity.LookupUser(t.Context(), owner.ID)
@@ -158,7 +172,7 @@ func TestBootstrapStartupPreservesProofOnStateReadFailure(t *testing.T) {
 		t.Fatal("failed startup changed the existing proof")
 	}
 	host := newTestHTTPServer(t, server)
-	for _, endpoint := range []string{"/api/v1/auth/providers", "/api/v1/auth/session", "/api/v1/capabilities", "/setup", "/login", "/signup", "/"} {
+	for _, endpoint := range []string{"/api/v1/auth/providers", "/api/v1/auth/session", "/api/v1/capabilities", "/api/v1/auth/setup"} {
 		response := getHTML(t, noRedirectClient(), host.URL+endpoint)
 		assertBootstrapUnavailable(t, response, token, "unavailable_bootstrap_state")
 	}

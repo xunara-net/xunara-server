@@ -52,8 +52,11 @@ go build ./cmd/xunara-agent     # 节点 Agent
   -network-pool 100.100.0.0/16
 ```
 
-首次启动会写出一次性初始化令牌（`<state-dir>/setup-token`），浏览器打开
-`/setup` 完成管理员初始化。
+首次启动会写出一次性初始化令牌（`<state-dir>/setup-token`）。部署独立
+`xunara-web` 与同源反代后，在站点的 `/setup` 完成管理员初始化。
+Core 不再内嵌任何 HTML 页面；直连 Core 的浏览器路径返回
+`503 WEB_UI_REQUIRED`，不会退回旧表单。详见
+[完整浏览器界面退役说明](docs/adr/ADR-0050-browser-ui-retirement.md)。
 
 初始化与自助租户 owner 开通共用一次性身份事务：资料、密码、会话和成功审计
 任一失败都回滚，重试不留下半账号，也不额外占用 Free 成员名额。完成事实独立
@@ -286,7 +289,8 @@ JSON 与兼容 HTML 密码登录共用同一限流、身份查询、密码验证
 通行密钥需要固定域名、HTTPS 和正确的 RP ID / Origin allowlist；仅 localhost
 开发环境可使用 HTTP。以下在本仓库启动 API，并配合另一个终端在 `xunara-web`
 目录执行 `npm run dev`，由默认开发代理保证浏览器同源。先在
-`http://localhost:8080/setup` 完成初始化，再访问 `http://localhost:5173/login`：
+`http://localhost:5173/setup` 完成初始化，再访问 `http://localhost:5173/login`；
+不要在 API 端口 `8080` 打开旧 HTML 初始化页：
 
 ```sh
 go run ./cmd/xunarad -listen 127.0.0.1:8080 -server-url http://localhost:5173

@@ -99,7 +99,7 @@ func TestHTMLAuthenticationFailureKeepsCookie(t *testing.T) {
 	cookie, _ := seedUserSession(t, server, state.DefaultUserID)
 	server.identity = &failingAuthenticationStore{Store: server.identity, sessionError: errors.New("private-database-detail")}
 	for _, endpoint := range []struct{ method, path string }{
-		{http.MethodPost, "/logout"},
+		{http.MethodPost, "/api/v1/auth/logout"},
 		{http.MethodGet, "/console"},
 	} {
 		response := accountRequest(t, server, endpoint.method, endpoint.path, nil, cookie, nil)

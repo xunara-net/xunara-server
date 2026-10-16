@@ -19,42 +19,8 @@ const (
 	signupRateWindow = time.Hour
 )
 
-// handleSignupPage implements GET /signup.
-func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
-	if s.selfServiceInfo() != nil {
-		http.Redirect(w, r, "/register", http.StatusSeeOther)
-		return
-	}
-	if !s.localLogin {
-		s.renderError(w, r, http.StatusNotFound, "Registration unavailable",
-			"This server creates accounts through an identity provider.")
-		return
-	}
-	if !s.memberRegistrationMode().AllowsSignup() {
-		s.renderError(w, r, http.StatusNotFound, "Registration unavailable",
-			"This deployment creates accounts through an administrator.")
-		return
-	}
-	required, ok := s.setupStateForPage(w, r)
-	if !ok {
-		return
-	}
-	if required {
-		http.Redirect(w, r, "/setup", http.StatusFound)
-		return
-	}
-	s.renderPublicPage(w, r, signupPageTemplate, map[string]any{
-		"Title":          "Create your account",
-		"Invite":         "",
-		"InviteRequired": s.memberRegistrationMode().RequiresInvite(),
-		"FormToken":      s.newFormToken(formPurposeSignup),
-		"Setup":          false,
-	})
-}
-
 // localSignupRequest is one attempt to create a local account from an
-// invitation. It is shared by the HTML sign-up page and the JSON auth API so
-// both entry points enforce exactly the same rules.
+// invitation. The JSON auth API and self-service admission share the same rules.
 type localSignupRequest struct {
 	Invite   string
 	Login    string
@@ -72,7 +38,6 @@ type localSignupRequest struct {
 // whether an account or invitation exists beyond what the caller already has.
 type signupRejection struct {
 	Code    int
-	Title   string
 	Message string
 }
 
@@ -89,7 +54,7 @@ type signupAdmission struct {
 // nothing at all (registration.go).
 func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 	reject := func(code int, message string) error {
-		return signupRejection{Code: code, Title: "Registration rejected", Message: message}
+		return signupRejection{Code: code, Message: message}
 	}
 
 	if s.selfServiceInfo() != nil && strings.TrimSpace(req.Invite) == "" {
@@ -136,7 +101,7 @@ func (s *Server) admitSignup(req localSignupRequest) (signupAdmission, error) {
 func (s *Server) signupLocalUser(ctx context.Context, req localSignupRequest) (identity.User, identity.Session, string, error) {
 	revision := s.authenticationRevision()
 	reject := func(code int, message string) error {
-		return signupRejection{Code: code, Title: "Registration rejected", Message: message}
+		return signupRejection{Code: code, Message: message}
 	}
 
 	admission, err := s.admitSignup(req)
@@ -185,69 +150,4 @@ func (s *Server) signupLocalUser(ctx context.Context, req localSignupRequest) (i
 		err = reject(http.StatusForbidden, "That invitation is no longer valid. Ask an administrator for a new code.")
 	}
 	return user, session, token, err
-}
-
-// handleSignupSubmit implements POST /signup.
-func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
-	if !s.localLogin {
-		s.renderError(w, r, http.StatusNotFound, "Registration unavailable",
-			"This server creates accounts through an identity provider.")
-		return
-	}
-	required, ok := s.setupStateForPage(w, r)
-	if !ok {
-		return
-	}
-	if required {
-		http.Redirect(w, r, "/setup", http.StatusFound)
-		return
-	}
-
-	now := time.Now()
-	fail := func(status int, title, message string) {
-		s.renderError(w, r, status, title, message)
-	}
-
-	allowed, retryAfter, err := s.store.AllowRate("signup:"+s.clientIP(r), signupRateLimit, signupRateWindow, now)
-	if err != nil {
-		s.log.Error("rate limiting registration", "err", err)
-		fail(http.StatusServiceUnavailable, "Registration unavailable", "Please try again later.")
-		return
-	}
-	if !allowed {
-		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())+1))
-		fail(http.StatusTooManyRequests, "Too many attempts",
-			"Too many registration attempts from this address. Try again later.")
-		return
-	}
-
-	if !s.checkFormToken(formPurposeSignup, r.PostFormValue("_csrf"), now) {
-		fail(http.StatusForbidden, "Request rejected",
-			"The form token is invalid. Reload the page and try again.")
-		return
-	}
-
-	_, session, sessionToken, err := s.signupLocalUser(r.Context(), localSignupRequest{
-		Invite:     r.PostFormValue("invite"),
-		Login:      r.PostFormValue("login"),
-		Display:    r.PostFormValue("display_name"),
-		Email:      r.PostFormValue("email"),
-		Password:   r.PostFormValue("password"),
-		Confirm:    r.PostFormValue("confirm"),
-		ClientInfo: s.sessionClientInfo(r),
-	})
-	if err != nil {
-		var rejection signupRejection
-		switch {
-		case errors.As(err, &rejection):
-			fail(rejection.Code, rejection.Title, rejection.Message)
-		default:
-			s.log.Error("registration failed", "err", err)
-			fail(http.StatusInternalServerError, "Registration failed", "Please try again.")
-		}
-		return
-	}
-
-	s.setSessionCookie(w, sessionToken, session.ExpiresAt)
-	http.Redirect(w, r, s.consolePageURL("/dashboard"), http.StatusFound)
 }

@@ -10,12 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -749,123 +747,6 @@ func (s *Server) dropPending(id string) {
 
 func (s *Server) authURL(authID string) string {
 	return fmt.Sprintf("%s/register/%s", s.consoleURL(), authID)
-}
-
-// handleRegisterPage serves the device approval page a user opens from the
-// AuthURL the client printed.
-func (s *Server) handleRegisterPage(w http.ResponseWriter, req *http.Request) {
-	authID := chi.URLParam(req, "authID")
-
-	da, ok := s.identity.GetDeviceAuthorization(authID)
-	if !ok {
-		s.renderError(w, req, http.StatusNotFound, "Unknown login link",
-			"This login link is unknown or has expired. Re-run `tailscale up` to get a new one.")
-		return
-	}
-	switch {
-	case da.Expired(time.Now()):
-		s.renderError(w, req, http.StatusGone, "Login link expired",
-			"This login link has expired. Re-run `tailscale up` to get a new one.")
-		return
-	case da.State != identity.DevicePending:
-		s.renderDecidedPage(w, req, string(da.State))
-		return
-	}
-
-	session, ok := s.currentSession(req)
-	if !ok {
-		http.Redirect(w, req, "/login?return_to="+url.QueryEscape("/register/"+authID), http.StatusFound)
-		return
-	}
-
-	profile := s.UserProfile(session.UserID)
-	meta := decodeDeviceMetadata(da.ClientMetadata)
-	hostname := meta.Hostname
-	if hostname == "" {
-		hostname = "unnamed device"
-	}
-	os := meta.OS
-	if os == "" {
-		os = "unknown"
-	}
-
-	s.renderApprovePage(w, req, map[string]any{
-		"AuthID":      authID,
-		"CanWrite":    s.userCanWrite(session.UserID),
-		"Hostname":    hostname,
-		"OS":          os,
-		"Created":     s.consoleTime(da.CreatedAt),
-		"LoginName":   profile.LoginName,
-		"CSRF":        csrfTokenFor(s.sessionToken(req)),
-		"ApprovalURL": s.consoleURL() + "/register/" + authID + "/approve",
-		"DenialURL":   s.consoleURL() + "/register/" + authID + "/deny",
-		"NetworkID":   s.Organization().ID,
-	})
-}
-
-// handleApproveDevice implements POST /register/{authID}/approve.
-func (s *Server) handleApproveDevice(w http.ResponseWriter, req *http.Request) {
-	authID := chi.URLParam(req, "authID")
-
-	session, token, ok := s.requireSession(w, req, "/register/"+authID)
-	if !ok {
-		return
-	}
-	if !s.userCanWrite(session.UserID) {
-		s.renderError(w, req, http.StatusForbidden, "Approval rejected",
-			"Your role does not allow admitting devices.")
-		return
-	}
-	if !checkCSRF(req, token) {
-		s.renderError(w, req, http.StatusForbidden, "Approval rejected",
-			"The form token is invalid. Reload the page and try again.")
-		return
-	}
-
-	writer := networkconfig.Writer{UserID: session.UserID, SessionID: session.ID}
-	if _, err := s.decideDevice(req.Context(), authID, session.UserID, writer.Actor(), &writer, true); err != nil {
-		s.renderDeviceError(w, req, err, "Approval failed")
-		return
-	}
-	s.renderDecidedPage(w, req, string(identity.DeviceApproved))
-}
-
-// handleDenyDevice implements POST /register/{authID}/deny.
-func (s *Server) handleDenyDevice(w http.ResponseWriter, req *http.Request) {
-	authID := chi.URLParam(req, "authID")
-
-	session, token, ok := s.requireSession(w, req, "/register/"+authID)
-	if !ok {
-		return
-	}
-	if !s.userCanWrite(session.UserID) {
-		s.renderError(w, req, http.StatusForbidden, "Denial rejected",
-			"Your role does not allow deciding device registrations.")
-		return
-	}
-	if !checkCSRF(req, token) {
-		s.renderError(w, req, http.StatusForbidden, "Denial rejected",
-			"The form token is invalid. Reload the page and try again.")
-		return
-	}
-
-	writer := networkconfig.Writer{UserID: session.UserID, SessionID: session.ID}
-	if _, err := s.decideDevice(req.Context(), authID, session.UserID, writer.Actor(), &writer, false); err != nil {
-		s.renderDeviceError(w, req, err, "Denial failed")
-		return
-	}
-	s.renderDecidedPage(w, req, string(identity.DeviceDenied))
-}
-
-// renderDeviceError maps a device approval error to a page.
-func (s *Server) renderDeviceError(w http.ResponseWriter, req *http.Request, err error, title string) {
-	var he HTTPError
-	if errors.As(err, &he) {
-		s.renderError(w, req, he.Code, title, s.translateMessage(req, he.Msg))
-		return
-	}
-	s.log.Error("device registration failed", "err", err)
-	s.renderError(w, req, http.StatusInternalServerError, title, "Please try again.")
 }
 
 // newAuthID returns an unguessable registration identifier.

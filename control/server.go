@@ -91,9 +91,8 @@ type Config struct {
 	// audience per minute (spec section 28). Zero uses
 	// [DefaultIDTokenRateLimit]; negative is rejected at startup.
 	IDTokenRateLimit int
-	// ConsoleTimezone is the IANA name the web console prints timestamps in,
-	// so operators read audit and expiry times in their own zone instead of
-	// UTC. Empty or unknown falls back to UTC; the CLI is unaffected.
+	// ConsoleTimezone is retained for configuration compatibility only.
+	// Deprecated: the Web application formats time in the browser's timezone.
 	ConsoleTimezone string
 	// PolicyPath is the ACL policy document (HuJSON). Empty means the tailnet
 	// has no policy and everything is allowed, which is what the official
@@ -238,24 +237,16 @@ type Server struct {
 	// platform operator changes a tenant's plan while the process serves.
 	planSource func(tenantID string) plan.Plan
 
-	// consoleLoc is the timezone the web console prints timestamps in. It is
-	// loaded once at startup so a broken zone name never fails a request.
-	consoleLoc *time.Location
-
 	// secureCookies marks cookies Secure; sessionTTL bounds browser sessions;
 	// authTTL bounds pending login transactions.
 	secureCookies bool
 	sessionTTL    time.Duration
 	authTTL       time.Duration
 
-	// localLogin reports whether the built-in password sign-in is offered,
-	// and formKey signs the CSRF tokens of the anonymous forms (sign in,
-	// first-run setup, registration).
+	// localLogin 控制本地密码入口；formKey 为匿名初始化、注册和共享设备登录签名 CSRF 证明。
 	localLogin bool
 	formKey    []byte
-	// registration is the normalized self-service registration policy; every
-	// sign-up entry point reads it so the HTML page and the JSON API cannot
-	// disagree.
+	// registration 是所有注册 API 共同读取的准入策略，不保留第二套 HTML 注册逻辑。
 	registration RegistrationMode
 	// 运行时认证快照按持久版本整体替换，不能在并发请求中直接改静态字段。
 	authentication   atomic.Pointer[authenticationRuntime]
@@ -372,10 +363,6 @@ func New(cfg Config) (*Server, error) {
 	if cfg.IDTokenRateLimit < 0 {
 		return nil, fmt.Errorf("control: identity token rate limit %d must not be negative", cfg.IDTokenRateLimit)
 	}
-	consoleLoc, err := loadConsoleTimezone(cfg.ConsoleTimezone)
-	if err != nil {
-		cfg.Logger.Warn("unknown console timezone; the console prints UTC", "timezone", cfg.ConsoleTimezone)
-	}
 
 	noiseKey, err := loadOrCreateNoiseKey(cfg.StateDir)
 	if err != nil {
@@ -478,7 +465,6 @@ func New(cfg Config) (*Server, error) {
 	srv := &Server{
 		cfg:               cfg,
 		log:               cfg.Logger,
-		consoleLoc:        consoleLoc,
 		noiseKey:          noiseKey,
 		store:             store,
 		closer:            store,
@@ -778,28 +764,17 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/key", s.handleKey)
 	r.Get("/health", s.handleHealth)
 	r.Get("/version", s.handleVersion)
-	r.Get("/ui/prefs", s.handlePagePrefs)
 	r.Get("/.well-known/jwks.json", s.handleJWKS)
 	r.Get("/.well-known/openid-configuration", s.handleOpenIDConfiguration)
-	r.Get("/login", s.handleLogin)
-	r.Post("/login", s.handlePasswordLogin)
-	r.Get("/setup", s.handleSetupPage)
-	r.Post("/setup", s.handleSetupSubmit)
-	r.Get("/signup", s.handleSignupPage)
-	r.Post("/signup", s.handleSignupSubmit)
-	r.Post("/logout", s.handleLogout)
-	if s.passkeys != nil {
-		r.Post("/passkey/login/begin", s.handlePasskeyLoginBegin)
-		r.Post("/passkey/login/finish", s.handlePasskeyLoginFinish)
+	for _, page := range []string{"/login", "/setup", "/signup", "/register/{authID}", "/ssh/check/{authID}"} {
+		r.Get(page, webUIRequired)
 	}
+	for _, endpoint := range []string{"/login", "/setup", "/signup", "/logout", "/passkey/login/begin", "/passkey/login/finish", "/register/{authID}/approve", "/register/{authID}/deny", "/ssh/check/{authID}/approve", "/ssh/check/{authID}/deny"} {
+		r.Post(endpoint, retiredBrowserForm)
+	}
+	r.Get("/ui/prefs", s.handleRetiredPreferences)
 	r.Get("/oidc/callback/{providerID}", s.handleCallback)
 	r.Get("/oauth2/callback/{providerID}", s.handleCallback)
-	r.Get("/register/{authID}", s.handleRegisterPage)
-	r.Post("/register/{authID}/approve", s.handleApproveDevice)
-	r.Post("/register/{authID}/deny", s.handleDenyDevice)
-	r.Get("/ssh/check/{authID}", s.handleSSHCheckPage)
-	r.Post("/ssh/check/{authID}/approve", s.handleSSHCheckApprove)
-	r.Post("/ssh/check/{authID}/deny", s.handleSSHCheckDeny)
 	r.Post("/derp/admit", s.handleDERPAdmit)
 
 	// The relay control protocol: relays are service identities, so they
@@ -905,12 +880,6 @@ func (s *Server) handleKey(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// userCanWrite reports whether a user's role may change tailnet state.
-func (s *Server) userCanWrite(userID tailcfg.UserID) bool {
-	user, ok := s.identity.GetUser(userID)
-	return ok && user.Role.CanWrite()
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "pass"})
 }
@@ -923,21 +892,11 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleRoot implements GET /. A browser gets the landing page: what this
-// deployment is, how to sign in, and the command that points a device at it.
-// Callers that do not ask for HTML (scripts, health probes) keep the short
-// machine-readable description, so the endpoint stays useful to both.
-func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
-	if !strings.Contains(r.Header.Get("Accept"), "text/html") {
-		writeJSON(w, http.StatusOK, map[string]string{
-			"name":    "Xunara",
-			"version": Version,
-			"message": "Tailscale-compatible control plane. Point clients at this URL with `tailscale up --login-server=<url>`.",
-			"console": s.consolePageURL("/dashboard"),
-		})
-		return
-	}
-	s.renderPublicPage(w, r, landingPageTemplate, map[string]any{
-		"Title": "Home",
+// handleRoot keeps the machine-readable control-plane description; browsers use xunara-web.
+func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"name": "Xunara", "version": Version,
+		"message": "Tailscale-compatible control plane. Point clients at this URL with " + "`tailscale up --login-server=<url>`.",
+		"console": s.consolePageURL("/dashboard"),
 	})
 }

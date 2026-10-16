@@ -65,17 +65,3 @@ func TestLegacySessionRoutesShareAccountSafety(t *testing.T) {
 		t.Fatal("logout did not create exactly one account revocation audit")
 	}
 }
-
-func TestHTMLLogoutRequiresCSRFAndCommit(t *testing.T) {
-	server := newTestServer(t)
-	cookie, token := seedUserSession(t, server, state.DefaultUserID)
-	if response := accountRequest(t, server, http.MethodPost, "/logout", "", cookie, nil); response.Code != http.StatusForbidden {
-		t.Fatal("HTML logout bypassed form CSRF")
-	}
-	store := &failingAccountSessionsStore{Store: server.identity, revokeError: errors.New("injected write failure")}
-	server.identity = store
-	response := accountRequest(t, server, http.MethodPost, "/logout", "csrf="+csrfTokenFor(token), cookie, map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
-	if response.Code != http.StatusInternalServerError || response.Header().Get("Set-Cookie") != "" {
-		t.Fatal("HTML logout cleared a cookie before revocation committed")
-	}
-}

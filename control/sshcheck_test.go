@@ -172,13 +172,12 @@ func TestSSHCheckApproveFlow(t *testing.T) {
 	// Approve in a browser.
 	browser := noRedirectClient()
 	cookie := loginLocal(t, browser, hs.URL, "/ssh/check/"+authID)
-	page := getRequest(t, browser, hs.URL+"/ssh/check/"+authID, cookie)
+	page := getRequest(t, browser, hs.URL+"/api/v1/browser/ssh-checks/"+authID, cookie)
 	if page.StatusCode != http.StatusOK {
 		t.Fatalf("approval page = %d, want 200", page.StatusCode)
 	}
-	csrf := extractCSRF(t, bodyString(t, page))
-	if resp := postForm(t, browser, hs.URL+"/ssh/check/"+authID+"/approve",
-		url.Values{"csrf": {csrf}}, cookie); resp.StatusCode != http.StatusOK {
+	csrf := authorizationCSRF(t, page)
+	if resp := postBrowserDecision(t, browser, hs.URL+"/api/v1/browser/ssh-checks/"+authID+"/approve", csrf, cookie); resp.StatusCode != http.StatusOK {
 		t.Fatalf("approve = %d, want 200", resp.StatusCode)
 	}
 
@@ -241,10 +240,9 @@ func TestSSHCheckDenyFlow(t *testing.T) {
 
 	browser := noRedirectClient()
 	cookie := loginLocal(t, browser, hs.URL, "/ssh/check/"+authID)
-	page := getRequest(t, browser, hs.URL+"/ssh/check/"+authID, cookie)
-	csrf := extractCSRF(t, bodyString(t, page))
-	if resp := postForm(t, browser, hs.URL+"/ssh/check/"+authID+"/deny",
-		url.Values{"csrf": {csrf}}, cookie); resp.StatusCode != http.StatusOK {
+	page := getRequest(t, browser, hs.URL+"/api/v1/browser/ssh-checks/"+authID, cookie)
+	csrf := authorizationCSRF(t, page)
+	if resp := postBrowserDecision(t, browser, hs.URL+"/api/v1/browser/ssh-checks/"+authID+"/deny", csrf, cookie); resp.StatusCode != http.StatusOK {
 		t.Fatalf("deny = %d, want 200", resp.StatusCode)
 	}
 
@@ -303,9 +301,9 @@ func TestSSHCheckAlwaysRechecks(t *testing.T) {
 
 	browser := noRedirectClient()
 	cookie := loginLocal(t, browser, hs.URL, "/ssh/check/"+authID)
-	page := getRequest(t, browser, hs.URL+"/ssh/check/"+authID, cookie)
-	csrf := extractCSRF(t, bodyString(t, page))
-	postForm(t, browser, hs.URL+"/ssh/check/"+authID+"/approve", url.Values{"csrf": {csrf}}, cookie)
+	page := getRequest(t, browser, hs.URL+"/api/v1/browser/ssh-checks/"+authID, cookie)
+	csrf := authorizationCSRF(t, page)
+	postBrowserDecision(t, browser, hs.URL+"/api/v1/browser/ssh-checks/"+authID+"/approve", csrf, cookie)
 
 	select {
 	case res := <-results:
@@ -381,7 +379,7 @@ func TestSSHCheckAuthIDBinding(t *testing.T) {
 
 // TestSSHCheckPageRequiresLogin keeps the approval page behind the trust
 // plane's browser session.
-func TestSSHCheckPageRequiresLogin(t *testing.T) {
+func TestSSHCheckBrowserAPIRequiresLogin(t *testing.T) {
 	s := newServerWithConfig(t, Config{
 		ServerURL:  "https://control.test",
 		PolicyPath: policyFile(t, sshCheckPolicy),
@@ -400,11 +398,11 @@ func TestSSHCheckPageRequiresLogin(t *testing.T) {
 	authID := authIDFromHold(t, hold.action.HoldAndDelegate)
 
 	browser := noRedirectClient()
-	resp := getRequest(t, browser, hs.URL+"/ssh/check/"+authID, nil)
-	if resp.StatusCode != http.StatusFound {
+	resp := getRequest(t, browser, hs.URL+"/api/v1/browser/ssh-checks/"+authID, nil)
+	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated page = %d, want 302", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); loc != "/login?return_to=%2Fssh%2Fcheck%2F"+authID {
+	if loc := resp.Header.Get("Location"); loc != "" {
 		t.Errorf("redirect = %q, want the login page with return_to", loc)
 	}
 }

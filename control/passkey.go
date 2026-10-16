@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/xunara-net/xunara-server/identity"
@@ -80,12 +79,7 @@ func (server *Server) handlePasskeyLoginFinish(writer http.ResponseWriter, reque
 		return
 	}
 	server.setSessionCookie(writer, token, session.ExpiresAt)
-	// 只有序列化形状不同：保留旧 HTML fetch 契约，SPA 使用统一会话快照。
-	if strings.HasPrefix(request.URL.Path, "/api/v1/auth/") {
-		writeJSON(writer, http.StatusOK, server.apiSessionPayload(user, session))
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]string{"redirect": safeReturnTo(request.URL.Query().Get("return_to"))})
+	writeJSON(writer, http.StatusOK, server.apiSessionPayload(user, session))
 }
 
 func passkeyLoginFailureReason(err error) string {

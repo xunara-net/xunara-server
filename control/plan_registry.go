@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS catalog_plans (
 
 	// v3: platform console sessions. They are separate from tenant sessions
 	// on purpose: a platform operator's browser must never hold a credential a
-	// tenant accepts, and vice versa (see admin_sessions.go).
+	// tenant accepts, and vice versa. Historical schema only: the retired HTML
+	// backend no longer reads or writes this table; published migrations stay immutable.
 	`
 CREATE TABLE IF NOT EXISTS admin_sessions (
 	id           TEXT    PRIMARY KEY,

@@ -154,13 +154,6 @@ func isExitRoute(prefix netip.Prefix) bool {
 	return prefix.Bits() == 0
 }
 
-// translateMessage localizes a gate message for the request's language. The
-// translator returns its input unchanged when there is no entry, so a message
-// added without a translation still reaches the user.
-func (s *Server) translateMessage(r *http.Request, message string) string {
-	return translator(consoleLangFromRequest(r))(message)
-}
-
 // SetAddressPrefix points new device addresses at a network range. It is how
 // a tenant's commercial network block reaches the store that allocates
 // addresses; devices registered before the change keep their addresses.

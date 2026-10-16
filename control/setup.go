@@ -138,71 +138,70 @@ func (s *Server) clearSetupToken() error {
 	return nil
 }
 
-// setupStateForPage 为兼容 HTML 提供同一失败关闭的状态读取，不把故障当成初始化。
-func (s *Server) setupStateForPage(w http.ResponseWriter, r *http.Request) (bool, bool) {
+// 初始化状态和提交都使用 JSON；一次性证明仍保存在服务端，绝不下发到页面。
+func (s *Server) handleAPISetupState(w http.ResponseWriter, r *http.Request) {
+	required, ok := s.setupStateForAPI(w, r)
+	if !ok {
+		return
+	}
+	view := map[string]any{"required": required}
+	if required {
+		view["csrf_token"] = s.newFormToken(formPurposeSetup)
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) setupStateForAPI(w http.ResponseWriter, r *http.Request) (bool, bool) {
 	w.Header().Set("Cache-Control", "no-store")
 	required, err := s.localSetupRequired(r.Context())
 	if err != nil {
-		s.renderAuthenticationUnavailable(w, r)
+		s.authenticationUnavailable(w)
 		return false, false
 	}
 	return required, true
 }
 
-func (s *Server) renderAuthenticationUnavailable(w http.ResponseWriter, r *http.Request) {
+func (s *Server) authenticationUnavailable(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Retry-After", "5")
-	s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+	writeAPIError(w, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE: authentication could not be checked; try again later")
 }
 
-// handleSetupPage implements GET /setup.
-func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
-	required, ok := s.setupStateForPage(w, r)
-	if !ok {
-		return
-	}
-	if !required {
-		// Nothing to set up: send the operator to sign in rather than to a
-		// form that cannot work.
-		http.Redirect(w, r, "/login", http.StatusFound)
-		return
-	}
-	s.renderPublicPage(w, r, setupPageTemplate, map[string]any{
-		"Title":     "Set up the administrator",
-		"Token":     "",
-		"Login":     "admin",
-		"FormToken": s.newFormToken(formPurposeSetup),
-		"TokenHint": s.setupTokenPath(),
-		"Setup":     true,
-	})
-}
-
-// form purposes bind a token to the form it was minted for, so a token
-// harvested from one page cannot be replayed on another.
 const (
-	formPurposeLogin  = "login"
 	formPurposeSetup  = "setup"
 	formPurposeSignup = "signup"
 )
 
-// handleSetupSubmit implements POST /setup: it consumes the one-time token,
+// handleAPISetup consumes the one-time proof through the versioned JSON API,
 // gives the built-in administrator a password and signs them in.
-func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
-	required, ok := s.setupStateForPage(w, r)
+func (s *Server) handleAPISetup(w http.ResponseWriter, r *http.Request) {
+	required, ok := s.setupStateForAPI(w, r)
 	if !ok {
 		return
 	}
 	if !required {
-		http.Redirect(w, r, "/login", http.StatusFound)
+		writeAPIError(w, http.StatusConflict, "SETUP_COMPLETE: the administrator is already initialized")
 		return
 	}
 	fail := func(status int, title, message string) {
-		s.renderError(w, r, status, title, message)
+		writeAPIError(w, status, message)
+	}
+
+	var body struct {
+		Token    string `json:"token"`
+		Login    string `json:"login"`
+		Display  string `json:"display_name"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		Confirm  string `json:"confirm"`
+	}
+	if !decodeAccountBody(w, r, &body) {
+		return
 	}
 
 	allowed, retryAfter, err := s.store.AllowRate("setup:"+s.clientIP(r), setupRateLimit, setupRateWindow, time.Now())
 	if err != nil {
-		s.renderAuthenticationUnavailable(w, r)
+		s.authenticationUnavailable(w)
 		return
 	}
 	if !allowed {
@@ -212,7 +211,7 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.checkFormToken(formPurposeSetup, r.PostFormValue("_csrf"), time.Now()) {
+	if !s.checkFormToken(formPurposeSetup, r.Header.Get("X-CSRF-Token"), time.Now()) {
 		fail(http.StatusForbidden, "Request rejected",
 			"The form token is invalid. Reload the page and try again.")
 		return
@@ -220,10 +219,10 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 
 	armed, err := s.loadSetupToken()
 	if err != nil {
-		s.renderAuthenticationUnavailable(w, r)
+		s.authenticationUnavailable(w)
 		return
 	}
-	submitted := strings.TrimSpace(r.PostFormValue("token"))
+	submitted := strings.TrimSpace(body.Token)
 	if armed == "" || subtle.ConstantTimeCompare([]byte(armed), []byte(submitted)) != 1 {
 		s.audit("system", identity.AuditLoginFailed, "setup", "invalid setup token")
 		fail(http.StatusForbidden, "Setup rejected",
@@ -231,11 +230,11 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	login := sanitizeLoginName(r.PostFormValue("login"))
-	display := strings.TrimSpace(r.PostFormValue("display_name"))
-	email := strings.TrimSpace(r.PostFormValue("email"))
-	password := r.PostFormValue("password")
-	confirm := r.PostFormValue("confirm")
+	login := sanitizeLoginName(body.Login)
+	display := strings.TrimSpace(body.Display)
+	email := strings.TrimSpace(body.Email)
+	password := body.Password
+	confirm := body.Confirm
 
 	if login == "" {
 		fail(http.StatusBadRequest, "Setup rejected", "Choose a login name (letters, digits, @ . _ - +).")
@@ -250,7 +249,7 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, session, token, err := s.claimLocalAccount(r.Context(), identity.ClaimAdministrator, login, display, email, password, s.sessionClientInfo(r))
+	user, session, token, err := s.claimLocalAccount(r.Context(), identity.ClaimAdministrator, login, display, email, password, s.sessionClientInfo(r))
 	switch {
 	case errors.Is(err, identity.ErrUserNotFound):
 		fail(http.StatusInternalServerError, "Setup failed", "The administrator account is missing.")
@@ -263,7 +262,7 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		s.log.Error("setting up the administrator", "err", err)
-		s.renderAuthenticationUnavailable(w, r)
+		s.authenticationUnavailable(w)
 		return
 	}
 
@@ -273,7 +272,7 @@ func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, token, session.ExpiresAt)
 
-	http.Redirect(w, r, s.consolePageURL("/dashboard"), http.StatusFound)
+	writeJSON(w, http.StatusCreated, s.apiSessionPayload(user, session))
 }
 
 // passwordPolicyMessage turns a password policy error into page copy.

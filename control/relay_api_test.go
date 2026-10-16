@@ -444,8 +444,8 @@ func TestSingleTenantRouterServesPlatformAPIAndAdmin(t *testing.T) {
 		t.Fatalf("GET /admin/login: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /admin/login status = %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("GET /admin/login status = %d, want an independent Web deployment", resp.StatusCode)
 	}
 
 	// The platform API lists exactly the one tenant.

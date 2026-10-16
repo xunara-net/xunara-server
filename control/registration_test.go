@@ -159,33 +159,8 @@ func TestSignupClosedModeRejects(t *testing.T) {
 	}
 
 	page := getRequest(t, client, hs.URL+"/signup", nil)
-	if page.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /signup on a closed deployment = %d, want 404", page.StatusCode)
-	}
-}
-
-// The HTML sign-up page asks for an invitation only when one is required.
-func TestSignupPageShowsInviteOnlyWhenRequired(t *testing.T) {
-	invite := newTestServer(t)
-	inviteHS := newTestHTTPServer(t, invite)
-	client := noRedirectClient()
-
-	page := getRequest(t, client, inviteHS.URL+"/signup", nil)
-	if page.StatusCode != http.StatusOK {
-		t.Fatalf("GET /signup = %d, want 200", page.StatusCode)
-	}
-	if body := bodyString(t, page); !strings.Contains(body, `name="invite"`) {
-		t.Fatalf("the invitation field is missing from the default sign-up page")
-	}
-
-	open := newServerWithConfig(t, Config{Registration: RegistrationOpen})
-	openHS := newTestHTTPServer(t, open)
-	page = getRequest(t, client, openHS.URL+"/signup", nil)
-	if page.StatusCode != http.StatusOK {
-		t.Fatalf("GET /signup (open) = %d, want 200", page.StatusCode)
-	}
-	if body := bodyString(t, page); strings.Contains(body, `name="invite"`) {
-		t.Fatalf("the open sign-up page still asks for an invitation")
+	if page.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("GET /signup on a closed deployment = %d, want Web UI deployment error", page.StatusCode)
 	}
 }
 

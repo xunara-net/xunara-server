@@ -20,10 +20,8 @@ import (
 //
 // The product Web console (xunara-web) and the platform console (xunara-admin)
 // are separate applications; they never render through the control plane.
-// This file is the browser-facing half of the API they use: it exposes the
-// same server-side sessions the HTML sign-in establishes as JSON, and hands
-// the session cookie back exactly the way the HTML flow does, so both surfaces
-// share one session store, one rate limiter and one audit trail.
+// 浏览器登录只通过 JSON API 建立持久会话；设备授权有独立事务，登录不会自动批准机器。
+// 初始化、密码、通行密钥与第三方登录共享既有会话、限流和审计，不再提供旧 HTML 适配器。
 //
 // CSRF: the session cookie is SameSite=Lax and this API answers no CORS
 // preflight for other origins, so a cross-site request cannot carry the
@@ -34,6 +32,8 @@ import (
 // apiAuthRouter mounts the JSON authentication surface under /api/v1/auth.
 func (s *Server) apiAuthRouter() http.Handler {
 	r := chi.NewRouter()
+	r.Get("/setup", s.handleAPISetupState)
+	r.Post("/setup", s.handleAPISetup)
 	r.Get("/session", s.handleAPIAuthSession)
 	r.Get("/providers", s.handleAPIAuthProviders)
 	r.Get("/start", s.handleAPIAuthStart)
@@ -340,9 +340,7 @@ type apiLoginRequest struct {
 
 // handleAPIAuthLogin implements POST /api/v1/auth/login.
 //
-// It is the JSON twin of POST /login: the same rate-limit buckets, the same
-// answer for every failure (whether the login name exists is not something an
-// anonymous caller learns) and the same session cookie.
+// 本地登录只通过 JSON 提交，持久限流与失败提示不泄露账户是否存在。
 func (s *Server) handleAPIAuthLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !s.localLogin {
@@ -360,7 +358,7 @@ func (s *Server) handleAPIAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req apiLoginRequest
-	if !decodeAPIBody(w, r, &req) {
+	if !decodeAccountBody(w, r, &req) {
 		return
 	}
 	login := strings.TrimSpace(req.Login)
@@ -392,8 +390,7 @@ type apiSignupRequest struct {
 	Password    string `json:"password"`
 }
 
-// handleAPIAuthSignup implements POST /api/v1/auth/signup: the JSON twin of
-// the invitation page, enforcing the same invitation and quota rules.
+// handleAPIAuthSignup 仅接受严格 JSON 注册，邀请码与成员配额仍在持久事务中检查。
 func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !s.localLogin {
@@ -411,7 +408,7 @@ func (s *Server) handleAPIAuthSignup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req apiSignupRequest
-	if !decodeAPIBody(w, r, &req) {
+	if !decodeAccountBody(w, r, &req) {
 		return
 	}
 

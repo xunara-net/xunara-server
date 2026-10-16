@@ -265,8 +265,8 @@ func TestSelfServiceFrontDoorCannotCreateLocalMembers(t *testing.T) {
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recorder = httptest.NewRecorder()
 	router.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("local HTML signup = %d, want 403", recorder.Code)
+	if recorder.Code != http.StatusGone {
+		t.Fatalf("retired HTML signup = %d, want 403", recorder.Code)
 	}
 	if len(front.identity.ListUsers()) != usersBefore {
 		t.Fatal("signup added a member to the public front door")
@@ -281,8 +281,8 @@ func TestSelfServiceFrontDoorCannotCreateLocalMembers(t *testing.T) {
 	request = httptest.NewRequest(http.MethodGet, "https://app.xunara.test/signup", nil)
 	recorder = httptest.NewRecorder()
 	router.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/register" {
-		t.Fatalf("signup page = %d (%s), want the registration console", recorder.Code, recorder.Header().Get("Location"))
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Location") != "" || !strings.Contains(recorder.Body.String(), "WEB_UI_REQUIRED") {
+		t.Fatal("Core restored an embedded signup page instead of requiring the Web application")
 	}
 }
 

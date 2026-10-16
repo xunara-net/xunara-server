@@ -38,7 +38,7 @@ func TestSelfServiceExternalFirstLoginCannotJoinPortal(t *testing.T) {
 		}
 		return getRequest(t, client, host.URL+"/oidc/callback/fake?code=fixture&state="+url.QueryEscape(authorization.Query().Get("state")), cookieNamed(t, started, authCookieName))
 	}
-	for _, entry := range []string{"/api/v1/auth/start?provider=fake", "/login?provider=fake"} {
+	for _, entry := range []string{"/api/v1/auth/start?provider=fake", "/api/v1/auth/start?provider=fake"} {
 		response := callback(entry)
 		if response.StatusCode != http.StatusForbidden || !strings.Contains(bodyString(t, response), "TENANT_SIGNUP_REQUIRED") {
 			t.Fatal("unknown external identity joined the self-service portal")

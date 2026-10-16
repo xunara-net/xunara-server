@@ -41,7 +41,7 @@ func main() {
 		policyPath         = flag.String("policy", "", "path to an ACL policy document (HuJSON); empty allows everything")
 		logLevel           = flag.String("log-level", "info", "log level: debug|info|warn|error")
 		consoleTimezone    = flag.String("console-timezone", "Asia/Shanghai",
-			"IANA timezone the web console prints timestamps in; empty or unknown falls back to UTC")
+			"deprecated compatibility flag; the independent Web application uses the browser timezone")
 		oidcIssuer   = flag.String("oidc-issuer", "", "OIDC issuer URL; enables OIDC login when set")
 		oidcID       = flag.String("oidc-id", "oidc", "provider ID for the OIDC issuer")
 		oidcClient   = flag.String("oidc-client-id", "", "OIDC client ID")

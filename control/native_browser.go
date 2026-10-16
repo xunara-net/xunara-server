@@ -16,17 +16,7 @@ import (
 	"tailscale.com/types/key"
 )
 
-var nativeLoginPage = pageTemplate("native-login", publicHead+`<main id="main" class="narrow"><div class="card">
-<h1>登录并接入设备</h1><p>设备：{{.Hostname}}</p>
-<p>请登录要接入的账户。登录后还需确认授权；当前浏览器中其他账户的登录不会自动批准设备。</p>
-{{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
-<form method="post" action="{{.Action}}">
-<input type="hidden" name="_csrf" value="{{.FormToken}}">
-<label for="login">登录名</label><input id="login" name="login" autocomplete="username" required maxlength="128">
-<label for="password">密码</label><input id="password" name="password" type="password" autocomplete="current-password" required>
-<div class="actions"><button class="approve" type="submit">登录并继续</button></div>
-</form></div></main>`+publicFoot)
-
+// 浏览器仅交换 JSON；账户选择仍验证密码、持久限流与精确机器/节点绑定。
 func (gateway *nativeGateway) browserFlow(writer http.ResponseWriter, request *http.Request) (nativeFlow, bool) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Referrer-Policy", "no-referrer")
@@ -37,27 +27,14 @@ func (gateway *nativeGateway) browserFlow(writer http.ResponseWriter, request *h
 	}
 	flow, err := gateway.registry.nativeFlow(request.Context(), chi.URLParam(request, "flowID"))
 	if err != nil {
-		gateway.front.renderError(writer, request, http.StatusGone, "Login link expired", "Please restart device sign-in to get a new link.")
-		return flow, false
+		if errors.Is(err, errNativeFlow) {
+			writeAPIError(writer, http.StatusGone, "AUTH_EXPIRED: restart device sign-in to get a new link")
+		} else {
+			writeAPIError(writer, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE: device sign-in could not be checked")
+		}
+		return nativeFlow{}, false
 	}
 	return flow, true
-}
-
-func (gateway *nativeGateway) renderLogin(writer http.ResponseWriter, request *http.Request, flow nativeFlow, message string) {
-	var registration tailcfg.RegisterRequest
-	if err := json.Unmarshal([]byte(flow.Registration), &registration); err != nil {
-		gateway.front.renderError(writer, request, http.StatusServiceUnavailable, "Sign-in unavailable", "Please restart device sign-in.")
-		return
-	}
-	hostname := "未命名设备"
-	if registration.Hostinfo != nil && registration.Hostinfo.Hostname != "" {
-		hostname = registration.Hostinfo.Hostname
-	}
-	gateway.front.renderPage(writer, request, nativeLoginPage, map[string]any{
-		"Title": "登录并接入设备", "Hostname": hostname, "Error": message,
-		"Action":    gateway.origin + "/device/" + flow.ID + "/login",
-		"FormToken": gateway.front.newFormToken("native-login:" + flow.ID),
-	})
 }
 
 func (gateway *nativeGateway) handleFlow(writer http.ResponseWriter, request *http.Request) {
@@ -65,17 +42,27 @@ func (gateway *nativeGateway) handleFlow(writer http.ResponseWriter, request *ht
 	if !ok {
 		return
 	}
-	if flow.Organization == "" {
-		gateway.renderLogin(writer, request, flow, "")
+	if flow.Organization != "" {
+		next, err := gateway.authorizationPath(request.Context(), flow)
+		if err != nil {
+			writeAPIError(writer, http.StatusConflict, "DEVICE_SCOPE_CHANGED: restart device sign-in")
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"next_path": next})
 		return
 	}
-	// 已选择的账户只恢复自己的审批，不检查入口站的管理员 Cookie。
-	location, err := gateway.authorizationURL(request.Context(), flow)
-	if err != nil {
-		gateway.front.renderError(writer, request, http.StatusConflict, "Sign-in unavailable", "Restart device sign-in and use your account.")
+	var registration tailcfg.RegisterRequest
+	if json.Unmarshal([]byte(flow.Registration), &registration) != nil {
+		writeAPIError(writer, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE: device sign-in could not be checked")
 		return
 	}
-	http.Redirect(writer, request, location, http.StatusSeeOther)
+	hostname := ""
+	if registration.Hostinfo != nil {
+		hostname = registration.Hostinfo.Hostname
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"hostname": hostname, "csrf_token": gateway.front.newFormToken("native-login:" + flow.ID),
+	})
 }
 
 func (gateway *nativeGateway) handleLogin(writer http.ResponseWriter, request *http.Request) {
@@ -83,46 +70,67 @@ func (gateway *nativeGateway) handleLogin(writer http.ResponseWriter, request *h
 	if !ok {
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
-	if request.ParseForm() != nil || !gateway.front.checkFormToken("native-login:"+flow.ID, request.PostFormValue("_csrf"), time.Now()) {
-		gateway.front.renderError(writer, request, http.StatusForbidden, "Request rejected", "Reload this page and try again.")
+	var body struct {
+		Login    string `json:"login"`
+		Password string `json:"password"`
+	}
+	if !decodeAccountBody(writer, request, &body) {
+		return
+	}
+	if !gateway.front.checkFormToken("native-login:"+flow.ID, request.Header.Get("X-CSRF-Token"), time.Now()) {
+		writeAPIError(writer, http.StatusForbidden, "CSRF_INVALID: reload this page and try again")
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
-	org, result, err := gateway.router.signInAccount(ctx, request, request.PostFormValue("login"), request.PostFormValue("password"))
+	org, result, err := gateway.router.signInAccount(ctx, request, body.Login, body.Password)
 	if err != nil {
-		status, message := http.StatusUnauthorized, "登录名或密码错误。"
+		status, message := http.StatusUnauthorized, "LOGIN_REJECTED: incorrect login name or password"
 		if errors.Is(err, errPasswordRateLimited) {
-			status, message = http.StatusTooManyRequests, "尝试次数过多，请稍后再试。"
+			status, message = http.StatusTooManyRequests, "AUTH_RATE_LIMITED: try again later"
+			writer.Header().Set("Retry-After", "60")
 		} else if !errors.Is(err, errPasswordRejected) {
-			status, message = http.StatusServiceUnavailable, "登录暂不可用，请稍后重试。"
+			status, message = http.StatusServiceUnavailable, "AUTH_UNAVAILABLE: try again later"
+			writer.Header().Set("Retry-After", "5")
 		}
-		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		writer.WriteHeader(status)
-		gateway.renderLogin(writer, request, flow, message)
+		writeAPIError(writer, status, message)
 		return
 	}
 	if !org.managed && org.site.ID != gateway.frontID {
 		_ = org.site.Server.identity.RevokeSession(result.session.ID, "shared device entry unavailable")
-		gateway.front.renderError(writer, request, http.StatusUnauthorized, "Sign-in failed", "Use this account's own device sign-in address.")
+		writeAPIError(writer, http.StatusUnauthorized, "LOGIN_REJECTED: use this account's own device entry")
 		return
 	}
 	flow, err = gateway.registry.selectNativeFlow(ctx, flow.ID, org.site.ID, org.site.Server.noiseKey.Public().String())
 	if err != nil {
 		_ = org.site.Server.identity.RevokeSession(result.session.ID, "device scope rejected")
-		gateway.front.renderError(writer, request, http.StatusConflict, "Request rejected", "This device sign-in already belongs to another account. Restart device sign-in.")
+		writeAPIError(writer, http.StatusConflict, "DEVICE_SCOPE_CHANGED: this sign-in already belongs to another account; restart device sign-in")
 		return
 	}
-	location, err := gateway.authorizationURL(ctx, flow)
+	next, err := gateway.authorizationPath(ctx, flow)
 	if err != nil {
 		_ = org.site.Server.identity.RevokeSession(result.session.ID, "device enrollment unavailable")
-		gateway.front.renderError(writer, request, http.StatusServiceUnavailable, "Sign-in unavailable", "Please restart device sign-in.")
+		writeAPIError(writer, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE: restart device sign-in")
 		return
 	}
 	response := gateway.router.accountSessionWriter(writer, org)
 	org.site.Server.setSessionCookie(response, result.token, result.session.ExpiresAt)
-	http.Redirect(response, request, location, http.StatusSeeOther)
+	writeJSON(response, http.StatusOK, map[string]any{"next_path": next})
+}
+
+// 跳转只使用受信共享入口生成的相对路径，禁止配置错误变成开放重定向。
+func (gateway *nativeGateway) authorizationPath(ctx context.Context, flow nativeFlow) (string, error) {
+	location, err := gateway.authorizationURL(ctx, flow)
+	if err != nil {
+		return "", err
+	}
+	target, err := url.Parse(location)
+	origin, _ := url.Parse(gateway.origin)
+	if err != nil || target.Scheme != origin.Scheme || target.Host != origin.Host || target.User != nil ||
+		target.RawQuery != "" || target.Fragment != "" || safeReturnTo(target.EscapedPath()) != target.EscapedPath() {
+		return "", errNativeScope
+	}
+	return target.EscapedPath(), nil
 }
 
 func (gateway *nativeGateway) authorizationURL(ctx context.Context, flow nativeFlow) (string, error) {

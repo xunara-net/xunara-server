@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +40,6 @@ func TestPasswordAdmissionFailsClosedOnStorageFailure(t *testing.T) {
 			}
 			oldCookie := &http.Cookie{Name: sessionCookieName, Value: oldToken}
 			credentials := apiLoginRequest{Login: state.DefaultUserProfile(state.DefaultUserID).LoginName, Password: testLocalPassword}
-			formToken := server.newFormToken(formPurposeLogin)
 			database := server.store.(*state.SQLiteStore).DB()
 			if fault.prepare != "" {
 				if _, err := database.Exec(fault.prepare); err != nil {
@@ -52,15 +50,8 @@ func TestPasswordAdmissionFailsClosedOnStorageFailure(t *testing.T) {
 			if _, err := database.Exec(fault.install); err != nil {
 				t.Fatal(err)
 			}
-			for _, endpoint := range []string{"/api/v1/auth/login", "/login"} {
-				var response *http.Response
-				if endpoint == "/login" {
-					response = postForm(t, client, host.URL+endpoint, url.Values{
-						"_csrf": {formToken}, "login": {credentials.Login}, "password": {credentials.Password}, "return_to": {"/console/"},
-					}, oldCookie)
-				} else {
-					response = postJSON(t, client, host.URL+endpoint, credentials, oldCookie)
-				}
+			for _, endpoint := range []string{"/api/v1/auth/login"} {
+				response := postJSON(t, client, host.URL+endpoint, credentials, oldCookie)
 				body := bodyString(t, response)
 				if response.StatusCode != http.StatusServiceUnavailable {
 					t.Fatalf("%s returned %d instead of unavailable", endpoint, response.StatusCode)
@@ -97,32 +88,21 @@ func TestPasswordAdmissionFailsClosedOnStorageFailure(t *testing.T) {
 				t.Fatal("password login did not recover")
 			}
 			cookieNamed(t, response, sessionCookieName)
-			response = postForm(t, client, host.URL+"/login", url.Values{
-				"_csrf": {formToken}, "login": {credentials.Login}, "password": {credentials.Password}, "return_to": {"/console/"},
-			}, nil)
-			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/console/" {
-				t.Fatal("legacy password login did not preserve its recovered target")
-			}
-			cookieNamed(t, response, sessionCookieName)
 		})
 	}
 }
 
-func TestPasswordAdmissionSharesBudgetAcrossJSONAndHTML(t *testing.T) {
+func TestPasswordAdmissionNormalizesLoginRateBudget(t *testing.T) {
 	server := newTestServer(t)
 	host := newTestHTTPServer(t, server)
 	client := noRedirectClient()
-	formToken := server.newFormToken(formPurposeLogin)
 	login := state.DefaultUserProfile(state.DefaultUserID).LoginName
 	for attempt := 0; attempt <= loginNameLimit; attempt++ {
-		var response *http.Response
-		if attempt%2 == 0 {
-			response = postJSON(t, client, host.URL+"/api/v1/auth/login", apiLoginRequest{Login: login, Password: "wrong shared-budget password"}, nil)
-		} else {
-			response = postForm(t, client, host.URL+"/login", url.Values{
-				"_csrf": {formToken}, "login": {strings.ToUpper(login)}, "password": {"wrong shared-budget password"},
-			}, nil)
+		attemptLogin := login
+		if attempt%2 != 0 {
+			attemptLogin = strings.ToUpper(login)
 		}
+		response := postJSON(t, client, host.URL+"/api/v1/auth/login", apiLoginRequest{Login: attemptLogin, Password: "wrong shared-budget password"}, nil)
 		if attempt < loginNameLimit {
 			if response.StatusCode != http.StatusUnauthorized {
 				t.Fatalf("allowed attempt %d returned %d", attempt, response.StatusCode)
@@ -136,25 +116,15 @@ func TestPasswordAdmissionSharesBudgetAcrossJSONAndHTML(t *testing.T) {
 	}
 }
 
-func TestPasswordLoginAuditsExactlyOnceAcrossAdapters(t *testing.T) {
+func TestPasswordLoginAuditsExactlyOnce(t *testing.T) {
 	server := newTestServer(t)
 	host := newTestHTTPServer(t, server)
 	client := noRedirectClient()
 	credentials := apiLoginRequest{Login: state.DefaultUserProfile(state.DefaultUserID).LoginName, Password: testLocalPassword}
-	for index, endpoint := range []string{"/api/v1/auth/login", "/login"} {
-		var response *http.Response
-		if endpoint == "/login" {
-			response = postForm(t, client, host.URL+endpoint, url.Values{
-				"_csrf": {server.newFormToken(formPurposeLogin)}, "login": {credentials.Login}, "password": {credentials.Password}, "return_to": {"/console/"},
-			}, nil)
-			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/console/" {
-				t.Fatal("audited legacy password login changed its redirect contract")
-			}
-		} else {
-			response = postJSON(t, client, host.URL+endpoint, credentials, nil)
-			if response.StatusCode != http.StatusOK {
-				t.Fatal("audited JSON password login did not succeed")
-			}
+	for index, endpoint := range []string{"/api/v1/auth/login"} {
+		response := postJSON(t, client, host.URL+endpoint, credentials, nil)
+		if response.StatusCode != http.StatusOK {
+			t.Fatal("JSON password login did not succeed")
 		}
 		cookie := cookieNamed(t, response, sessionCookieName)
 		session, err := server.identity.GetSessionByToken(cookie.Value)

@@ -184,24 +184,11 @@ func (server *Server) resolveCookieSession(request *http.Request) (identity.Sess
 	return identity.Session{}, "", identity.ErrSessionNotFound
 }
 
-// currentSession resolves the request's session cookie to a live session.
-func (s *Server) currentSession(r *http.Request) (identity.Session, bool) {
-	session, _, err := s.resolveCookieSession(r)
-	return session, err == nil
-}
-
 // csrfTokenFor 从 HttpOnly 会话秘密派生 CSRF 令牌，不需要实例本地密钥或缓存。
 // 所有实例可验证同一令牌；会话撤销或轮换后，旧令牌不能用于新会话。
 func csrfTokenFor(token string) string {
 	sum := sha256.Sum256([]byte("xunara-csrf:" + token))
 	return hex.EncodeToString(sum[:])
-}
-
-// checkCSRF verifies the form's CSRF token against the request's session.
-func checkCSRF(r *http.Request, token string) bool {
-	got := r.PostFormValue("csrf")
-	want := csrfTokenFor(token)
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 // checkCSRFHeader verifies the CSRF token of a JSON request, where the token
@@ -219,7 +206,7 @@ func (s *Server) requireSession(w http.ResponseWriter, r *http.Request, returnTo
 	if err == nil {
 		user, lookupErr := s.identity.LookupUser(r.Context(), session.UserID)
 		if lookupErr != nil {
-			s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+			s.respondBrowserError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
 			return identity.Session{}, "", false
 		}
 		if user.PasswordChangeRequired {
@@ -232,7 +219,7 @@ func (s *Server) requireSession(w http.ResponseWriter, r *http.Request, returnTo
 	if !errors.Is(err, identity.ErrSessionNotFound) {
 		w.Header().Set("Retry-After", "5")
 		w.Header().Set("Cache-Control", "no-store")
-		s.renderError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
+		s.respondBrowserError(w, r, http.StatusServiceUnavailable, "Authentication unavailable", "Your login could not be checked. Please try again later.")
 		return identity.Session{}, "", false
 	}
 	http.Redirect(w, r, "/login?return_to="+url.QueryEscape(returnTo), http.StatusFound)

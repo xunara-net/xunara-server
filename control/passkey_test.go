@@ -93,7 +93,7 @@ func readBody(t *testing.T, resp *http.Response) []byte {
 func passkeyLocalLogin(t *testing.T, client *http.Client, baseURL, returnTo string) {
 	t.Helper()
 	resp := submitLocalLogin(t, client, baseURL, returnTo)
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != returnTo {
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("local login = %d %q, want 302 %q", resp.StatusCode, resp.Header.Get("Location"), returnTo)
 	}
 }
@@ -165,18 +165,11 @@ func TestPasskeyRegisterAndLoginFlow(t *testing.T) {
 
 	client := newPasskeyClient(t)
 
-	// With passkey sign-in enabled the page offers both the password form
-	// and the passkey button.
-	resp := getRequest(t, client, hs.URL+"/login", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /login = %d, want 200", resp.StatusCode)
-	}
-	page := bodyString(t, resp)
-	if !strings.Contains(page, "Sign in with a passkey") || !strings.Contains(page, `name="password"`) {
-		t.Fatalf("sign-in page does not offer both methods:\n%s", page)
-	}
-	if !strings.Contains(page, "navigator.credentials.get") {
-		t.Fatalf("sign-in page is missing the WebAuthn script:\n%s", page)
+	// 登录能力从公开 JSON API 获取，WebAuthn 脚本只存在于独立前端。
+	response := getRequest(t, client, hs.URL+"/api/v1/auth/providers", nil)
+	capabilities := decodeJSON[map[string]any](t, readBody(t, response))
+	if response.StatusCode != http.StatusOK || capabilities["passkeys"] != true || capabilities["local_login"] != true {
+		t.Fatal("JSON sign-in capabilities omitted password or passkey login")
 	}
 
 	passkeyLocalLogin(t, client, hs.URL, "/console/passkeys")
@@ -184,7 +177,7 @@ func TestPasskeyRegisterAndLoginFlow(t *testing.T) {
 	registered := registerPasskey(t, s, hs, client, authenticator, "Test Key")
 
 	// 列表只返回显示字段，旧管理页跳转到独立 Web。
-	resp = getRequest(t, client, hs.URL+"/api/v1/account/passkeys", nil)
+	resp := getRequest(t, client, hs.URL+"/api/v1/account/passkeys", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("account passkeys = %d, want 200", resp.StatusCode)
 	}
@@ -197,9 +190,9 @@ func TestPasskeyRegisterAndLoginFlow(t *testing.T) {
 
 	// A fresh browser (no session) signs in with the passkey.
 	login := newPasskeyClient(t)
-	begin := postJSONRequest(t, login, hs.URL+"/passkey/login/begin", []byte("{}"), "")
+	begin := postJSONRequest(t, login, hs.URL+"/api/v1/auth/passkey/begin", []byte("{}"), "")
 	if begin.StatusCode != http.StatusOK {
-		t.Fatalf("POST /passkey/login/begin = %d (%s)", begin.StatusCode, readBody(t, begin))
+		t.Fatalf("POST /api/v1/auth/passkey/begin = %d (%s)", begin.StatusCode, readBody(t, begin))
 	}
 	ceremonyCookie := cookieNamed(t, begin, passkeyCookieName)
 	if !ceremonyCookie.HttpOnly {
@@ -210,13 +203,13 @@ func TestPasskeyRegisterAndLoginFlow(t *testing.T) {
 	}](t, readBody(t, begin)).Options
 
 	assertion := authenticator.assertionBody(t, testPasskeyRPID, testPasskeyOrigin, &assertionOptions, userHandle(registered.UserID))
-	finish := postJSONRequest(t, login, hs.URL+"/passkey/login/finish?return_to=%2Fconsole%2F", assertion, "")
+	finish := postJSONRequest(t, login, hs.URL+"/api/v1/auth/passkey/finish", assertion, "")
 	if finish.StatusCode != http.StatusOK {
-		t.Fatalf("POST /passkey/login/finish = %d (%s)", finish.StatusCode, readBody(t, finish))
+		t.Fatalf("POST /api/v1/auth/passkey/finish = %d (%s)", finish.StatusCode, readBody(t, finish))
 	}
-	redirect := decodeJSON[map[string]string](t, readBody(t, finish))["redirect"]
-	if redirect != "/console/" {
-		t.Errorf("login redirect = %q, want /console/", redirect)
+	payload := decodeJSON[map[string]any](t, readBody(t, finish))
+	if payload["authenticated"] != true || payload["user"] == nil {
+		t.Fatal("passkey did not return a session snapshot")
 	}
 
 	token := sessionCookieFromJar(t, login, hs.URL)
@@ -233,7 +226,7 @@ func TestPasskeyRegisterAndLoginFlow(t *testing.T) {
 
 	// The challenge is single-use: replaying the same assertion with the
 	// ceremony cookie fails even though the body and cookie are intact.
-	replayReq, err := http.NewRequest(http.MethodPost, hs.URL+"/passkey/login/finish", bytes.NewReader(assertion))
+	replayReq, err := http.NewRequest(http.MethodPost, hs.URL+"/api/v1/auth/passkey/finish", bytes.NewReader(assertion))
 	if err != nil {
 		t.Fatalf("building replay request: %v", err)
 	}
@@ -277,16 +270,16 @@ func TestPasskeyLoginRequiresTheStartingBrowser(t *testing.T) {
 	hs := newTestHTTPServer(t, s)
 
 	starter := newPasskeyClient(t)
-	begin := postJSONRequest(t, starter, hs.URL+"/passkey/login/begin", []byte("{}"), "")
+	begin := postJSONRequest(t, starter, hs.URL+"/api/v1/auth/passkey/begin", []byte("{}"), "")
 	if begin.StatusCode != http.StatusOK {
-		t.Fatalf("POST /passkey/login/begin = %d", begin.StatusCode)
+		t.Fatalf("POST /api/v1/auth/passkey/begin = %d", begin.StatusCode)
 	}
 	_ = readBody(t, begin)
 
 	// The assertion body is irrelevant: the missing cookie is rejected before
 	// the credential is looked at.
 	other := newPasskeyClient(t)
-	finish := postJSONRequest(t, other, hs.URL+"/passkey/login/finish", []byte(`{"id":"x","rawId":"x","type":"public-key","response":{}}`), "")
+	finish := postJSONRequest(t, other, hs.URL+"/api/v1/auth/passkey/finish", []byte(`{"id":"x","rawId":"x","type":"public-key","response":{}}`), "")
 	if finish.StatusCode != http.StatusBadRequest {
 		t.Fatalf("finish from another browser = %d, want 400", finish.StatusCode)
 	}
@@ -302,9 +295,9 @@ func TestPasskeyDisabled(t *testing.T) {
 	hs := newTestHTTPServer(t, s)
 
 	client := newPasskeyClient(t)
-	resp := postJSONRequest(t, client, hs.URL+"/passkey/login/begin", []byte("{}"), "")
+	resp := postJSONRequest(t, client, hs.URL+"/api/v1/auth/passkey/begin", []byte("{}"), "")
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("POST /passkey/login/begin without configuration = %d, want 404", resp.StatusCode)
+		t.Fatalf("POST /api/v1/auth/passkey/begin without configuration = %d, want 404", resp.StatusCode)
 	}
 
 	cookie := loginLocal(t, client, hs.URL, "/console/passkeys")

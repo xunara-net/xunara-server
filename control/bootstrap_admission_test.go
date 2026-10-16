@@ -59,7 +59,7 @@ func TestBootstrapAdmissionFailsClosedOnRateStorageFailure(t *testing.T) {
 			if _, err := database.Exec(fmt.Sprintf("CREATE TRIGGER unavailable_setup_rate BEFORE %s ON rate_limits BEGIN SELECT RAISE(ABORT, 'private bootstrap diagnostic'); END", operation)); err != nil {
 				t.Fatal(err)
 			}
-			response := postForm(t, noRedirectClient(), host.URL+"/setup", form, nil)
+			response := postSetupJSON(t, noRedirectClient(), host.URL, form)
 			assertBootstrapUnavailable(t, response, form.Get("token"), form.Get("password"), "private bootstrap diagnostic")
 			after, err := server.identity.LookupUser(t.Context(), state.DefaultUserID)
 			if err != nil || !reflect.DeepEqual(before, after) {
@@ -77,8 +77,8 @@ func TestBootstrapAdmissionFailsClosedOnRateStorageFailure(t *testing.T) {
 			if _, err := database.Exec("DROP TRIGGER unavailable_setup_rate"); err != nil {
 				t.Fatal(err)
 			}
-			response = postForm(t, noRedirectClient(), host.URL+"/setup", form, nil)
-			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dashboard" {
+			response = postSetupJSON(t, noRedirectClient(), host.URL, form)
+			if response.StatusCode != http.StatusCreated {
 				t.Fatal("bootstrap did not recover after rate storage became available")
 			}
 			cookieNamed(t, response, sessionCookieName)
@@ -111,7 +111,7 @@ func TestBootstrapTransactionFailurePreservesOwnerProofAndSession(t *testing.T) 
 			if _, err := database.Exec(fmt.Sprintf("CREATE TRIGGER unavailable_bootstrap_write BEFORE %s ON %s BEGIN SELECT RAISE(ABORT, 'private bootstrap diagnostic'); END", fault.operation, fault.table)); err != nil {
 				t.Fatal(err)
 			}
-			response := postForm(t, noRedirectClient(), host.URL+"/setup", form, oldCookie)
+			response := postSetupJSON(t, noRedirectClient(), host.URL, form, oldCookie)
 			assertBootstrapUnavailable(t, response, form.Get("token"), form.Get("password"), oldToken, "private bootstrap diagnostic")
 			after, err := server.identity.LookupUser(t.Context(), before.ID)
 			if err != nil || !reflect.DeepEqual(before, after) {
@@ -129,8 +129,8 @@ func TestBootstrapTransactionFailurePreservesOwnerProofAndSession(t *testing.T) 
 			if _, err := database.Exec("DROP TRIGGER unavailable_bootstrap_write"); err != nil {
 				t.Fatal(err)
 			}
-			response = postForm(t, noRedirectClient(), host.URL+"/setup", form, oldCookie)
-			if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/dashboard" {
+			response = postSetupJSON(t, noRedirectClient(), host.URL, form, oldCookie)
+			if response.StatusCode != http.StatusCreated {
 				t.Fatal("rolled-back bootstrap could not retry")
 			}
 			cookieNamed(t, response, sessionCookieName)
@@ -153,16 +153,14 @@ func TestBootstrapMetadataStorageFailureIsNotSetupRequired(t *testing.T) {
 			if _, err := database.Exec("ALTER TABLE local_credentials RENAME TO unavailable_bootstrap_credentials"); err != nil {
 				t.Fatal(err)
 			}
-			for _, endpoint := range []string{"/api/v1/auth/providers", "/api/v1/auth/session", "/api/v1/capabilities", "/setup", "/login", "/signup", "/"} {
+			for _, endpoint := range []string{"/api/v1/auth/providers", "/api/v1/auth/session", "/api/v1/capabilities", "/api/v1/auth/setup"} {
 				t.Run(endpoint, func(t *testing.T) {
 					response := getHTML(t, noRedirectClient(), host.URL+endpoint)
 					assertBootstrapUnavailable(t, response, form.Get("token"), form.Get("password"), "unavailable_bootstrap_credentials")
 				})
 			}
-			response := postForm(t, noRedirectClient(), host.URL+"/setup", form, nil)
+			response := postSetupJSON(t, noRedirectClient(), host.URL, form)
 			assertBootstrapUnavailable(t, response, form.Get("token"), form.Get("password"))
-			response = postForm(t, noRedirectClient(), host.URL+"/signup", url.Values{"_csrf": {server.newFormToken(formPurposeSignup)}}, nil)
-			assertBootstrapUnavailable(t, response)
 			response = postJSON(t, noRedirectClient(), host.URL+"/api/v1/auth/signup", apiSignupRequest{Login: "outsider", Password: "correct horse battery staple"}, nil)
 			assertBootstrapUnavailable(t, response)
 			if _, err := database.Exec("ALTER TABLE unavailable_bootstrap_credentials RENAME TO local_credentials"); err != nil {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -29,9 +28,13 @@ func nativeTestRouter(test *testing.T) *Router {
 
 func nativeBrowserLogin(test *testing.T, router *Router, flowID, login, password string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	test.Helper()
-	values := url.Values{"_csrf": {router.nativeGateway.front.newFormToken("native-login:" + flowID)}, "login": {login}, "password": {password}}
-	request := httptest.NewRequest(http.MethodPost, "https://app.xunara.test/device/"+flowID+"/login", strings.NewReader(values.Encode()))
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, err := json.Marshal(map[string]string{"login": login, "password": password})
+	if err != nil {
+		test.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://app.xunara.test/api/v1/browser/device-flows/"+flowID+"/login", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CSRF-Token", router.nativeGateway.front.newFormToken("native-login:"+flowID))
 	for _, cookie := range cookies {
 		request.AddCookie(cookie)
 	}
@@ -61,7 +64,7 @@ func TestNativeGatewayTS2021AccountApprovalIsolation(test *testing.T) {
 		test.Fatal(err)
 	}
 	adminCookie := &http.Cookie{Name: sessionCookieName, Value: adminToken}
-	pageRequest := httptest.NewRequest(http.MethodGet, first.AuthURL, nil)
+	pageRequest := httptest.NewRequest(http.MethodGet, "https://app.xunara.test/api/v1/browser/device-flows/"+flowID, nil)
 	pageRequest.AddCookie(adminCookie)
 	page := httptest.NewRecorder()
 	router.Handler().ServeHTTP(page, pageRequest)
@@ -72,11 +75,11 @@ func TestNativeGatewayTS2021AccountApprovalIsolation(test *testing.T) {
 		test.Fatal("anonymous device created a default-tenant approval")
 	}
 	response := nativeBrowserLogin(test, router, flowID, "alice", testLocalPassword, adminCookie)
-	location := response.Header().Get("Location")
-	if response.Code != http.StatusSeeOther || !strings.HasPrefix(location, "https://app.xunara.test/t/alice/register/") {
+	location := decodeJSON[map[string]string](test, response.Body.Bytes())["next_path"]
+	if response.Code != http.StatusOK || !strings.HasPrefix(location, "/t/alice/register/") {
 		test.Fatalf("account login: %d %s %s", response.Code, location, response.Body.String())
 	}
-	authID := strings.TrimPrefix(location, "https://app.xunara.test/t/alice/register/")
+	authID := strings.TrimPrefix(location, "/t/alice/register/")
 	var tenantCookie *http.Cookie
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == tenantCookieName(sessionCookieName, "alice") {
@@ -86,23 +89,23 @@ func TestNativeGatewayTS2021AccountApprovalIsolation(test *testing.T) {
 	if tenantCookie == nil || tenantCookie.Path != "/t/alice/" || !tenantCookie.Secure {
 		test.Fatal("account session did not receive a tenant-specific cookie")
 	}
-	approval := httptest.NewRequest(http.MethodGet, location, nil)
+	approvalURL := "https://app.xunara.test/t/alice/api/v1/browser/device-authorizations/" + authID
+	approval := httptest.NewRequest(http.MethodGet, approvalURL, nil)
 	approval.AddCookie(adminCookie)
 	anonymous := httptest.NewRecorder()
 	router.Handler().ServeHTTP(anonymous, approval)
-	relogin, err := url.Parse(anonymous.Header().Get("Location"))
-	if err != nil || anonymous.Code != http.StatusFound || relogin.Path != "/login" || relogin.Query().Get("return_to") != approval.URL.Path {
+	if anonymous.Code != http.StatusUnauthorized {
 		test.Fatal("default administrator cookie authenticated a tenant approval")
 	}
 	approval.AddCookie(tenantCookie)
 	signedIn := httptest.NewRecorder()
 	router.Handler().ServeHTTP(signedIn, approval)
-	if signedIn.Code != http.StatusOK || !strings.Contains(signedIn.Body.String(), location+"/approve") {
+	if signedIn.Code != http.StatusOK || !strings.Contains(signedIn.Body.String(), `"hostname":"account-laptop"`) {
 		test.Fatalf("scoped approval form: %d %s", signedIn.Code, signedIn.Body.String())
 	}
-	values := url.Values{"csrf": {csrfTokenFor(tenantCookie.Value)}}
-	decision := httptest.NewRequest(http.MethodPost, location+"/approve", strings.NewReader(values.Encode()))
-	decision.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	decision := httptest.NewRequest(http.MethodPost, approvalURL+"/approve", strings.NewReader("{}"))
+	decision.Header.Set("Content-Type", "application/json")
+	decision.Header.Set("X-CSRF-Token", csrfTokenFor(tenantCookie.Value))
 	decision.AddCookie(tenantCookie)
 	approved := httptest.NewRecorder()
 	router.Handler().ServeHTTP(approved, decision)

@@ -55,13 +55,21 @@ func (s *SQLiteStore) CreateSSHCheckSession(opts NewSSHCheckOptions) (SSHCheckSe
 
 // GetSSHCheckSession implements [SSHCheckStore].
 func (s *SQLiteStore) GetSSHCheckSession(id string) (SSHCheckSession, bool) {
-	row := s.db.QueryRowContext(context.Background(),
-		"SELECT "+sshCheckColumns+" FROM ssh_check_sessions WHERE id = ?", id)
-	sess, err := scanSSHCheckSession(row)
-	if err != nil {
-		return SSHCheckSession{}, false
+	session, err := s.LookupSSHCheckSession(context.Background(), id)
+	return session, err == nil
+}
+
+// LookupSSHCheckSession preserves database and cancellation failures for the browser API.
+func (s *SQLiteStore) LookupSSHCheckSession(ctx context.Context, id string) (SSHCheckSession, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT "+sshCheckColumns+" FROM ssh_check_sessions WHERE id = ?", id)
+	session, err := scanSSHCheckSession(row)
+	if err == sql.ErrNoRows {
+		return SSHCheckSession{}, ErrSSHCheckNotFound
 	}
-	return sess, true
+	if err != nil {
+		return SSHCheckSession{}, fmt.Errorf("identity: reading SSH check session: %w", err)
+	}
+	return session, nil
 }
 
 // ListSSHCheckSessions implements [SSHCheckStore].
