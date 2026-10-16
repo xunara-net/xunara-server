@@ -13,6 +13,8 @@ import (
 )
 
 var (
+	// 地址池耗尽是可修正的配置冲突，不是身份失败或套餐设备额度不足。
+	ErrAddressExhausted    = errors.New("address pool exhausted")
 	ErrAddressConflict     = errors.New("device address changed or allocation revision is stale")
 	ErrAddressInUse        = errors.New("device address is already in use")
 	ErrAddressInvalid      = errors.New("device address is invalid")

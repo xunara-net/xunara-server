@@ -331,6 +331,8 @@ func (s *Server) registerWithAuthKey(ctx context.Context, req tailcfg.RegisterRe
 			return nil, NewHTTPError(http.StatusUnauthorized, "invalid pre-auth key", nil)
 		case errors.Is(err, state.ErrDeviceLimit):
 			return nil, planGateError(MsgDeviceLimitReached)
+		case errors.Is(err, state.ErrAddressExhausted):
+			return nil, NewHTTPError(http.StatusConflict, msgAddressPoolExhausted, err)
 		case errors.Is(err, state.ErrNodeKeyExists), errors.Is(err, state.ErrAmbiguousMachine):
 			return nil, NewHTTPError(http.StatusConflict, "machine or node key is already bound", nil)
 		default:
@@ -670,6 +672,8 @@ func deviceDecisionError(err error) error {
 		return NewHTTPError(http.StatusForbidden, "device approval permission is no longer valid", err)
 	case errors.Is(err, state.ErrDeviceLimit):
 		return planGateError(MsgDeviceLimitReached)
+	case errors.Is(err, state.ErrAddressExhausted):
+		return NewHTTPError(http.StatusConflict, msgAddressPoolExhausted, err)
 	case errors.Is(err, state.ErrDeviceChanged), errors.Is(err, state.ErrAmbiguousMachine), errors.Is(err, networkconfig.ErrConflict):
 		return NewHTTPError(http.StatusConflict, "device identity or policy changed; refresh before approving", err)
 	default:

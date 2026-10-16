@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"path/filepath"
 	"testing"
@@ -130,8 +131,23 @@ func TestAddressPrefixExhaustionIsReported(t *testing.T) {
 			addNode(t, s)
 		}
 		n := Node{NodeKey: key.NewNode().Public(), MachineKey: key.NewMachine().Public()}
-		if err := s.CreateNode(&n); err == nil {
-			t.Errorf("%s allocated a third address out of a /30 range", name)
+		if err := s.CreateNode(&n); !errors.Is(err, ErrAddressExhausted) {
+			t.Errorf("%s third address out of a /30 range = %v, want ErrAddressExhausted", name, err)
+		}
+	}
+}
+
+func TestLegacyReservedAddressPoolReportsExhaustion(t *testing.T) {
+	for name, store := range newTestStores(t) {
+		if err := store.SetAddressPrefixes(netip.MustParsePrefix("100.100.0.0/24"), netip.Prefix{}); err != nil {
+			t.Fatal(err)
+		}
+		node := Node{NodeKey: key.NewNode().Public(), MachineKey: key.NewMachine().Public()}
+		if err := store.CreateNode(&node); !errors.Is(err, ErrAddressExhausted) {
+			t.Errorf("%s reserved pool = %v, want ErrAddressExhausted", name, err)
+		}
+		if node.IPv4.IsValid() || len(store.ListNodes()) != 0 {
+			t.Fatalf("%s allocated a reserved address or silently fell back to another pool", name)
 		}
 	}
 }

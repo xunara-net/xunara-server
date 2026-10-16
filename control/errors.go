@@ -12,6 +12,8 @@ import (
 	"net/http"
 )
 
+const msgAddressPoolExhausted = "ADDRESS_POOL_EXHAUSTED: no usable device addresses remain; change the network range or ask the platform administrator to reallocate it"
+
 // HTTPError is an error carrying an HTTP status code for the outer (non-Noise)
 // router.
 type HTTPError struct {

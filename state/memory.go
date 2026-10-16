@@ -218,14 +218,14 @@ func (s *MemoryStore) CreateNode(n *Node) error {
 	if !n.IPv4.IsValid() {
 		addr, ok := s.ip4.next()
 		if !ok {
-			return fmt.Errorf("state: IPv4 space exhausted")
+			return addrExhausted("IPv4")
 		}
 		n.IPv4 = addr
 	}
 	if !n.IPv6.IsValid() {
 		addr, ok := s.ip6.next()
 		if !ok {
-			return fmt.Errorf("state: IPv6 space exhausted")
+			return addrExhausted("IPv6")
 		}
 		n.IPv6 = addr
 	}

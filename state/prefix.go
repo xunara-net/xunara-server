@@ -230,5 +230,5 @@ func nextNodeAddr(
 
 // addrExhausted names the address family in an exhaustion error.
 func addrExhausted(family string) error {
-	return fmt.Errorf("state: %s space exhausted", family)
+	return fmt.Errorf("state: %s %w", family, ErrAddressExhausted)
 }
