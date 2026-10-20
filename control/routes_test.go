@@ -150,3 +150,75 @@ func TestRouteApprovalPushesToConnectedPeers(t *testing.T) {
 		t.Errorf("approved route %s missing from peer PrimaryRoutes %v", subnet, peer.PrimaryRoutes)
 	}
 }
+
+func TestMultipleExitRoutesPushIndependentApprovalAndWithdrawal(test *testing.T) {
+	server := newTestServer(test)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	olderConnection, olderClient, olderKey := registerNode(test, server, httpServer, "older-exit")
+	defer olderConnection.Close()
+	newerConnection, newerClient, newerKey := registerNode(test, server, httpServer, "newer-exit")
+	defer newerConnection.Close()
+	consumerConnection, consumerClient, consumerKey := registerNode(test, server, httpServer, "consumer")
+	defer consumerConnection.Close()
+
+	postRaw(test, olderClient, "/machine/map", tailcfg.MapRequest{
+		Version: tailcfg.CurrentCapabilityVersion, NodeKey: olderKey.Public(),
+		Hostinfo: advertisedHostinfo("older-exit", state.ExitRouteV4, state.ExitRouteV6),
+	})
+	postRaw(test, newerClient, "/machine/map", tailcfg.MapRequest{
+		Version: tailcfg.CurrentCapabilityVersion, NodeKey: newerKey.Public(),
+		Hostinfo: advertisedHostinfo("newer-exit", state.ExitRouteV4, state.ExitRouteV6),
+	})
+	older, found := server.Store().GetNodeByNodeKey(olderKey.Public())
+	if !found {
+		test.Fatal("older exit not found")
+	}
+	newer, found := server.Store().GetNodeByNodeKey(newerKey.Public())
+	if !found {
+		test.Fatal("newer exit not found")
+	}
+	if err := server.Store().SetNodeApprovedRoutes(older.ID, []netip.Prefix{state.ExitRouteV4, state.ExitRouteV6}); err != nil {
+		test.Fatal(err)
+	}
+
+	session := openMapSession(test, consumerClient, consumerKey.Public())
+	defer session.Body.Close()
+	frames := mapFrames(session.Body)
+	view := newNetmapView()
+	exitOptions := func(view *netmapView) map[tailcfg.NodeID]bool {
+		options := make(map[tailcfg.NodeID]bool)
+		for _, peer := range view.peerList() {
+			options[peer.ID] = containsPrefix(peer.AllowedIPs, state.ExitRouteV4) && containsPrefix(peer.AllowedIPs, state.ExitRouteV6)
+			if len(peer.PrimaryRoutes) != 0 {
+				test.Errorf("exit-only node has primary subnet routes: %v", peer.PrimaryRoutes)
+			}
+		}
+		return options
+	}
+	waitForNetmap(test, frames, view, func(view *netmapView) bool {
+		options := exitOptions(view)
+		return len(options) == 2 && options[tailcfg.NodeID(older.ID)] && !options[tailcfg.NodeID(newer.ID)]
+	})
+	if err := server.Store().SetNodeApprovedRoutes(newer.ID, []netip.Prefix{state.ExitRouteV4, state.ExitRouteV6}); err != nil {
+		test.Fatal(err)
+	}
+	if err := server.Store().BumpConfigRevision(); err != nil {
+		test.Fatal(err)
+	}
+	waitForNetmap(test, frames, view, func(view *netmapView) bool {
+		options := exitOptions(view)
+		return options[tailcfg.NodeID(older.ID)] && options[tailcfg.NodeID(newer.ID)]
+	})
+	if err := server.Store().SetNodeApprovedRoutes(older.ID, nil); err != nil {
+		test.Fatal(err)
+	}
+	if err := server.Store().BumpConfigRevision(); err != nil {
+		test.Fatal(err)
+	}
+	waitForNetmap(test, frames, view, func(view *netmapView) bool {
+		options := exitOptions(view)
+		return !options[tailcfg.NodeID(older.ID)] && options[tailcfg.NodeID(newer.ID)]
+	})
+}

@@ -322,6 +322,49 @@ func TestRouteElectionPicksLowestNodeID(t *testing.T) {
 	}
 }
 
+func TestMultipleExitNodesRemainIndependentlySelectable(test *testing.T) {
+	subnet := netip.MustParsePrefix("10.10.0.0/16")
+	routes := []netip.Prefix{subnet, state.ExitRouteV4, state.ExitRouteV6}
+	older := withRoutes(testNode(3, "older-exit"), routes, routes)
+	newer := withRoutes(testNode(7, "newer-exit"), routes, routes)
+	consumer := testNode(9, "consumer")
+	nodes := []state.Node{newer, consumer, older}
+	table := NewRouteTable(nodes)
+	for _, route := range []netip.Prefix{state.ExitRouteV4, state.ExitRouteV6} {
+		if _, elected := table[route]; elected {
+			test.Errorf("exit route %s must not elect a global primary", route)
+		}
+	}
+	if table[subnet] != older.ID {
+		test.Fatalf("subnet primary = %d, want %d", table[subnet], older.ID)
+	}
+	for _, viewer := range nodes {
+		for name, response := range map[string]*tailcfg.MapResponse{
+			"full":   Full(viewer, nodes, Config{}, neverOnline, tailcfg.CurrentCapabilityVersion),
+			"update": Update(viewer, nodes, Config{}, neverOnline),
+		} {
+			test.Run(fmt.Sprintf("%s/viewer-%d", name, viewer.ID), func(test *testing.T) {
+				for _, node := range append([]*tailcfg.Node{response.Node}, response.Peers...) {
+					if node.ID == tailcfg.NodeID(consumer.ID) {
+						continue
+					}
+					for _, route := range []netip.Prefix{state.ExitRouteV4, state.ExitRouteV6} {
+						if !slices.Contains(node.AllowedIPs, route) {
+							test.Errorf("exit %d lost approved route %s: %v", node.ID, route, node.AllowedIPs)
+						}
+						if slices.Contains(node.PrimaryRoutes, route) {
+							test.Errorf("exit %d lists %s as a primary subnet route", node.ID, route)
+						}
+					}
+					if node.ID == tailcfg.NodeID(newer.ID) && slices.Contains(node.AllowedIPs, subnet) {
+						test.Error("backup subnet router must not claim the primary subnet route")
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestFQDNIncludesTheMagicDNSDomain(t *testing.T) {
 	self := testNode(1, "My Laptop")
 

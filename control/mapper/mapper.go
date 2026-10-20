@@ -187,12 +187,15 @@ func sshPolicyFor(cfg Config, self state.Node) *tailcfg.SSHPolicy {
 // both claim the prefix and traffic would flap.
 type RouteTable map[netip.Prefix]state.NodeID
 
-// NewRouteTable elects a primary node for every effectively served route among
-// nodes.
+// NewRouteTable elects a primary node for every effectively served subnet route.
 func NewRouteTable(nodes []state.Node) RouteTable {
 	table := make(RouteTable)
 	for _, n := range nodes {
 		for _, r := range n.EffectiveRoutes() {
+			// 出口由客户端显式选择，不能参加子网主路由选举，否则旧出口会屏蔽其他已批准出口。
+			if state.IsExitRoute(r) {
+				continue
+			}
 			if id, ok := table[r]; !ok || n.ID < id {
 				table[r] = n.ID
 			}
