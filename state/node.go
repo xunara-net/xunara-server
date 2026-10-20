@@ -220,14 +220,11 @@ func (n Node) EffectiveRoutes() []netip.Prefix {
 	return out
 }
 
-// IsExitNode reports whether the node serves an approved default route.
+// IsExitNode reports whether official clients can select this node as an exit.
 func (n Node) IsExitNode() bool {
-	for _, r := range n.EffectiveRoutes() {
-		if IsExitRoute(r) {
-			return true
-		}
-	}
-	return false
+	// 官方客户端要求两条默认路由同时有效；单栈批准不能显示为可选出口。
+	routes := n.EffectiveRoutes()
+	return slices.Contains(routes, ExitRouteV4) && slices.Contains(routes, ExitRouteV6)
 }
 
 // normalizeRoutes returns a sorted, de-duplicated copy of routes with invalid

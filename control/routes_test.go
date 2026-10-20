@@ -5,7 +5,9 @@ import (
 	"net/netip"
 	"testing"
 
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/views"
 
 	"github.com/xunara-net/xunara-server/state"
 )
@@ -221,4 +223,47 @@ func TestMultipleExitRoutesPushIndependentApprovalAndWithdrawal(test *testing.T)
 		options := exitOptions(view)
 		return !options[tailcfg.NodeID(older.ID)] && options[tailcfg.NodeID(newer.ID)]
 	})
+}
+
+func TestExitApprovalPushesToAdvertisingNode(test *testing.T) {
+	server := newTestServer(test)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	connection, client, nodeKey := registerNode(test, server, httpServer, "advertising-exit")
+	defer connection.Close()
+	postRaw(test, client, "/machine/map", tailcfg.MapRequest{
+		Version: tailcfg.CurrentCapabilityVersion, NodeKey: nodeKey.Public(),
+		Hostinfo: advertisedHostinfo("advertising-exit", state.ExitRouteV4, state.ExitRouteV6),
+	})
+	node, found := server.Store().GetNodeByNodeKey(nodeKey.Public())
+	if !found {
+		test.Fatal("advertising node not found")
+	}
+	session := openMapSession(test, client, nodeKey.Public())
+	defer session.Body.Close()
+	frames := mapFrames(session.Body)
+	view := newNetmapView()
+	waitForNetmap(test, frames, view, func(view *netmapView) bool { return view.self != nil })
+	if tsaddr.ContainsExitRoutes(views.SliceOf(view.self.AllowedIPs)) {
+		test.Fatal("unapproved self node was offered as an exit")
+	}
+	// 同时核对出口提供端自己的 Node：不能只证明消费者收到 Peers 更新。
+	for _, approved := range [][]netip.Prefix{
+		{state.ExitRouteV4}, {state.ExitRouteV4, state.ExitRouteV6}, {state.ExitRouteV6}, nil,
+	} {
+		if err := server.Store().SetNodeApprovedRoutes(node.ID, approved); err != nil {
+			test.Fatal(err)
+		}
+		if err := server.Store().BumpConfigRevision(); err != nil {
+			test.Fatal(err)
+		}
+		waitForNetmap(test, frames, view, func(view *netmapView) bool {
+			return containsPrefix(view.self.AllowedIPs, state.ExitRouteV4) == containsPrefix(approved, state.ExitRouteV4) &&
+				containsPrefix(view.self.AllowedIPs, state.ExitRouteV6) == containsPrefix(approved, state.ExitRouteV6)
+		})
+		stored, _ := server.Store().GetNodeByID(node.ID)
+		if stored.IsExitNode() != tsaddr.ContainsExitRoutes(views.SliceOf(view.self.AllowedIPs)) {
+			test.Fatal("management status disagrees with the official client's self netmap")
+		}
+	}
 }

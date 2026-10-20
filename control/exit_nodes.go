@@ -30,8 +30,8 @@ type exitNodeView struct {
 	Hostname string `json:"hostname"`
 	Owner    string `json:"owner"`
 	Online   bool   `json:"online"`
-	// Announced reports whether the node is still advertising the default
-	// route; approval without announcement is a misconfiguration to surface.
+	// Announced reports whether both default routes are still effective;
+	// partial approval or a withdrawn announcement must not look selectable.
 	Announced bool                 `json:"announced"`
 	IPv4      string               `json:"ipv4,omitempty"`
 	IPv6      string               `json:"ipv6,omitempty"`
@@ -54,8 +54,8 @@ type exitNodeSelectionView struct {
 	// ExitNodeHostname names the selected node when it still exists,
 	// whether or not it is an approved exit node.
 	ExitNodeHostname string `json:"exitNodeHostname,omitempty"`
-	// Resolved reports whether the selection is an approved exit node right
-	// now. Unresolved selections are kept visible, never silently dropped.
+	// Resolved reports whether both default routes are advertised and approved.
+	// Unresolved selections are kept visible, never silently dropped.
 	Resolved bool `json:"resolved"`
 }
 
@@ -118,7 +118,7 @@ func (s *Server) exitNodesViewFor(nodes []state.Node) exitNodesView {
 			selection.ExitNodeHostname = nodeDisplayHostname(selected)
 		}
 		if i, ok := index[selection.ExitNodeStableID]; ok {
-			selection.Resolved = true
+			selection.Resolved = byStableID[selection.ExitNodeStableID].IsExitNode()
 			view.ExitNodes[i].Clients = append(view.ExitNodes[i].Clients, exitNodeClientView{
 				NodeID:   selection.NodeID,
 				StableID: selection.StableID,

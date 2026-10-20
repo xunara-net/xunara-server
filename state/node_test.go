@@ -30,13 +30,37 @@ func TestEffectiveRoutes(t *testing.T) {
 	if got, want := n.EffectiveRoutes(), []netip.Prefix{ExitRouteV4, subnet}; !slices.Equal(got, want) {
 		t.Errorf("EffectiveRoutes = %v, want %v", got, want)
 	}
-	if !n.IsExitNode() {
-		t.Error("IsExitNode = false for a node serving the default route")
+	if n.IsExitNode() {
+		t.Error("a single default route must not make an official-client exit option")
 	}
 
 	// A node without Hostinfo has neither announcements nor effective routes.
 	if bare := (Node{}); len(bare.AnnouncedRoutes()) != 0 || len(bare.EffectiveRoutes()) != 0 || bare.IsExitNode() {
 		t.Error("zero node should have no routes")
+	}
+}
+
+func TestExitNodeRequiresBothEffectiveDefaultRoutes(test *testing.T) {
+	defaults := []netip.Prefix{ExitRouteV4, ExitRouteV6}
+	for _, scenario := range []struct {
+		name                string
+		announced, approved []netip.Prefix
+		want                bool
+	}{
+		{"dual-stack", defaults, defaults, true},
+		{"only-ipv4-approved", defaults, defaults[:1], false},
+		{"only-ipv6-approved", defaults, defaults[1:], false},
+		{"only-ipv4-announced", defaults[:1], defaults, false},
+		{"only-ipv6-announced", defaults[1:], defaults, false},
+		{"withdrawn-announcement", nil, defaults, false},
+		{"withdrawn-approval", defaults, nil, false},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			node := Node{Hostinfo: &tailcfg.Hostinfo{RoutableIPs: scenario.announced}, ApprovedRoutes: scenario.approved}
+			if node.IsExitNode() != scenario.want {
+				test.Fatalf("IsExitNode = %v, want %v for effective routes %v", node.IsExitNode(), scenario.want, node.EffectiveRoutes())
+			}
+		})
 	}
 }
 

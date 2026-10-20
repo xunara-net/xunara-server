@@ -32,8 +32,8 @@ func newExitFixture(t *testing.T) *exitFixture {
 
 	// Approved and advertising: an exit node in effect.
 	f.exit = seedAPIMachine(t, s, "exit", nil)
-	f.exit.ApprovedRoutes = []netip.Prefix{state.ExitRouteV4}
-	f.exit.Hostinfo = &tailcfg.Hostinfo{Hostname: "exit", RoutableIPs: []netip.Prefix{state.ExitRouteV4}}
+	f.exit.ApprovedRoutes = []netip.Prefix{state.ExitRouteV4, state.ExitRouteV6}
+	f.exit.Hostinfo = &tailcfg.Hostinfo{Hostname: "exit", RoutableIPs: []netip.Prefix{state.ExitRouteV4, state.ExitRouteV6}}
 	if err := s.store.UpdateNode(f.exit); err != nil {
 		t.Fatalf("UpdateNode(exit): %v", err)
 	}
@@ -147,6 +147,41 @@ func TestExitNodesViewRevoked(t *testing.T) {
 	}
 	if selection.ExitNodeHostname != "exit" {
 		t.Errorf("withdrawn exit node lost its name: %+v", selection)
+	}
+}
+
+func TestExitSelectionRequiresCompleteEffectiveApproval(test *testing.T) {
+	fixture := newExitFixture(test)
+	defaults := []netip.Prefix{state.ExitRouteV4, state.ExitRouteV6}
+	for _, scenario := range []struct {
+		name                string
+		announced, approved []netip.Prefix
+		want                bool
+	}{
+		{"dual-stack", defaults, defaults, true},
+		{"ipv4-only-approval", defaults, defaults[:1], false},
+		{"ipv6-only-approval", defaults, defaults[1:], false},
+		{"partial-announcement", defaults[:1], defaults, false},
+		{"stopped-announcement", nil, defaults, false},
+		{"revoked-approval", defaults, nil, false},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			node := fixture.exit
+			node.ApprovedRoutes = scenario.approved
+			node.Hostinfo = advertisedHostinfo(node.Hostname, scenario.announced...)
+			if err := fixture.server.store.UpdateNode(node); err != nil {
+				test.Fatal(err)
+			}
+			view := fixture.server.exitNodesView()
+			for _, selection := range view.Clients {
+				if selection.StableID == fixture.client.StableID && selection.Resolved != scenario.want {
+					test.Fatalf("resolved = %v, want %v for effective routes %v", selection.Resolved, scenario.want, node.EffectiveRoutes())
+				}
+			}
+			if fixture.server.apiMachineView(node).ExitNode != scenario.want {
+				test.Fatal("machine view disagrees with official exit-node requirements")
+			}
+		})
 	}
 }
 
