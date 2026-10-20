@@ -64,6 +64,34 @@ ACL 与租户边界。单出口测试不能覆盖此故障，回归必须包含�
 新增/撤销批准后的真实 Noise 长轮询更新。此修复不等于所有手机网络已通过验收；
 全 OS 出口现场验收、实时数据面与自动故障转移未交付。
 
+## 2026-10-20 现网出口验收
+
+服务端代码 `9fa46ca` 已替换现网二进制，保留旧二进制、配置及 10 个 SQLite 在线备份。
+不更改原设备、路由审批、DNS 配置、ACL、套餐或其它客户端的出口偏好，也不发布新 APK。
+
+| 检查 | 实际结果 |
+|---|---|
+| 审批 API 与官方客户端实际 netmap | 修复前两个出口已批准，但较新出口没有默认路由；修复后两个出口均保留默认路由 |
+| 同租户官方 `tsnet` 对照 | IPv4/IPv6 双向 ICMP、TCP 通过；关闭探针 UDP 并指定部署默认 DERP 后仍通过 |
+| 默认中继 | 完成注册准入、WireGuard 双向业务，不仅验证 TLS 握手；公网 UDP STUN 事务也通过 |
+| 官方探针经在线 Android 官方客户端出口 | 双栈 peer API DNS 返回有效答案；IPv4 HTTPS 200 且验证证书链 |
+| Xunara 0.5.2 模拟器经同一现网出口 | shell UID 真实 VPN 流量通过预解析 IPv4 HTTPS、VPN DNS 后 HTTPS、DNS UDP/TCP |
+| IPv6 公网 | 隧道内 IPv6 和 DNS 可通，但公网 IPv6 TCP 收到复位，仍未通过验收 |
+
+对照使用 Tailscale `v1.104.1` 的 `tsnet`、实际出口手机的官方 `1.98.8` 客户端，
+以及 Rust 内核固定为 `ae6086e` 的 Xunara Android 0.5.2。模拟器探针明确加载 Android
+系统 CA，不跳过证书校验，不用 App 自身被 VPN 排除的连接冒充出口成功。
+纯 IP HTTP 目标返回 301，不能把非 200 的业务断言误判成 TCP 完全不通。
+
+这不代表原 Xunara App 充当出口的手机已恢复：排查期间其旧设备离线，在线出口
+使用的是官方客户端。用户手机间的实际重测和 IPv6 公网转发仍须单独确认，
+不能用模拟器成功、控制面在线或单个 ICMP 回包替代。协议版本已核对：
+按 [官方 v1.98.8 类型定义](https://github.com/tailscale/tailscale/blob/v1.98.8/tailcfg/tailcfg.go)，
+`HomeDERP` 从 capability 111 起支持，现网官方客户端为 138，不能凭猜测改回旧字段。
+
+诊断只创建独立短期机器凭据和临时节点，结束后撤销/删除；模拟器恢复原安装包、
+原账号配置及网络开关，私钥和含业务流量的抓包不上传 Git。
+
 ## 验证
 
 执行目录：`xunara-server` 根目录，Go 版本按 `go.mod`。
@@ -79,3 +107,8 @@ go test -race ./... -count=1 -timeout=30m
 跨租户/Scope、新旧入口一致、套餐独立门禁/降级清理、有界读写及真实 DB 故障。
 官方 Noise 验证批准/撤销 AllowedIPs/PrimaryRoutes 与旧遥测；Web 验证真实 API、
 手机审批、失败/冲突草稿及只读成员。线上不创建测试人类账号或替换正式凭据。
+
+本轮服务端 build/vet/test、Staticcheck、完整 race 及官方客户端分享 race 集成均通过，
+中继 build/vet/test/race 也通过。首次完整 race 沿用默认 10 分钟预算而超时，未记为通过；
+按仓库 CI 既有的 `-timeout=30m` 重跑后通过，control 包耗时 1146.180 秒。
+未因超时缩减真实密码哈希、数据库事务或协议回归，也未将公网 IPv6 失败记为成功。
