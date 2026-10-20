@@ -99,6 +99,45 @@ ACL 与租户边界。单出口测试不能覆盖此故障，回归必须包含�
 诊断只创建独立短期机器凭据和临时节点，结束后撤销/删除；模拟器恢复原安装包、
 原账号配置及网络开关，私钥和含业务流量的抓包不上传 Git。
 
+## 官方 Android 的橙色出口卡片
+
+2026-10-21（北京时间）实际安装官方发布的 Android `1.98.8-t1241b225b-gbcbaf1889`
+APK，在独立 Android 16 / SDK 36 模拟器中连接现网。不是用 Rust 页面、官方 Go
+探针的状态输出或源码推断代替官方 App 实测。APK 的 SHA256 与官方 GitHub
+资产 digest 一致：`f28edfd184d1db3060d764a79c9aa24da4530951052fb1cf75c92bbc0adfc4b2`。
+
+只操作独立短期诊断设备，使用与 Web 相同的带 CSRF / revision 的路由管理 API：
+
+| 步骤 | 宣告 / 批准 / 生效 | 官方 App 首页 |
+|---|---|---|
+| 本机开启出口，尚未批准 | 双栈 / 无 / 无 | 橙色，Running on this device |
+| Web 管理流程批准双栈 | 双栈 / 双栈 / 双栈 | 仍为橙色，同一文字 |
+| 撤销双栈批准 | 双栈 / 无 / 无 | 仍为橙色，同一文字 |
+| 点击本机 Stop | 无 / 无 / 无 | None，橙色卡片消失 |
+
+原因可在与 APK 对应的固定上游版本中核实：
+
+- [AdvertisedRoutesHelper](https://github.com/tailscale/tailscale-android/blob/1.98.8-t1241b225b-gbcbaf1889/android/src/main/java/com/tailscale/ipn/ui/util/AdvertisedRoutesHelper.kt) 仅检查本机 Prefs.AdvertiseRoutes 是否同时包含两个默认路由。
+- [IpnViewModel](https://github.com/tailscale/tailscale-android/blob/1.98.8-t1241b225b-gbcbaf1889/android/src/main/java/com/tailscale/ipn/ui/viewModel/IpnViewModel.kt) 据此进入 RUNNING_AS_EXIT_NODE。
+- [MainView](https://github.com/tailscale/tailscale-android/blob/1.98.8-t1241b225b-gbcbaf1889/android/src/main/java/com/tailscale/ipn/ui/view/MainView.kt) 为该状态固定选择 warningListItem / warningButton；不检查服务器批准后再变绿。
+
+因此这个橙色卡片不是「未审批」状态，也不是缺少一个能令其变绿的审批 API。
+运行出口详情中的批准提醒同样是静态说明，不等于当前审批结果。真正的机器
+待审批提示、健康告警及出口路由批准是不同事项，必须根据完整文字分别排查。
+不能伪造 Prefs、MachineAuthorized 或 AllowedIPs 只为改变官方客户端颜色。
+
+批准期间，另一个独立官方 tsnet 消费者实际收到该 App 的双栈默认路由，双栈
+peerapi DNS 返回 HTTP 200 和有效答案，IPv4 HTTPS 返回 200 / 577 字节并通过
+CA / 主机名校验。纯 IP HTTP 返回 301，属于业务响应，不按 TCP 完全不通处理。
+IPv6 公网未通过，不把双栈路由批准等同于出口物理网络拥有 IPv6 访问能力。
+独立的提供端自身 Node、多出口 Peers、批准 / 撤销及旧遥测定向 race 回归通过。
+
+本轮未修改协议、服务端二进制或原手机的批准、DNS、ACL、出口偏好。临时设备、
+机器密钥、人类会话及新建模拟器已清理；原有设备与 AVD 保留。截图、抓包和
+私有状态不上传 Git。初次自动操作遇到旧 UI Automator 启动依赖 / 参数及首次
+通知弹窗问题，没有把这些失败记成业务验收通过；上述结果以实际页面、审批
+状态和独立出网请求为依据。
+
 ## 验证
 
 ### 2026-10-20 双栈审批排查
